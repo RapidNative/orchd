@@ -33,12 +33,20 @@ and **wake on the first request**.
 Everything above `internal/runtime` is substrate-agnostic. The control plane never
 touches a VMM directly; it talks to a `Runtime` interface:
 
-- **`LocalDriver`** (today) runs each project as an OS process (`tinbase start`).
-  Runs on macOS, so the whole control loop, gateway, wake sequencing, and backups
-  are built and tested on a laptop. Suspend/Start = kill/relaunch (~0.3s locally).
-- **`FirecrackerDriver`** (next, Linux bare metal) will implement the same
-  interface with microVMs + jailer for VM-grade isolation and per-project
-  snapshot/restore for sub-second wake. **Nothing above `runtime` changes.**
+- **`LocalDriver`** runs each project as an OS process (`tinbase start`). Runs on
+  macOS, so the whole control loop, gateway, and wake sequencing are built and
+  tested on a laptop. Suspend/Start = kill/relaunch (~0.3s locally).
+- **`DockerDriver`** runs each project as a container, optionally under **gVisor
+  (`runsc`)** for VM-grade isolation *without KVM* — the Linux substrate for a
+  shared box (Hetzner Cloud). Suspend/Start = `docker stop`/`docker start`;
+  verified on real hardware at **2.8s cold provision** (incl. initdb) and
+  **~0.9s wake** from scale-to-zero, with data persisted on the volume.
+- **`FirecrackerDriver`** (next, Linux **bare metal**) will implement the same
+  interface with microVMs + jailer and per-project snapshot/restore for
+  sub-second wake. **Nothing above `runtime` changes.**
+
+> gVisor needs no nested virtualization, so it runs on a plain Cloud VM;
+> Firecracker/Kata require `/dev/kvm` and therefore a dedicated bare-metal box.
 
 This is also the seam that makes RapidNative dev environments a second workload
 type (`WorkloadRapidNativeDev`) on the same orchestrator.
@@ -48,7 +56,8 @@ type (`WorkloadRapidNativeDev`) on the same orchestrator.
 | Package | Role |
 | --- | --- |
 | `cmd/orchd` | daemon: wires everything, runs API + gateway + idle reaper |
-| `internal/runtime` | `Runtime` interface, the generic `Workload` primitive, `LocalDriver` |
+| `internal/runtime` | `Runtime` interface, the generic `Workload` primitive, `LocalDriver`, `DockerDriver` (gVisor) |
+| `images/tinbase` | Dockerfile for the tinbase workload image (Linux, native PG warmed in) |
 | `internal/store` | durable project records (JSON now, managed Postgres later) |
 | `internal/manager` | provisioning, key minting, wake / scale-to-zero lifecycle |
 | `internal/gateway` | `<ref>.<base-domain>` routing + wake + reverse proxy |
@@ -87,8 +96,12 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_GATEWAY_ADDR` | `127.0.0.1:8081` | tenant-facing gateway listen addr |
 | `ORCHD_BASE_DOMAIN` | `lvh.me` | host suffix stripped to get the project ref |
 | `ORCHD_DATA_ROOT` | `~/.tinbase-cloud` | per-project data dirs + state file |
+| `ORCHD_DRIVER` | `local` | runtime substrate: `local` (processes) or `docker` (containers) |
 | `ORCHD_TINBASE_BIN` | `tinbase` | tinbase executable the LocalDriver spawns |
-| `ORCHD_ENGINE` | (tinbase default) | `native` \| `wasm` \| `pgmem` |
+| `ORCHD_ENGINE` | (tinbase default) | `native` \| `wasm` \| `pgmem` (LocalDriver) |
+| `ORCHD_IMAGE` | `tinbase:0.10.0` | container image the DockerDriver runs |
+| `ORCHD_DOCKER_RUNTIME` | `runsc` | Docker runtime for tenant containers (`runsc` = gVisor; empty = runc) |
+| `ORCHD_DOCKER_HOST` | (local daemon) | point the docker CLI at a remote daemon |
 | `ORCHD_IDLE_TIMEOUT` | `5m` | idle time before an instance scales to zero |
 | `ORCHD_REGION` | `local` | single region served for now |
 

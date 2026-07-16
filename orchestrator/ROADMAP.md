@@ -50,10 +50,21 @@ the same control plane / gateway / driver:
 - [ ] Structured per-project logs/metrics (replace shared stderr)
 - [ ] Graceful data-dir reclaim on delete (currently record-only delete)
 
+### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
+Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`
+platform is a userspace kernel).
+- [x] `DockerDriver` behind the `Runtime` interface (docker CLI, gVisor `runsc`)
+- [x] tinbase workload image (`images/tinbase`, native PG warmed in, non-root via gosu)
+- [x] provisioned + verified on the box: **2.8s cold provision**, **~0.9s wake** from
+      scale-to-zero, data persisted across suspend/resume (auth user survived)
+- [x] orchd runs as a systemd service on the box
+- [ ] resource limits / cgroups per container; per-tenant log sinks
+
 ### Phase 2 — Firecracker driver (the speed + isolation play)
-Needs a **Linux bare-metal dev/target box** (e.g. Hetzner dedicated, ~€40/mo).
-**Action item: acquire this box** — the microVM driver cannot run on macOS (no KVM),
-so it is developed/CI'd against real hardware while the rest stays laptop-local.
+Needs a **Linux bare-metal box** (e.g. Hetzner dedicated) — the current box is a
+Cloud VM with **no `/dev/kvm`**, so Firecracker/Kata cannot run there.
+**Action item: acquire a dedicated (bare-metal) box** for the microVM tier;
+gVisor covers isolation until then.
 - [ ] rootfs + guest-kernel build pipeline for the tinbase image (small, static)
 - [ ] `FirecrackerDriver` behind the existing `Runtime` interface (API + `jailer`)
 - [ ] tap/bridge networking + gateway → VM IP wiring

@@ -224,9 +224,19 @@ func (m *Manager) refLock(ref string) *sync.Mutex {
 // Best-effort: if the binary or subcommand is unavailable, keys are left empty
 // and can be fetched from the running instance later.
 func (m *Manager) mintKeys(secret string) (anon, svc string) {
-	cmd := exec.Command(m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
-	if filepath.Ext(m.cfg.TinbaseBin) == ".js" {
-		cmd = exec.Command("node", m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
+	// Hard timeout so a misbehaving key-mint can never hang provisioning.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	var cmd *exec.Cmd
+	switch {
+	case m.cfg.Driver == "docker":
+		// No local tinbase binary on a container host; mint via the image.
+		cmd = exec.CommandContext(ctx, "docker", "run", "--rm", m.cfg.Image, "tinbase", "keys", "--jwt-secret", secret)
+	case filepath.Ext(m.cfg.TinbaseBin) == ".js":
+		cmd = exec.CommandContext(ctx, "node", m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
+	default:
+		cmd = exec.CommandContext(ctx, m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
 	}
 	var out bytes.Buffer
 	cmd.Stdout = &out

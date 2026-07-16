@@ -23,10 +23,22 @@ type Config struct {
 	// live.
 	DataRoot string
 
+	// Driver selects the runtime substrate: "local" (tinbase as OS processes,
+	// for macOS dev) or "docker" (containers, optionally gVisor-isolated).
+	Driver string
+
 	// TinbaseBin is the tinbase executable the LocalDriver spawns.
 	TinbaseBin string
 	// Engine selects the tinbase engine (empty = tinbase default).
 	Engine string
+
+	// Image is the container image the DockerDriver runs.
+	Image string
+	// DockerRuntime is the Docker runtime for tenant containers. "runsc" selects
+	// gVisor isolation; empty uses runc.
+	DockerRuntime string
+	// DockerHost points the docker CLI at a remote daemon; empty uses local.
+	DockerHost string
 
 	// IdleTimeout is how long an instance may sit without a request before the
 	// orchestrator scales it to zero (suspends it).
@@ -38,14 +50,18 @@ type Config struct {
 func Load() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		APIAddr:     env("ORCHD_API_ADDR", "127.0.0.1:8080"),
-		GatewayAddr: env("ORCHD_GATEWAY_ADDR", "127.0.0.1:8081"),
-		BaseDomain:  env("ORCHD_BASE_DOMAIN", "lvh.me"),
-		DataRoot:    env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
-		TinbaseBin:  env("ORCHD_TINBASE_BIN", "tinbase"),
-		Engine:      env("ORCHD_ENGINE", ""),
-		IdleTimeout: envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
-		Region:      env("ORCHD_REGION", "local"),
+		APIAddr:       env("ORCHD_API_ADDR", "127.0.0.1:8080"),
+		GatewayAddr:   env("ORCHD_GATEWAY_ADDR", "127.0.0.1:8081"),
+		BaseDomain:    env("ORCHD_BASE_DOMAIN", "lvh.me"),
+		DataRoot:      env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
+		Driver:        env("ORCHD_DRIVER", "local"),
+		TinbaseBin:    env("ORCHD_TINBASE_BIN", "tinbase"),
+		Engine:        env("ORCHD_ENGINE", ""),
+		Image:         env("ORCHD_IMAGE", "tinbase:0.10.0"),
+		DockerRuntime: env("ORCHD_DOCKER_RUNTIME", "runsc"),
+		DockerHost:    env("ORCHD_DOCKER_HOST", ""),
+		IdleTimeout:   envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
+		Region:        env("ORCHD_REGION", "local"),
 	}
 }
 

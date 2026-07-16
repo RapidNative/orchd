@@ -34,7 +34,15 @@ func main() {
 		log.Fatalf("open store: %v", err)
 	}
 
-	rt := runtime.NewLocalDriver(cfg.TinbaseBin, cfg.Engine)
+	var rt runtime.Runtime
+	switch cfg.Driver {
+	case "docker":
+		d := runtime.NewDockerDriver(cfg.Image, cfg.DockerRuntime)
+		d.DockerHost = cfg.DockerHost
+		rt = d
+	default:
+		rt = runtime.NewLocalDriver(cfg.TinbaseBin, cfg.Engine)
+	}
 	mgr := manager.New(cfg, st, rt)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
