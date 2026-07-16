@@ -50,6 +50,14 @@ type Spec struct {
 	// functions). May be empty; tinbase still boots.
 	WorkDir string
 
+	// Image optionally overrides the driver's default container image, so one
+	// project can run heterogeneous workloads (a tinbase db, a web runner, an api
+	// server). Empty uses the driver default. Ignored by LocalDriver.
+	Image string
+	// Port optionally overrides the container's listen port. 0 uses the driver
+	// default (54321 for tinbase).
+	Port int
+
 	// Env is passed to the workload process/VM (JWT secret, engine, secrets).
 	Env map[string]string
 }

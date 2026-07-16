@@ -1,7 +1,13 @@
-// Package store is the control plane's source of truth: the durable record of
-// every project (its routing ref, keys, JWT secret, data dir, region, and
-// lifecycle state). v0 persists to a JSON file; this is the seam where a real
-// deployment swaps in managed Postgres without touching callers.
+// Package store is the control plane's source of truth. It holds three related
+// records:
+//
+//	Project   — a logical grouping / tenant (billing + ownership live here)
+//	Workload  — the routable, independently-scheduled, scale-to-zero unit
+//	Route     — a hostname that resolves to a workload (many routes → one workload)
+//
+// One project owns many workloads; each workload has one or more routes. A
+// plain tinbase project is just a project with a single workload and one route.
+// v0 persists to a JSON file; this is the seam where managed Postgres slots in.
 package store
 
 import (
@@ -10,40 +16,70 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 )
 
-var ErrNotFound = errors.New("project not found")
+var ErrNotFound = errors.New("not found")
 
-// Project is a tenant record. It intentionally mirrors the fields the gateway and
-// runtime need, plus the credentials tinbase mints so callers can point
-// supabase-js at <ref>.tinbase.cloud immediately.
+// Project is a logical grouping of workloads under one tenant. Its ID is a
+// DNS-label-safe short ref used as the subdomain prefix for its workloads.
 type Project struct {
-	Ref       string               `json:"ref"`
+	ID        string    `json:"id"`
+	Name      string    `json:"name,omitempty"`
+	Region    string    `json:"region"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// Workload is a single routable instance. It is what the runtime driver operates
+// on (keyed by ID), and where per-instance credentials + lifecycle state live.
+type Workload struct {
+	ID        string               `json:"id"`
+	ProjectID string               `json:"project_id"`
 	Type      runtime.WorkloadType `json:"type"`
-	Region    string               `json:"region"`
+	Name      string               `json:"name"` // role within the project ("", "api", "web", ...)
+	Image     string               `json:"image,omitempty"`
+	Port      int                  `json:"port,omitempty"`
 	State     runtime.State        `json:"state"`
 	DataDir   string               `json:"data_dir"`
-	WorkDir   string               `json:"work_dir,omitempty"`
-	JWTSecret string               `json:"jwt_secret"`
+	JWTSecret string               `json:"jwt_secret,omitempty"`
 	AnonKey   string               `json:"anon_key,omitempty"`
 	SvcKey    string               `json:"service_role_key,omitempty"`
 	CreatedAt time.Time            `json:"created_at"`
 }
 
-// Store is a concurrency-safe, file-backed collection of projects.
+// Route maps a hostname to a workload. Host is stored lowercased, without a port.
+type Route struct {
+	Host       string    `json:"host"`
+	WorkloadID string    `json:"workload_id"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 type Store struct {
-	path string
-	mu   sync.RWMutex
-	data map[string]*Project
+	path      string
+	mu        sync.RWMutex
+	projects  map[string]*Project
+	workloads map[string]*Workload
+	routes    map[string]*Route // key: lowercased host
+}
+
+type snapshot struct {
+	Projects  []*Project  `json:"projects"`
+	Workloads []*Workload `json:"workloads"`
+	Routes    []*Route    `json:"routes"`
 }
 
 // Open loads the store from path, creating an empty one if it does not exist.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, data: make(map[string]*Project)}
+	s := &Store{
+		path:      path,
+		projects:  make(map[string]*Project),
+		workloads: make(map[string]*Workload),
+		routes:    make(map[string]*Route),
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
 	}
@@ -54,22 +90,38 @@ func Open(path string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	var list []*Project
 	if len(b) > 0 {
-		if err := json.Unmarshal(b, &list); err != nil {
+		var snap snapshot
+		if err := json.Unmarshal(b, &snap); err != nil {
 			return nil, err
 		}
-	}
-	for _, p := range list {
-		s.data[p.Ref] = p
+		for _, p := range snap.Projects {
+			s.projects[p.ID] = p
+		}
+		for _, w := range snap.Workloads {
+			s.workloads[w.ID] = w
+		}
+		for _, r := range snap.Routes {
+			s.routes[strings.ToLower(r.Host)] = r
+		}
 	}
 	return s, nil
 }
 
-func (s *Store) Get(ref string) (*Project, error) {
+// ---- Projects ----
+
+func (s *Store) PutProject(p *Project) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *p
+	s.projects[p.ID] = &cp
+	return s.flushLocked()
+}
+
+func (s *Store) GetProject(id string) (*Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	p, ok := s.data[ref]
+	p, ok := s.projects[id]
 	if !ok {
 		return nil, ErrNotFound
 	}
@@ -77,11 +129,11 @@ func (s *Store) Get(ref string) (*Project, error) {
 	return &cp, nil
 }
 
-func (s *Store) List() []*Project {
+func (s *Store) ListProjects() []*Project {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := make([]*Project, 0, len(s.data))
-	for _, p := range s.data {
+	out := make([]*Project, 0, len(s.projects))
+	for _, p := range s.projects {
 		cp := *p
 		out = append(out, &cp)
 	}
@@ -89,46 +141,146 @@ func (s *Store) List() []*Project {
 	return out
 }
 
-// Put inserts or replaces a project and flushes to disk.
-func (s *Store) Put(p *Project) error {
+// DeleteProject removes a project and cascades to its workloads and their
+// routes. Callers must stop the running instances first.
+func (s *Store) DeleteProject(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	cp := *p
-	s.data[p.Ref] = &cp
+	if _, ok := s.projects[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.projects, id)
+	for wid, w := range s.workloads {
+		if w.ProjectID == id {
+			delete(s.workloads, wid)
+			s.deleteRoutesForWorkloadLocked(wid)
+		}
+	}
 	return s.flushLocked()
 }
 
-// SetState updates only the lifecycle state; no-op if the project is gone.
-func (s *Store) SetState(ref string, state runtime.State) error {
+// ---- Workloads ----
+
+func (s *Store) PutWorkload(w *Workload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	p, ok := s.data[ref]
+	cp := *w
+	s.workloads[w.ID] = &cp
+	return s.flushLocked()
+}
+
+func (s *Store) GetWorkload(id string) (*Workload, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	w, ok := s.workloads[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *w
+	return &cp, nil
+}
+
+// ListWorkloads returns the workloads for a project (all workloads if projectID
+// is empty).
+func (s *Store) ListWorkloads(projectID string) []*Workload {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Workload, 0)
+	for _, w := range s.workloads {
+		if projectID == "" || w.ProjectID == projectID {
+			cp := *w
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
+func (s *Store) SetWorkloadState(id string, state runtime.State) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	w, ok := s.workloads[id]
 	if !ok {
 		return ErrNotFound
 	}
-	p.State = state
+	w.State = state
 	return s.flushLocked()
 }
 
-// Delete removes a project record (not its data dir; the caller owns cleanup).
-func (s *Store) Delete(ref string) error {
+// DeleteWorkload removes a workload and its routes. Caller stops the instance.
+func (s *Store) DeleteWorkload(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, ok := s.data[ref]; !ok {
+	if _, ok := s.workloads[id]; !ok {
 		return ErrNotFound
 	}
-	delete(s.data, ref)
+	delete(s.workloads, id)
+	s.deleteRoutesForWorkloadLocked(id)
 	return s.flushLocked()
+}
+
+// ---- Routes ----
+
+func (s *Store) PutRoute(r *Route) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *r
+	cp.Host = strings.ToLower(cp.Host)
+	s.routes[cp.Host] = &cp
+	return s.flushLocked()
+}
+
+// GetRouteByHost resolves a hostname (case-insensitive) to its route.
+func (s *Store) GetRouteByHost(host string) (*Route, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	r, ok := s.routes[strings.ToLower(host)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *r
+	return &cp, nil
+}
+
+func (s *Store) ListRoutesForWorkload(workloadID string) []*Route {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Route, 0)
+	for _, r := range s.routes {
+		if r.WorkloadID == workloadID {
+			cp := *r
+			out = append(out, &cp)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Host < out[j].Host })
+	return out
+}
+
+func (s *Store) deleteRoutesForWorkloadLocked(workloadID string) {
+	for host, r := range s.routes {
+		if r.WorkloadID == workloadID {
+			delete(s.routes, host)
+		}
+	}
 }
 
 // flushLocked writes the whole store atomically. Caller must hold s.mu.
 func (s *Store) flushLocked() error {
-	list := make([]*Project, 0, len(s.data))
-	for _, p := range s.data {
-		list = append(list, p)
+	snap := snapshot{}
+	for _, p := range s.projects {
+		snap.Projects = append(snap.Projects, p)
 	}
-	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt.Before(list[j].CreatedAt) })
-	b, err := json.MarshalIndent(list, "", "  ")
+	for _, w := range s.workloads {
+		snap.Workloads = append(snap.Workloads, w)
+	}
+	for _, r := range s.routes {
+		snap.Routes = append(snap.Routes, r)
+	}
+	sort.Slice(snap.Projects, func(i, j int) bool { return snap.Projects[i].CreatedAt.Before(snap.Projects[j].CreatedAt) })
+	sort.Slice(snap.Workloads, func(i, j int) bool { return snap.Workloads[i].CreatedAt.Before(snap.Workloads[j].CreatedAt) })
+	sort.Slice(snap.Routes, func(i, j int) bool { return snap.Routes[i].Host < snap.Routes[j].Host })
+
+	b, err := json.MarshalIndent(snap, "", "  ")
 	if err != nil {
 		return err
 	}

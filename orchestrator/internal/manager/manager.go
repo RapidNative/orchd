@@ -1,6 +1,7 @@
-// Package manager is the control-plane brain: it provisions projects, mints their
-// credentials, and owns the wake/scale-to-zero lifecycle. The gateway calls
-// EnsureRunning on every request; a background reaper suspends idle instances.
+// Package manager is the control-plane brain: it provisions projects and their
+// workloads, mints credentials, assigns routes, and owns the wake/scale-to-zero
+// lifecycle. All instance lifecycle is keyed by workload ID; the gateway resolves
+// a hostname to a workload via the route table, then calls EnsureRunning.
 package manager
 
 import (
@@ -26,13 +27,21 @@ type Manager struct {
 	rt    runtime.Runtime
 
 	mu       sync.Mutex
-	live     map[string]*liveInstance // refs currently running, for idle tracking
-	refLocks map[string]*sync.Mutex   // serialize wake per ref (avoid thundering herd)
+	live     map[string]*liveInstance // workloadID -> running instance
+	refLocks map[string]*sync.Mutex   // per-workload wake serialization
 }
 
 type liveInstance struct {
 	addr     string
 	lastSeen time.Time
+}
+
+// WorkloadSpec describes a workload to create within a project.
+type WorkloadSpec struct {
+	Type  runtime.WorkloadType
+	Name  string // role within the project ("" = primary, else "api"/"web"/...)
+	Image string // optional image override
+	Port  int    // optional container port override
 }
 
 func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
@@ -45,129 +54,190 @@ func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
 	}
 }
 
-// CreateProject provisions a brand-new tinbase project: mint a JWT secret and
-// keys, allocate a data dir, first-boot the instance, and record it.
-func (m *Manager) CreateProject(ctx context.Context, wtype runtime.WorkloadType) (*store.Project, error) {
+// CreateProject creates a project grouping and provisions its workloads. With no
+// specs it defaults to a single primary tinbase workload, preserving the simple
+// "one project, one backend" case.
+func (m *Manager) CreateProject(ctx context.Context, name string, specs []WorkloadSpec) (*store.Project, []*store.Workload, error) {
 	ref, err := newRef()
+	if err != nil {
+		return nil, nil, err
+	}
+	proj := &store.Project{ID: ref, Name: name, Region: m.cfg.Region, CreatedAt: time.Now()}
+	if err := m.store.PutProject(proj); err != nil {
+		return nil, nil, err
+	}
+
+	if len(specs) == 0 {
+		specs = []WorkloadSpec{{Type: runtime.WorkloadTinbaseProject}}
+	}
+	var created []*store.Workload
+	for _, ws := range specs {
+		w, err := m.AddWorkload(ctx, proj.ID, ws)
+		if err != nil {
+			return proj, created, fmt.Errorf("workload %q: %w", ws.Name, err)
+		}
+		created = append(created, w)
+	}
+	return proj, created, nil
+}
+
+// AddWorkload provisions one workload into an existing project: mint credentials
+// (tinbase types), allocate a data dir, assign a route, and boot it.
+func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws WorkloadSpec) (*store.Workload, error) {
+	proj, err := m.store.GetProject(projectID)
 	if err != nil {
 		return nil, err
 	}
-	if wtype == "" {
-		wtype = runtime.WorkloadTinbaseProject
+	if ws.Type == "" {
+		ws.Type = runtime.WorkloadTinbaseProject
 	}
 
+	wid, err := newRef()
+	if err != nil {
+		return nil, err
+	}
 	secret, err := newSecret()
 	if err != nil {
 		return nil, err
 	}
-	dataDir := filepath.Join(m.cfg.DataRoot, "projects", ref)
-	anon, svc := m.mintKeys(secret) // best-effort; empty if tinbase keys unavailable
 
-	p := &store.Project{
-		Ref:       ref,
-		Type:      wtype,
-		Region:    m.cfg.Region,
+	var anon, svc string
+	if ws.Type == runtime.WorkloadTinbaseProject {
+		anon, svc = m.mintKeys(secret) // best-effort
+	}
+
+	w := &store.Workload{
+		ID:        wid,
+		ProjectID: proj.ID,
+		Type:      ws.Type,
+		Name:      ws.Name,
+		Image:     ws.Image,
+		Port:      ws.Port,
 		State:     runtime.StateProvisioning,
-		DataDir:   dataDir,
+		DataDir:   filepath.Join(m.cfg.DataRoot, "projects", proj.ID, wid),
 		JWTSecret: secret,
 		AnonKey:   anon,
 		SvcKey:    svc,
 		CreatedAt: time.Now(),
 	}
-	if err := m.store.Put(p); err != nil {
+	if err := m.store.PutWorkload(w); err != nil {
 		return nil, err
 	}
 
-	inst, err := m.rt.Create(ctx, m.specFor(p))
+	// Assign the default route: <ref>.<base> for the primary workload,
+	// <ref>-<name>.<base> for named ones. Additional routes (custom domains) can
+	// be attached later via AddRoute.
+	host := m.hostFor(proj.ID, ws.Name)
+	if err := m.store.PutRoute(&store.Route{Host: host, WorkloadID: wid, CreatedAt: time.Now()}); err != nil {
+		return nil, err
+	}
+
+	inst, err := m.rt.Create(ctx, m.specFor(w))
 	if err != nil {
-		_ = m.store.SetState(ref, runtime.StateFailed)
+		_ = m.store.SetWorkloadState(wid, runtime.StateFailed)
 		return nil, fmt.Errorf("provision: %w", err)
 	}
-	_ = m.store.SetState(ref, runtime.StateRunning)
-	m.markLive(ref, inst.Addr)
+	_ = m.store.SetWorkloadState(wid, runtime.StateRunning)
+	m.markLive(wid, inst.Addr)
 
-	p, _ = m.store.Get(ref)
-	return p, nil
+	return m.store.GetWorkload(wid)
 }
 
-// EnsureRunning returns the address to proxy to for ref, waking (Start) a
-// suspended/stopped instance on demand. This is the hot path the gateway hits on
-// every request.
-func (m *Manager) EnsureRunning(ctx context.Context, ref string) (string, error) {
-	p, err := m.store.Get(ref)
+// AddRoute attaches an additional hostname to a workload (e.g. a custom domain).
+func (m *Manager) AddRoute(host, workloadID string) error {
+	if _, err := m.store.GetWorkload(workloadID); err != nil {
+		return err
+	}
+	return m.store.PutRoute(&store.Route{Host: host, WorkloadID: workloadID, CreatedAt: time.Now()})
+}
+
+// ResolveHost maps a request hostname to its workload via the route table.
+func (m *Manager) ResolveHost(host string) (*store.Workload, error) {
+	r, err := m.store.GetRouteByHost(host)
+	if err != nil {
+		return nil, err
+	}
+	return m.store.GetWorkload(r.WorkloadID)
+}
+
+// EnsureRunning returns the address to proxy to for a workload, waking a
+// suspended/stopped one on demand. The gateway hot path.
+func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string, error) {
+	w, err := m.store.GetWorkload(workloadID)
 	if err != nil {
 		return "", err
 	}
 
-	rl := m.refLock(ref)
+	rl := m.refLock(workloadID)
 	rl.Lock()
 	defer rl.Unlock()
 
-	// Fast path: already tracked as live and the driver agrees.
 	m.mu.Lock()
-	li, ok := m.live[ref]
+	li, ok := m.live[workloadID]
 	m.mu.Unlock()
 	if ok {
-		if st, _ := m.rt.Status(ctx, ref); st == runtime.StateRunning {
-			m.touch(ref)
+		if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
+			m.touch(workloadID)
 			return li.addr, nil
 		}
 	}
 
-	// Cold: bring it up. Create() and Start() converge for LocalDriver; a real
-	// driver distinguishes first-provision from snapshot-resume.
-	inst, err := m.rt.Start(ctx, m.specFor(p))
+	inst, err := m.rt.Start(ctx, m.specFor(w))
 	if err != nil {
-		return "", fmt.Errorf("wake %s: %w", ref, err)
+		return "", fmt.Errorf("wake %s: %w", workloadID, err)
 	}
-	_ = m.store.SetState(ref, runtime.StateRunning)
-	m.markLive(ref, inst.Addr)
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+	m.markLive(workloadID, inst.Addr)
 	return inst.Addr, nil
 }
 
-// Touch records activity so the reaper does not suspend a busy instance.
-func (m *Manager) Touch(ref string) { m.touch(ref) }
+func (m *Manager) Touch(workloadID string) { m.touch(workloadID) }
 
-// DeleteProject stops the instance and removes its record. Data-dir cleanup is
-// left to a separate reclaim step so a delete is recoverable in v0.
-func (m *Manager) DeleteProject(ctx context.Context, ref string) error {
-	if _, err := m.store.Get(ref); err != nil {
+// DeleteProject stops every workload in a project and removes all its records.
+func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
+	if _, err := m.store.GetProject(projectID); err != nil {
 		return err
 	}
-	_ = m.rt.Stop(ctx, ref)
-	m.mu.Lock()
-	delete(m.live, ref)
-	m.mu.Unlock()
-	return m.store.Delete(ref)
+	for _, w := range m.store.ListWorkloads(projectID) {
+		_ = m.rt.Stop(ctx, w.ID)
+		m.forget(w.ID)
+	}
+	return m.store.DeleteProject(projectID)
 }
 
-// ReapIdle suspends instances that have been idle longer than the configured
-// timeout. Run it on a ticker.
+// DeleteWorkload stops and removes a single workload (and its routes).
+func (m *Manager) DeleteWorkload(ctx context.Context, workloadID string) error {
+	if _, err := m.store.GetWorkload(workloadID); err != nil {
+		return err
+	}
+	_ = m.rt.Stop(ctx, workloadID)
+	m.forget(workloadID)
+	return m.store.DeleteWorkload(workloadID)
+}
+
+// ReapIdle suspends workloads idle longer than the configured timeout.
 func (m *Manager) ReapIdle(ctx context.Context) {
 	now := time.Now()
 	m.mu.Lock()
 	var stale []string
-	for ref, li := range m.live {
+	for id, li := range m.live {
 		if now.Sub(li.lastSeen) > m.cfg.IdleTimeout {
-			stale = append(stale, ref)
+			stale = append(stale, id)
 		}
 	}
 	m.mu.Unlock()
 
-	for _, ref := range stale {
-		rl := m.refLock(ref)
+	for _, id := range stale {
+		rl := m.refLock(id)
 		rl.Lock()
-		if err := m.rt.Suspend(ctx, ref); err == nil {
-			_ = m.store.SetState(ref, runtime.StateSuspended)
-			m.mu.Lock()
-			delete(m.live, ref)
-			m.mu.Unlock()
+		if err := m.rt.Suspend(ctx, id); err == nil {
+			_ = m.store.SetWorkloadState(id, runtime.StateSuspended)
+			m.forget(id)
 		}
 		rl.Unlock()
 	}
 }
 
-// RunReaper drives ReapIdle until ctx is cancelled.
 func (m *Manager) RunReaper(ctx context.Context) {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
@@ -183,55 +253,67 @@ func (m *Manager) RunReaper(ctx context.Context) {
 
 func (m *Manager) Store() *store.Store { return m.store }
 
-func (m *Manager) specFor(p *store.Project) runtime.Spec {
+// hostFor builds the default route hostname for a workload.
+func (m *Manager) hostFor(ref, name string) string {
+	if name == "" {
+		return ref + "." + m.cfg.BaseDomain
+	}
+	return ref + "-" + name + "." + m.cfg.BaseDomain
+}
+
+func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	return runtime.Spec{
-		Type:    p.Type,
-		Ref:     p.Ref,
-		DataDir: p.DataDir,
-		WorkDir: p.WorkDir,
+		Type:    w.Type,
+		Ref:     w.ID, // runtime key = workload id
+		DataDir: w.DataDir,
+		Image:   w.Image,
+		Port:    w.Port,
 		Env: map[string]string{
-			"TINBASE_JWT_SECRET": p.JWTSecret,
+			"TINBASE_JWT_SECRET": w.JWTSecret,
 		},
 	}
 }
 
-func (m *Manager) markLive(ref, addr string) {
+func (m *Manager) markLive(id, addr string) {
 	m.mu.Lock()
-	m.live[ref] = &liveInstance{addr: addr, lastSeen: time.Now()}
+	m.live[id] = &liveInstance{addr: addr, lastSeen: time.Now()}
 	m.mu.Unlock()
 }
 
-func (m *Manager) touch(ref string) {
+func (m *Manager) forget(id string) {
 	m.mu.Lock()
-	if li, ok := m.live[ref]; ok {
+	delete(m.live, id)
+	m.mu.Unlock()
+}
+
+func (m *Manager) touch(id string) {
+	m.mu.Lock()
+	if li, ok := m.live[id]; ok {
 		li.lastSeen = time.Now()
 	}
 	m.mu.Unlock()
 }
 
-func (m *Manager) refLock(ref string) *sync.Mutex {
+func (m *Manager) refLock(id string) *sync.Mutex {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	l, ok := m.refLocks[ref]
+	l, ok := m.refLocks[id]
 	if !ok {
 		l = &sync.Mutex{}
-		m.refLocks[ref] = l
+		m.refLocks[id] = l
 	}
 	return l
 }
 
-// mintKeys derives the anon/service_role keys for a JWT secret by asking tinbase.
-// Best-effort: if the binary or subcommand is unavailable, keys are left empty
-// and can be fetched from the running instance later.
+// mintKeys derives anon/service_role keys for a JWT secret by asking tinbase.
+// Best-effort: empty if unavailable.
 func (m *Manager) mintKeys(secret string) (anon, svc string) {
-	// Hard timeout so a misbehaving key-mint can never hang provisioning.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	var cmd *exec.Cmd
 	switch {
 	case m.cfg.Driver == "docker":
-		// No local tinbase binary on a container host; mint via the image.
 		cmd = exec.CommandContext(ctx, "docker", "run", "--rm", m.cfg.Image, "tinbase", "keys", "--jwt-secret", secret)
 	case filepath.Ext(m.cfg.TinbaseBin) == ".js":
 		cmd = exec.CommandContext(ctx, "node", m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
@@ -256,7 +338,6 @@ func (m *Manager) mintKeys(secret string) (anon, svc string) {
 var jwtRe = regexp.MustCompile(`eyJ[A-Za-z0-9._-]{10,}`)
 
 func newRef() (string, error) {
-	// 10 lowercase alphanumerics, DNS-label safe, collision-resistant enough for v0.
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
 	b := make([]byte, 10)
 	if _, err := rand.Read(b); err != nil {
@@ -265,9 +346,8 @@ func newRef() (string, error) {
 	for i := range b {
 		b[i] = alphabet[int(b[i])%len(alphabet)]
 	}
-	// Ensure it starts with a letter (valid DNS label).
 	if b[0] >= '0' && b[0] <= '9' {
-		b[0] = 'a'
+		b[0] = 'a' // valid DNS label: start with a letter
 	}
 	return string(b), nil
 }

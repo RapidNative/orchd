@@ -1,7 +1,8 @@
-// Package gateway is the tenant-facing data plane. It maps <ref>.<base-domain>
-// to a project, wakes the instance on demand (scale-to-zero resume), and reverse
-// proxies every Supabase-shaped path (/rest, /auth, /storage, /realtime, /_/)
-// through to it. WebSocket upgrades (realtime) pass through transparently.
+// Package gateway is the tenant-facing data plane. It resolves the request Host
+// against the control plane's route table to find a workload, wakes it on demand
+// (scale-to-zero resume), and reverse proxies every path through to it. A route
+// is an exact hostname match, so both convention subdomains
+// (<ref>-<role>.<base-domain>) and custom domains work the same way.
 package gateway
 
 import (
@@ -18,62 +19,48 @@ import (
 )
 
 type Gateway struct {
-	mgr        *manager.Manager
-	baseDomain string
+	mgr *manager.Manager
 }
 
-func New(mgr *manager.Manager, baseDomain string) *Gateway {
-	return &Gateway{mgr: mgr, baseDomain: baseDomain}
+func New(mgr *manager.Manager) *Gateway {
+	return &Gateway{mgr: mgr}
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ref, ok := g.refFromHost(r.Host)
-	if !ok {
-		http.Error(w, "no project ref in host: "+r.Host, http.StatusNotFound)
+	host := hostOnly(r.Host)
+
+	workload, err := g.mgr.ResolveHost(host)
+	if err != nil {
+		http.Error(w, "no route for host: "+host, http.StatusNotFound)
 		return
 	}
 
-	addr, err := g.mgr.EnsureRunning(r.Context(), ref)
+	addr, err := g.mgr.EnsureRunning(r.Context(), workload.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			http.Error(w, "project not found: "+ref, http.StatusNotFound)
+			http.Error(w, "workload not found", http.StatusNotFound)
 			return
 		}
-		log.Printf("gateway: wake %s failed: %v", ref, err)
-		http.Error(w, "project unavailable", http.StatusBadGateway)
+		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, host, err)
+		http.Error(w, "workload unavailable", http.StatusBadGateway)
 		return
 	}
 
 	target := &url.URL{Scheme: "http", Host: addr}
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
-		log.Printf("gateway: proxy %s -> %s error: %v", ref, addr, e)
+		log.Printf("gateway: proxy %s -> %s error: %v", host, addr, e)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
 }
 
-// refFromHost extracts the leftmost label as the project ref, requiring the rest
-// of the host to equal the configured base domain. Host may carry a port.
-func (g *Gateway) refFromHost(host string) (string, bool) {
+// hostOnly strips any port from the Host header and lowercases it.
+func hostOnly(host string) string {
 	if i := strings.IndexByte(host, ':'); i >= 0 {
 		host = host[:i]
 	}
-	host = strings.TrimSuffix(host, ".")
-	suffix := "." + g.baseDomain
-	if !strings.HasSuffix(host, suffix) {
-		return "", false
-	}
-	label := strings.TrimSuffix(host, suffix)
-	if label == "" || strings.Contains(label, ".") {
-		// Require exactly one label to the left of the base domain.
-		if idx := strings.IndexByte(label, '.'); idx >= 0 {
-			label = label[:idx]
-		} else {
-			return "", false
-		}
-	}
-	return label, true
+	return strings.ToLower(strings.TrimSuffix(host, "."))
 }
 
 // Serve runs the gateway HTTP server until ctx is cancelled.
@@ -83,7 +70,7 @@ func (g *Gateway) Serve(ctx context.Context, addr string) error {
 		<-ctx.Done()
 		_ = srv.Close()
 	}()
-	log.Printf("gateway listening on %s (routing *.%s)", addr, g.baseDomain)
+	log.Printf("gateway listening on %s (route-table resolution)", addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}

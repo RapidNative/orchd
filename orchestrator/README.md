@@ -13,9 +13,9 @@ and **wake on the first request**.
 ```
                  *.tinbase.cloud  (wildcard TLS in prod; *.lvh.me locally)
                           │
-                   ┌──────▼───────┐   gateway (data plane): ref → project,
-                   │   Gateway    │   wake on demand, reverse-proxy every
-                   │  :8081       │   Supabase path incl. realtime WebSockets
+                   ┌──────▼───────┐   gateway (data plane): host → route →
+                   │   Gateway    │   workload, wake on demand, reverse-proxy
+                   │  :8081       │   every Supabase path incl. realtime WS
                    └──────┬───────┘
           ┌───────────────┼───────────────┐
    ┌──────▼──────┐  ┌─────▼──────┐   ┌─────▼──────┐   data plane: one tinbase
@@ -77,9 +77,10 @@ ORCHD_DATA_ROOT=$PWD/.data \
 Then:
 
 ```bash
-# provision a project
+# provision a project (empty body → one primary tinbase workload)
 curl -X POST http://127.0.0.1:8080/v1/projects -d '{}'
-#   → { "ref": "abc123...", "anon_key": "...", "endpoint": "http://abc123.lvh.me:8081", ... }
+#   → { "id": "abc123", "workloads": [ { "anon_key": "...",
+#         "endpoints": ["http://abc123.lvh.me:8081"], ... } ] }
 
 # point supabase-js (or curl) at the endpoint; the gateway wakes the instance
 curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest/v1/
@@ -105,15 +106,45 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_IDLE_TIMEOUT` | `5m` | idle time before an instance scales to zero |
 | `ORCHD_REGION` | `local` | single region served for now |
 
+## Model: Project → Workload → Route
+
+A **project** is a logical grouping (tenant/env). It owns one or more
+**workloads** — the routable, independently-scheduled, scale-to-zero units. Each
+workload has one or more **routes** (hostnames), resolved by an exact-match route
+table, so both convention subdomains (`<ref>-<role>.<base-domain>`) and custom
+domains work identically. The runtime lifecycle is keyed by workload id.
+
+- A plain tinbase project = one project, one (primary) workload, one route
+  `<ref>.<base-domain>`.
+- A RapidNative project = one project, many workloads (`app`, `web`, `tinbase`,
+  `api`), each on `<ref>-<name>.<base-domain>`, each its own isolated instance.
+
 ## Control-plane API
 
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/healthz` | liveness |
-| `POST` | `/v1/projects` | provision a project (`{"type": "tinbase-project"}`) |
-| `GET` | `/v1/projects` | list projects |
-| `GET` | `/v1/projects/{ref}` | get one project (incl. keys + endpoint) |
-| `DELETE` | `/v1/projects/{ref}` | stop + remove a project record |
+| `POST` | `/v1/projects` | create a project + workloads (empty body → one primary tinbase workload) |
+| `GET` | `/v1/projects` | list projects with their workloads |
+| `GET` | `/v1/projects/{id}` | get a project (workloads, routes, endpoints, keys) |
+| `DELETE` | `/v1/projects/{id}` | stop + remove a project and all its workloads/routes |
+| `POST` | `/v1/projects/{id}/workloads` | add a workload (`{"type","name","image","port"}`) |
+| `GET` | `/v1/workloads/{id}` | get one workload |
+| `DELETE` | `/v1/workloads/{id}` | stop + remove one workload and its routes |
+| `POST` | `/v1/workloads/{id}/routes` | attach an extra hostname (`{"host"}`) to a workload |
+
+Create a multi-workload project:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/projects -d '{
+  "name": "my-app",
+  "workloads": [
+    {"type": "tinbase-project", "name": ""},
+    {"type": "tinbase-project", "name": "api"}
+  ]
+}'
+# → primary at <ref>.<base>, api at <ref>-api.<base>, each an isolated instance
+```
 
 ## Not built yet
 

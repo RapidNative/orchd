@@ -42,6 +42,18 @@ the same control plane / gateway / driver:
 - [x] Scale-to-zero (idle reaper) + wake-on-request (verified: ~0.3s local resume)
 - [x] File-backed durable project store
 
+### Phase 1.2 — Multi-domain: Project → Workload → Route ✅
+- [x] Split the fused project/instance/route into Project (grouping) → Workload
+      (routable, scale-to-zero unit) → Route (hostname → workload)
+- [x] Exact-match route table in the gateway (supports `<ref>-<role>.<base>` and
+      custom domains alike); runtime lifecycle keyed by workload id
+- [x] API for workloads + routes; one project can own many isolated instances
+- [x] verified on the box: a RapidNative-shaped project (`app`/`web`/`tinbase`/`api`)
+      → four subdomains, four isolated gVisor containers, delete cascades cleanly
+- [ ] custom-domain routes + on-demand TLS (Caddy in front) for prod
+- [ ] heterogeneous workload images (web/expo runners) — Spec.Image/Port are wired;
+      needs the RapidNative runner images
+
 ### Phase 1 — Make it real, safely
 - [ ] **API auth** — the control-plane API is unauthenticated today; add tokens/roles before it leaves localhost
 - [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)

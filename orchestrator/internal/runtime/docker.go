@@ -64,11 +64,20 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 		return nil, fmt.Errorf("allocate port: %w", err)
 	}
 
+	image := d.Image
+	if spec.Image != "" {
+		image = spec.Image
+	}
+	cport := d.ContainerPort
+	if spec.Port != 0 {
+		cport = spec.Port
+	}
+
 	args := []string{
 		"run", "-d",
 		"--name", containerName(spec.Ref),
 		"--restart", "no",
-		"-p", fmt.Sprintf("127.0.0.1:%d:%d", hostPort, d.ContainerPort),
+		"-p", fmt.Sprintf("127.0.0.1:%d:%d", hostPort, cport),
 		"-v", spec.DataDir + ":/data",
 	}
 	if d.Runtime != "" {
@@ -77,7 +86,7 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	for k, v := range spec.Env {
 		args = append(args, "-e", k+"="+v)
 	}
-	args = append(args, d.Image)
+	args = append(args, image)
 
 	if out, err := d.docker(ctx, args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %w: %s", err, strings.TrimSpace(string(out)))
@@ -139,8 +148,10 @@ func (d *DockerDriver) inspect(ctx context.Context, ref string) (State, string) 
 	}
 	running := strings.TrimSpace(string(out)) == "true"
 
+	// Read the published host port generically (each container publishes exactly
+	// one port), so inspect need not know the container's internal port.
 	portOut, _ := d.docker(ctx, "inspect", "-f",
-		fmt.Sprintf(`{{(index (index .NetworkSettings.Ports "%d/tcp") 0).HostPort}}`, d.ContainerPort),
+		`{{range $p, $conf := .NetworkSettings.Ports}}{{if $conf}}{{(index $conf 0).HostPort}}{{end}}{{end}}`,
 		name).Output()
 	port := strings.TrimSpace(string(portOut))
 
@@ -155,7 +166,9 @@ func (d *DockerDriver) inspect(ctx context.Context, ref string) (State, string) 
 // published port before the container's process is actually serving.
 func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
-	url := "http://" + addr + "/rest/v1/"
+	// Any HTTP reply (even 404) means the server is up; probe root so this stays
+	// workload-agnostic rather than tinbase-specific.
+	url := "http://" + addr + "/"
 	deadline := time.Now().Add(timeout)
 	for {
 		if ctx.Err() != nil {
