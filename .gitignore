@@ -1,0 +1,15 @@
+# Go build output
+/orchestrator/orchd
+*.exe
+*.test
+*.out
+
+# Local orchestrator state + per-project data dirs
+.data/
+.tinbase-cloud/
+*.tmp
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

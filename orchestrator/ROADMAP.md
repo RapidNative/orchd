@@ -1,0 +1,78 @@
+# tinbase-cloud orchestrator roadmap
+
+## North Star
+
+A **cheaper, faster HA replacement for Supabase Cloud**. Same coupled model (one
+dedicated backend per project), but each backend is one ~66 MB tinbase process
+instead of a 12-container stack, so density (and therefore cost) wins decisively.
+Idle projects scale to zero; active ones wake in well under a second.
+
+## Positioning decision (settled)
+
+Aiming at **production HA Supabase-Cloud competition**, not just previews. The
+honest constraint: HA + rock-bottom cost + scale-to-zero cannot all be true for
+the *same* tier, so durability is **tiered** (as Supabase itself does):
+
+| Tier | Compute | Durability | Audience |
+| --- | --- | --- | --- |
+| Free / preview | scale-to-zero, densely packed | nightly + WAL to object storage | RapidNative apps, hobby |
+| Pro | always-on, kept warm | PITR | production apps |
+| Team / Enterprise | primary + standby, auto-failover | true HA + read replicas | the "HA replacement" claim |
+
+Free fleet stays absurdly cheap (tinbase's superpower); HA is the premium tier
+that funds itself.
+
+## Shared substrate
+
+The orchestrator is generic over a `Workload` primitive. Two workload types ride
+the same control plane / gateway / driver:
+
+- `tinbase-project` — hosted Supabase-compatible backends (this product)
+- `rapidnative-dev` — RapidNative dev environments (later; untrusted user code,
+  which is *why* VM-grade isolation matters for the substrate)
+
+## Phases
+
+### Phase 0 — Local control loop (LocalDriver) ✅
+- [x] `Runtime` interface + generic `Workload` primitive
+- [x] `LocalDriver` (tinbase as OS processes) — runs on macOS
+- [x] Control-plane API: provision / list / get / delete projects
+- [x] Key minting (JWT secret → anon/service via `tinbase keys`)
+- [x] Gateway: `<ref>.<base-domain>` routing + reverse proxy (REST/Auth/Storage/Studio, WebSockets)
+- [x] Scale-to-zero (idle reaper) + wake-on-request (verified: ~0.3s local resume)
+- [x] File-backed durable project store
+
+### Phase 1 — Make it real, safely
+- [ ] **API auth** — the control-plane API is unauthenticated today; add tokens/roles before it leaves localhost
+- [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)
+- [ ] **Backups** — scheduled `pg_dump` + WAL archiving to S3-compatible storage (R2/Backblaze); restore-on-wake
+- [ ] Per-project resource limits + fair-use quotas (free tier)
+- [ ] Structured per-project logs/metrics (replace shared stderr)
+- [ ] Graceful data-dir reclaim on delete (currently record-only delete)
+
+### Phase 2 — Firecracker driver (the speed + isolation play)
+Needs a **Linux bare-metal dev/target box** (e.g. Hetzner dedicated, ~€40/mo).
+**Action item: acquire this box** — the microVM driver cannot run on macOS (no KVM),
+so it is developed/CI'd against real hardware while the rest stays laptop-local.
+- [ ] rootfs + guest-kernel build pipeline for the tinbase image (small, static)
+- [ ] `FirecrackerDriver` behind the existing `Runtime` interface (API + `jailer`)
+- [ ] tap/bridge networking + gateway → VM IP wiring
+- [ ] per-project **snapshot/restore** = sub-second wake (reconfigure net/MAC + clock/entropy on resume)
+- [ ] data on a per-project virtio-block device, decoupled from instance lifecycle
+
+### Phase 3 — Multi-node, one region
+- [ ] Scheduler / placement across nodes (custom now; evaluate Nomad vs k8s+Kata later)
+- [ ] Store → managed Postgres; control plane becomes HA itself
+- [ ] Warm-pool / keep-alive policy for hot projects
+
+### Phase 4 — HA tier + multi-region
+- [ ] Per-project streaming replication + automatic failover (Team/Enterprise)
+- [ ] Read replicas
+- [ ] Geo/anycast routing; control-plane federation across regions
+- [ ] PITR productization
+
+## Separate components (not this repo)
+
+- **Admin panel** — a UI over the control-plane API, shipped as its own app once
+  the API surface stabilizes. Kept separate from the orchestrator on purpose.
+- **Billing** — metering + plans, wired to the tiers above.
