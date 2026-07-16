@@ -55,7 +55,9 @@ the same control plane / gateway / driver:
       needs the RapidNative runner images
 
 ### Phase 1 — Make it real, safely
-- [ ] **API auth** — the control-plane API is unauthenticated today; add tokens/roles before it leaves localhost
+- [ ] **API auth** — the control-plane API is unauthenticated but currently binds
+      `127.0.0.1` on the box and nothing proxies to it, so it is not internet-reachable
+      (loopback-locked). Add tokens/roles **before** binding `0.0.0.0` or routing to it
 - [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)
 - [ ] **Backups** — scheduled `pg_dump` + WAL archiving to S3-compatible storage (R2/Backblaze); restore-on-wake
 - [ ] Per-project resource limits + fair-use quotas (free tier)

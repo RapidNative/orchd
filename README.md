@@ -1,31 +1,45 @@
-# tinbase-cloud
+# RapidNative Cloud
 
-Hosted, multi-tenant infrastructure for [tinbase](https://tinbase.dev) — a
-cheaper, faster, HA-capable alternative to Supabase Cloud.
+One multi-tenant **workload orchestrator**, in a single codebase, powering two
+products:
 
-It follows Supabase Cloud's **coupled** model (one dedicated backend per project)
-but collapses Supabase's ~12-container per-project stack into a single ~66 MB
-tinbase process. That density is the entire cost advantage. Idle projects
-**scale to zero** and **wake on the first request** in well under a second.
+1. **tinbase-cloud** — hosted, Supabase-compatible backends. A cheaper, faster,
+   HA-capable alternative to Supabase Cloud.
+2. **RapidNative dev environments** — the per-project runners behind
+   [RapidNative](https://rapidnative.com) (a web/expo runner, a web/react runner,
+   a dev tinbase, an api server), each on its own subdomain.
+
+Both are just **workloads** to the orchestrator: containers it provisions, routes
+by hostname, isolates with gVisor, and scales to zero when idle. The only
+difference between them is the image and the routing. Build the substrate once,
+run both.
 
 > Status: early. The control plane, gateway, scale-to-zero lifecycle, the
 > Docker + gVisor substrate, and multi-domain routing all work and are verified
-> on real hardware. HA, connection pooling, backups, and the Firecracker tier are
-> on the roadmap.
+> on real hardware. The tinbase workload runs today; the RapidNative runner
+> images, plus HA, connection pooling, backups, and the Firecracker tier, are on
+> the roadmap.
 
 ---
 
 ## Why this exists
 
-tinbase speaks the Supabase wire protocol, so the official `@supabase/supabase-js`
-SDK works unchanged against it (REST, Auth, Storage, Realtime). But tinbase is
-one tiny process instead of a Docker Compose stack. tinbase-cloud is the layer
-that runs a fleet of those processes as a hosted platform: provisioning, per
-project subdomains, scale-to-zero, isolation, and (over time) backups and HA.
+Both products need the same thing: run many small, per-tenant workloads cheaply,
+give each one a subdomain, wake it fast, put it to sleep when idle, and isolate
+it well enough to run untrusted user code. Rather than build that twice, it is
+one orchestrator with a generic `Workload` primitive.
 
-The first consumer is [RapidNative](https://rapidnative.com), where each generated
-project needs a backend on demand and most sit idle. That shapes the design:
-cheap, dense, fast to wake, and isolated well enough to run untrusted code.
+**tinbase-cloud.** tinbase speaks the Supabase wire protocol, so the official
+`@supabase/supabase-js` SDK works against it unchanged (REST, Auth, Storage,
+Realtime), but it is one ~66 MB process instead of a Docker Compose stack. Hosting
+a fleet of those, coupled one-per-project like Supabase Cloud, is the whole
+cost advantage.
+
+**RapidNative dev environments.** Each generated project needs a set of runners on
+demand, and most sit idle. That is exactly what scale-to-zero is for, and because
+those runners execute untrusted user code, VM-grade isolation is not optional. The
+same orchestrator, the same gateway, the same scale-to-zero, a different workload
+type.
 
 ## Architecture
 
@@ -64,6 +78,19 @@ A plain tinbase project is one project with a single primary workload and one
 route `<ref>.<base>`. A RapidNative project is one project with many workloads
 (`app`, `web`, `tinbase`, `api`), each on `<ref>-<name>.<base>` and each its own
 isolated instance.
+
+### Workload types
+
+The two products are the same primitive with a different image and routing:
+
+| Type | Image | Routing | Purpose |
+| --- | --- | --- | --- |
+| `tinbase-project` | tinbase | `<ref>.<base>` | hosted Supabase-compatible backend (tinbase-cloud) |
+| `rapidnative-dev` | per-runner (web/expo, web/react, api, dev tinbase) | `<ref>-<name>.<base>` | a RapidNative project's dev environment |
+
+One control plane, one gateway, one driver; add a workload type by adding an
+image. `Spec.Image`/`Spec.Port` are already plumbed through, so heterogeneous
+workloads need only their runner images.
 
 ### Runtime driver seam
 

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>tinbase-cloud</title>
+<title>RapidNative Cloud</title>
 <style>
   :root{
     --bg:#0b0e14; --panel:#111624; --panel2:#161d2e; --line:#232c42;
@@ -106,14 +106,15 @@
 
 <header>
   <div class="wrap">
-    <div class="logo"><span class="dot"></span> tinbase-cloud</div>
-    <div class="htitle">A fleet of tiny, <b>scale-to-zero</b><br>Supabase-compatible backends</div>
-    <p class="hsub">Hosted infrastructure for <a href="https://tinbase.dev">tinbase</a>:
-      a cheaper, faster, HA-capable alternative to Supabase Cloud. Same coupled
-      model, one dedicated backend per project, but each backend is a single
-      ~66 MB process instead of a twelve-container stack.</p>
+    <div class="logo"><span class="dot"></span> RapidNative Cloud</div>
+    <div class="htitle">One orchestrator,<br><b>two products</b>, one codebase</div>
+    <p class="hsub">A multi-tenant workload orchestrator that powers both
+      <b style="color:#e6ebf5">tinbase-cloud</b> (hosted, Supabase-compatible
+      backends) and <b style="color:#e6ebf5">RapidNative dev environments</b>
+      (per-project runners). Both are just workloads: containers it provisions,
+      routes by subdomain, isolates with gVisor, and scales to zero when idle.</p>
     <div class="badges">
-      <span class="badge">Model: <b>one tinbase / project</b></span>
+      <span class="badge">Powers: <b>tinbase-cloud + RapidNative</b></span>
       <span class="badge">Isolation: <b>gVisor</b></span>
       <span class="badge">Wake: <b>~0.9 s</b></span>
       <span class="badge">Idle RAM: <b>0</b></span>
@@ -126,19 +127,31 @@
 
   <section style="border-top:none">
     <p class="eyebrow">What it is</p>
-    <h2>One process where Supabase runs a stack</h2>
-    <p class="lead">tinbase speaks the Supabase wire protocol, so the official
-      <code>@supabase/supabase-js</code> SDK works against it unchanged (REST,
-      Auth, Storage, Realtime). tinbase-cloud runs a fleet of those processes as a
-      hosted platform: provisioning, per-project subdomains, scale-to-zero,
-      isolation, and (over time) backups and HA.</p>
-    <p>Supabase Cloud is coupled to the extreme: every project gets its own
-      Postgres and, historically, its own VM running roughly a dozen containers.
-      tinbase-cloud keeps the coupled model but collapses that entire stack into
-      one tiny process. That density is the whole cost advantage. The first
-      consumer is <a href="https://rapidnative.com">RapidNative</a>, where each
-      generated project needs a backend on demand and most sit idle, which is
-      exactly what scale-to-zero is for.</p>
+    <h2>One substrate, two products</h2>
+    <p class="lead">Both products need the same thing: run many small, per-tenant
+      workloads cheaply, give each a subdomain, wake it fast, sleep it when idle,
+      and isolate it well enough to run untrusted user code. So it is one
+      orchestrator with a generic <code>Workload</code> primitive, not two.</p>
+    <div class="grid cards" style="margin-top:16px">
+      <div class="card">
+        <h3 style="margin-top:0">tinbase-cloud</h3>
+        <p>Hosted, Supabase-compatible backends. <a href="https://tinbase.dev">tinbase</a>
+          speaks the Supabase wire protocol, so <code>@supabase/supabase-js</code>
+          works unchanged, but it is one ~66 MB process instead of a twelve-container
+          stack. Coupled one-per-project like Supabase Cloud, at a fraction of the
+          footprint. That density is the cost advantage.</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">RapidNative dev environments</h3>
+        <p>The per-project runners behind <a href="https://rapidnative.com">RapidNative</a>:
+          a web/expo runner, a web/react runner, a dev tinbase, an api server, each
+          on its own subdomain. They run untrusted user code and mostly sit idle,
+          which is exactly what gVisor isolation and scale-to-zero are for.</p>
+      </div>
+    </div>
+    <p style="margin-top:16px">The only difference between the two is the image and
+      the routing. Everything else, provisioning, subdomains, waking, sleeping,
+      isolation, is shared.</p>
   </section>
 
   <section>
@@ -347,6 +360,7 @@
       <tr><td>0</td><td>Control loop: provision, gateway, scale-to-zero, wake (LocalDriver)</td><td><span class="pill ok">done</span></td></tr>
       <tr><td>1.2</td><td>Multi-domain: Project &rarr; Workload &rarr; Route, route table</td><td><span class="pill ok">done</span></td></tr>
       <tr><td>1.5</td><td>Docker + gVisor substrate on a Linux box</td><td><span class="pill ok">done</span></td></tr>
+      <tr><td>1</td><td>RapidNative runner images (web/expo, web/react, api) as a second workload type</td><td><span class="pill plan">next</span></td></tr>
       <tr><td>1</td><td>API auth, connection pooling, backups, cgroup limits</td><td><span class="pill plan">next</span></td></tr>
       <tr><td>2</td><td>Firecracker driver on bare metal, snapshot resume</td><td><span class="pill plan">planned</span></td></tr>
       <tr><td>3</td><td>Multi-node, one region; store on managed Postgres</td><td><span class="pill plan">planned</span></td></tr>
@@ -358,8 +372,8 @@
 
 <footer>
   <div class="wrap">
-    <div>tinbase-cloud &middot; hosted infrastructure for <a href="https://tinbase.dev">tinbase</a> &middot; built for <a href="https://rapidnative.com">RapidNative</a></div>
-    <div class="tag" style="margin-top:8px">Coupled model, gVisor isolation, scale-to-zero. Early and evolving.</div>
+    <div>RapidNative Cloud &middot; one orchestrator for <a href="https://tinbase.dev">tinbase-cloud</a> and <a href="https://rapidnative.com">RapidNative</a> dev environments</div>
+    <div class="tag" style="margin-top:8px">Generic Workload primitive, gVisor isolation, scale-to-zero. Early and evolving.</div>
   </div>
 </footer>
 
