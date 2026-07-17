@@ -55,7 +55,10 @@ the same control plane / gateway / driver:
 - [x] **heterogeneous workload images**: `rn-expo` (expo web export), `rn-vite`
       (vite dev), `rn-api` (hono) built + wired via a preset catalog; verified a
       four-image RapidNative project (tinbase/expo/vite/api) routing under gVisor
-- [ ] custom-domain routes + on-demand TLS (Caddy in front) for prod
+- [x] **wildcard subdomains + TLS** on tinbase.dev: `admin`/`api`/`<ref>` hosts via
+      Caddy with real Let's Encrypt certs; project subdomains use on-demand TLS gated
+      by orchd's `/internal/tls-allow` (certs only for real workload hosts)
+- [ ] custom-domain routes (tenant-supplied domains) + on-demand TLS
 - [ ] full Metro expo dev server (heavier) as a bare-metal-tier variant
 
 ### Phase 1 — Make it real, safely

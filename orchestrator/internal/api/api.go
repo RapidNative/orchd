@@ -41,7 +41,26 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/workloads/{id}", a.deleteWorkload)
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
+	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
+	mux.HandleFunc("GET /internal/tls-allow", a.tlsAllow)
 	return a.auth(mux)
+}
+
+// tlsAllow answers Caddy's on-demand-TLS "ask": 200 => issue a cert for this
+// host, anything else => refuse. We allow admin/api and any host in the route
+// table, so random subdomains cannot trigger certificate issuance.
+func (a *API) tlsAllow(w http.ResponseWriter, r *http.Request) {
+	domain := strings.ToLower(r.URL.Query().Get("domain"))
+	base := strings.ToLower(a.cfg.BaseDomain)
+	if domain == "admin."+base || domain == "api."+base {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	if _, err := a.mgr.ResolveHost(domain); err == nil {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+	w.WriteHeader(http.StatusForbidden)
 }
 
 // auth gates every endpoint except /healthz behind the API key. If no key is
@@ -56,7 +75,7 @@ func (a *API) auth(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if r.URL.Path == "/healthz" || a.apiKey == "" {
+		if r.URL.Path == "/healthz" || strings.HasPrefix(r.URL.Path, "/internal/") || a.apiKey == "" {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -120,7 +139,11 @@ func (a *API) workloadView(w *store.Workload) workloadView {
 	subroutes := make([]string, 0, len(routes))
 	for _, r := range routes {
 		hosts = append(hosts, r.Host)
-		endpoints = append(endpoints, "http://"+r.Host+gatewayPort(a.cfg.GatewayAddr))
+		if a.cfg.PublicScheme == "https" {
+			endpoints = append(endpoints, "https://"+r.Host) // public subdomain, TLS on 443
+		} else {
+			endpoints = append(endpoints, "http://"+r.Host+gatewayPort(a.cfg.GatewayAddr))
+		}
 		if a.cfg.PublicURL != "" {
 			subroutes = append(subroutes, strings.TrimRight(a.cfg.PublicURL, "/")+"/w/"+r.Key)
 		}

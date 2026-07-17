@@ -1,12 +1,17 @@
-# Caddy front door for cloud.rapidnative.com (behind Cloudflare).
-# Serves both HTTP (:80, Cloudflare Flexible) and HTTPS (:443, self-signed via
-# tls internal, Cloudflare Full). Routes:
-#   /api/*   -> control-plane API (:8080), prefix stripped (API-key protected)
-#   /w/*     -> gateway (:8081), path kept (subroute tenant routing)
-#   /admin   -> admin UI (static)
-#   /        -> project overview page (static)
+# Caddy front door.
+#
+# cloud.rapidnative.com — behind Cloudflare, self-signed origin cert (tls internal).
+# tinbase.dev subdomains — direct A record, real Let's Encrypt certs:
+#   admin.tinbase.dev -> admin UI (+ same-origin /api proxy)
+#   api.tinbase.dev   -> control-plane API (key-protected)
+#   *.tinbase.dev     -> gateway (host-based workload routing), cert issued on
+#                        demand, gated by orchd's /internal/tls-allow so only real
+#                        project hosts (and admin/api) can trigger issuance.
 {
 	auto_https disable_redirects
+	on_demand_tls {
+		ask http://127.0.0.1:8080/internal/tls-allow
+	}
 }
 
 (site) {
@@ -35,4 +40,26 @@ http://cloud.rapidnative.com {
 https://cloud.rapidnative.com {
 	tls internal
 	import site
+}
+
+admin.tinbase.dev {
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		root * /opt/tinbase-cloud/admin
+		try_files {path} /index.html
+		file_server
+	}
+}
+
+api.tinbase.dev {
+	reverse_proxy 127.0.0.1:8080
+}
+
+*.tinbase.dev {
+	tls {
+		on_demand
+	}
+	reverse_proxy 127.0.0.1:8081
 }

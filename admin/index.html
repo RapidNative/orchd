@@ -133,7 +133,7 @@ async function connect(){
 function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 function workloadLink(wl){
-  const url = (wl.subroutes && wl.subroutes[0]) || (wl.endpoints && wl.endpoints[0]) || '';
+  const url = (wl.endpoints && wl.endpoints[0]) || (wl.subroutes && wl.subroutes[0]) || '';
   if(!url) return '<span class="dim">no route</span>';
   const isTb = wl.type === 'tinbase-project';
   const open = isTb ? url + '/_/' : url;   // tinbase -> Studio

@@ -53,6 +53,9 @@ type Config struct {
 	// PublicURL is the externally reachable base (e.g. https://cloud.rapidnative.com)
 	// used to build subroute endpoints (<PublicURL>/w/<key>) for display.
 	PublicURL string
+	// PublicScheme is the scheme for subdomain endpoints ("https" in prod behind
+	// Caddy, "http" locally). When "https", displayed endpoints omit the port.
+	PublicScheme string
 }
 
 func Load() Config {
@@ -72,6 +75,7 @@ func Load() Config {
 		Region:        env("ORCHD_REGION", "local"),
 		APIKeyFile:    env("ORCHD_API_KEY_FILE", ""),
 		PublicURL:     env("ORCHD_PUBLIC_URL", ""),
+		PublicScheme:  env("ORCHD_PUBLIC_SCHEME", "http"),
 	}
 }
 

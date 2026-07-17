@@ -181,11 +181,24 @@ The control API and gateway both bind to loopback; **Caddy** is the front door f
 box (`ORCHD_API_KEY_FILE`), never logged, and never in the repo. `/healthz` stays
 open. With no key configured (local dev) the API is open.
 
-**Subroutes (interim).** Until wildcard subdomains + TLS are wired, a workload is
-reachable at `https://cloud.rapidnative.com/w/<key>` where `<key>` is `<ref>` for a
-project's primary workload and `<ref>-<name>` for the others. The gateway strips
-`/w/<key>` before proxying, so the upstream sees a normal root path. Subdomains
-(`<key>.<base>`) remain the target once DNS/TLS allow it; both share one route table.
+**Domain mapping (`tinbase.dev`).** `tinbase.dev` is on Vercel DNS, so subdomains
+point straight at the box (no proxy) and Caddy issues real Let's Encrypt certs:
+
+| Host | Serves |
+| --- | --- |
+| `admin.tinbase.dev` | admin UI (+ same-origin `/api` proxy) |
+| `api.tinbase.dev` | control-plane API (key-protected) |
+| `<ref>.tinbase.dev`, `<ref>-<name>.tinbase.dev` | the workload (subdomain host routing) |
+| `tinbase.dev`, `www` | the marketing site on Vercel (unchanged) |
+
+`admin`/`api` get managed certs; project subdomains use **on-demand TLS** gated by
+orchd's `/internal/tls-allow`, so a cert is only minted for a host that resolves to
+a real workload (or admin/api). One wildcard DNS `A` record covers them all.
+
+**Subroutes (fallback).** A workload is also reachable at
+`https://cloud.rapidnative.com/w/<key>` (`<key>` = `<ref>` or `<ref>-<name>`). The
+gateway strips `/w/<key>` before proxying. Both subdomains and subroutes share one
+route table.
 
 **Workload presets.** The control API and admin UI can create workloads by preset:
 `tinbase` (Supabase backend), `expo`, `vite`, `api` (RapidNative runners). Presets
