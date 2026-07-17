@@ -5,9 +5,11 @@
 package api
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
@@ -16,18 +18,19 @@ import (
 )
 
 type API struct {
-	mgr *manager.Manager
-	cfg config.Config
+	mgr    *manager.Manager
+	cfg    config.Config
+	apiKey string // when non-empty, /v1/* requires it
 }
 
-func New(mgr *manager.Manager, cfg config.Config) *API {
-	return &API{mgr: mgr, cfg: cfg}
+func New(mgr *manager.Manager, cfg config.Config, apiKey string) *API {
+	return &API{mgr: mgr, cfg: cfg, apiKey: apiKey}
 }
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "auth": a.apiKey != ""})
 	})
 	mux.HandleFunc("POST /v1/projects", a.createProject)
 	mux.HandleFunc("GET /v1/projects", a.listProjects)
@@ -37,22 +40,72 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/workloads/{id}", a.getWorkload)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", a.deleteWorkload)
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
-	return mux
+	mux.HandleFunc("GET /v1/presets", a.listPresets)
+	return a.auth(mux)
+}
+
+// auth gates every endpoint except /healthz behind the API key. If no key is
+// configured (local dev), everything is open. CORS is permitted so the admin UI
+// can call the API from the browser with the key.
+func (a *API) auth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-API-Key, Content-Type")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		if r.URL.Path == "/healthz" || a.apiKey == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if !a.validKey(r) {
+			writeErr(w, http.StatusUnauthorized, errors.New("missing or invalid API key"))
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *API) validKey(r *http.Request) bool {
+	presented := r.Header.Get("X-API-Key")
+	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
+		presented = strings.TrimPrefix(h, "Bearer ")
+	}
+	if presented == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(a.apiKey)) == 1
+}
+
+func (a *API) listPresets(w http.ResponseWriter, r *http.Request) {
+	names := make([]string, 0, len(manager.Catalog))
+	for k := range manager.Catalog {
+		names = append(names, k)
+	}
+	writeJSON(w, http.StatusOK, names)
 }
 
 // ---- views ----
 
 type workloadSpecReq struct {
-	Type  runtime.WorkloadType `json:"type"`
-	Name  string               `json:"name"`
-	Image string               `json:"image"`
-	Port  int                  `json:"port"`
+	Preset string               `json:"preset"`
+	Type   runtime.WorkloadType `json:"type"`
+	Name   string               `json:"name"`
+	Image  string               `json:"image"`
+	Port   int                  `json:"port"`
+}
+
+func (r workloadSpecReq) toSpec() manager.WorkloadSpec {
+	return manager.WorkloadSpec{Preset: r.Preset, Type: r.Type, Name: r.Name, Image: r.Image, Port: r.Port}
 }
 
 type workloadView struct {
 	*store.Workload
-	Routes    []string `json:"routes"`
-	Endpoints []string `json:"endpoints"`
+	Routes    []string `json:"routes"`    // hostnames
+	Endpoints []string `json:"endpoints"` // subdomain endpoints (local dev)
+	Subroutes []string `json:"subroutes"` // public subroute endpoints (<PublicURL>/w/<key>)
 }
 
 type projectView struct {
@@ -64,11 +117,15 @@ func (a *API) workloadView(w *store.Workload) workloadView {
 	routes := a.mgr.Store().ListRoutesForWorkload(w.ID)
 	hosts := make([]string, 0, len(routes))
 	endpoints := make([]string, 0, len(routes))
+	subroutes := make([]string, 0, len(routes))
 	for _, r := range routes {
 		hosts = append(hosts, r.Host)
 		endpoints = append(endpoints, "http://"+r.Host+gatewayPort(a.cfg.GatewayAddr))
+		if a.cfg.PublicURL != "" {
+			subroutes = append(subroutes, strings.TrimRight(a.cfg.PublicURL, "/")+"/w/"+r.Key)
+		}
 	}
-	return workloadView{Workload: w, Routes: hosts, Endpoints: endpoints}
+	return workloadView{Workload: w, Routes: hosts, Endpoints: endpoints, Subroutes: subroutes}
 }
 
 func (a *API) projectView(p *store.Project) projectView {
@@ -91,7 +148,7 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
 	for _, ws := range body.Workloads {
-		specs = append(specs, manager.WorkloadSpec{Type: ws.Type, Name: ws.Name, Image: ws.Image, Port: ws.Port})
+		specs = append(specs, ws.toSpec())
 	}
 	proj, _, err := a.mgr.CreateProject(r.Context(), body.Name, specs)
 	if err != nil {
@@ -133,8 +190,7 @@ func (a *API) addWorkload(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	wl, err := a.mgr.AddWorkload(r.Context(), r.PathValue("id"),
-		manager.WorkloadSpec{Type: ws.Type, Name: ws.Name, Image: ws.Image, Port: ws.Port})
+	wl, err := a.mgr.AddWorkload(r.Context(), r.PathValue("id"), ws.toSpec())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeErr(w, http.StatusNotFound, err)

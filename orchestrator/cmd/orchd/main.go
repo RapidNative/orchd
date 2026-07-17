@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
@@ -50,8 +51,15 @@ func main() {
 
 	go mgr.RunReaper(ctx)
 
+	// Load the control-plane API key (if configured). Never logged.
+	apiKey := loadAPIKey(cfg.APIKeyFile)
+	authState := "OPEN (no key)"
+	if apiKey != "" {
+		authState = "key required"
+	}
+
 	// Control plane API.
-	apiSrv := &http.Server{Addr: cfg.APIAddr, Handler: api.New(mgr, cfg).Handler()}
+	apiSrv := &http.Server{Addr: cfg.APIAddr, Handler: api.New(mgr, cfg, apiKey).Handler()}
 	go func() {
 		<-ctx.Done()
 		_ = apiSrv.Close()
@@ -63,8 +71,8 @@ func main() {
 		}
 	}()
 
-	log.Printf("driver=%s region=%s base-domain=%s idle-timeout=%s data-root=%s tinbase=%s",
-		rt.Name(), cfg.Region, cfg.BaseDomain, cfg.IdleTimeout, cfg.DataRoot, cfg.TinbaseBin)
+	log.Printf("driver=%s region=%s base-domain=%s idle-timeout=%s data-root=%s api-auth=%s",
+		rt.Name(), cfg.Region, cfg.BaseDomain, cfg.IdleTimeout, cfg.DataRoot, authState)
 
 	// Data plane gateway (blocks until shutdown).
 	gw := gateway.New(mgr)
@@ -72,4 +80,18 @@ func main() {
 		log.Fatalf("gateway: %v", err)
 	}
 	_ = os.Stdout.Sync()
+}
+
+// loadAPIKey reads the API key from a file, trimming whitespace. Missing file or
+// empty path means no key (open, local dev).
+func loadAPIKey(path string) string {
+	if path == "" {
+		return ""
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		log.Printf("api key file %s not readable (%v); API is OPEN", path, err)
+		return ""
+	}
+	return strings.TrimSpace(string(b))
 }

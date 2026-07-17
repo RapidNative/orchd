@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RapidNative Cloud · Admin</title>
+<style>
+  :root{--bg:#0b0e14;--panel:#111624;--panel2:#161d2e;--line:#232c42;--ink:#e6ebf5;
+    --muted:#9aa7c0;--dim:#6b7896;--accent:#5ec8a8;--accent2:#7aa2ff;--bad:#e06a6a;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.5}
+  .wrap{max-width:960px;margin:0 auto;padding:0 20px}
+  header{padding:22px 0;border-bottom:1px solid var(--line);display:flex;
+    align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+  .logo{display:flex;align-items:center;gap:10px;font-weight:700}
+  .dot{width:10px;height:10px;border-radius:50%;background:var(--accent)}
+  .status{font-family:var(--mono);font-size:.78rem;color:var(--dim)}
+  .status.on{color:var(--accent)}
+  .status.off{color:var(--bad)}
+  h2{font-size:1.05rem;margin:26px 0 10px}
+  code{font-family:var(--mono);font-size:.85em;background:#0d1220;border:1px solid var(--line);
+    border-radius:5px;padding:1px 6px;color:#cdd8f0}
+  input,select{background:#0d1220;border:1px solid var(--line);border-radius:8px;color:var(--ink);
+    padding:9px 11px;font-family:var(--mono);font-size:.9rem}
+  input{width:100%}
+  button{background:var(--accent);color:#06231b;border:none;border-radius:8px;padding:9px 14px;
+    font-weight:650;font-size:.9rem;cursor:pointer;font-family:var(--sans)}
+  button:hover{filter:brightness(1.06)}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  button.danger{background:transparent;color:var(--bad);border:1px solid rgba(224,106,106,.4);padding:5px 10px;font-size:.8rem}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
+  .muted{color:var(--muted)}
+  .dim{color:var(--dim);font-size:.85rem}
+  .pill{font-family:var(--mono);font-size:.72rem;padding:2px 8px;border-radius:999px;border:1px solid var(--line)}
+  .running{color:var(--accent);border-color:rgba(94,200,168,.4)}
+  .suspended{color:var(--dim)}
+  .failed{color:var(--bad);border-color:rgba(224,106,106,.4)}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  table{width:100%;border-collapse:collapse;margin-top:8px;font-size:.9rem}
+  td,th{text-align:left;padding:7px 8px;border-bottom:1px solid var(--line);vertical-align:middle}
+  th{color:var(--dim);font-weight:600;font-size:.72rem;text-transform:uppercase;letter-spacing:.05em}
+  .proj-head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+  .mono{font-family:var(--mono)}
+  #toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:var(--panel2);
+    border:1px solid var(--line);border-radius:8px;padding:10px 16px;font-size:.85rem;display:none}
+  .hidden{display:none}
+  .keyrow input{max-width:520px}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div class="logo"><span class="dot"></span> RapidNative Cloud · Admin</div>
+  <div id="status" class="status off">disconnected</div>
+</header>
+
+<main class="wrap">
+
+  <section class="card" id="auth">
+    <h2 style="margin-top:0">API key</h2>
+    <p class="dim">Paste the control-plane key (stored only in this browser's localStorage). The key file lives on the server.</p>
+    <div class="row keyrow">
+      <input id="key" type="password" placeholder="paste API key" autocomplete="off">
+      <button id="connect">Connect</button>
+      <button id="forget" class="ghost">Forget</button>
+    </div>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="card">
+      <h2 style="margin-top:0">Provision</h2>
+      <div class="row">
+        <button id="newTinbase">New tinbase project</button>
+        <button id="newRapid">New RapidNative project</button>
+        <button id="refresh" class="ghost">Refresh</button>
+      </div>
+      <p class="dim" style="margin-bottom:0">
+        <b>tinbase project</b>: one Supabase-compatible backend.
+        <b>RapidNative project</b>: four workloads (tinbase, expo, vite, api), each on its own subroute.
+      </p>
+    </div>
+
+    <h2>Projects</h2>
+    <div id="projects"></div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const KEY_LS = 'rnc_admin_key';
+let apiKey = localStorage.getItem(KEY_LS) || '';
+
+const $ = (s) => document.querySelector(s);
+const statusEl = $('#status');
+
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.style.display='block';
+  clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none',2600); }
+
+async function api(path, opts={}){
+  const r = await fetch('/api'+path, {
+    ...opts,
+    headers: { 'Authorization':'Bearer '+apiKey, 'Content-Type':'application/json', ...(opts.headers||{}) },
+  });
+  if(r.status===401){ setConnected(false); throw new Error('unauthorized (bad key)'); }
+  if(!r.ok){ let e; try{e=(await r.json()).error}catch{ e=r.statusText } throw new Error(e||('HTTP '+r.status)); }
+  if(r.status===204) return null;
+  return r.json();
+}
+
+function setConnected(on){
+  statusEl.textContent = on ? 'connected' : 'disconnected';
+  statusEl.className = 'status ' + (on?'on':'off');
+  $('#app').classList.toggle('hidden', !on);
+  $('#auth').classList.toggle('hidden', on);
+}
+
+async function connect(){
+  apiKey = $('#key').value.trim() || apiKey;
+  if(!apiKey){ toast('enter a key'); return; }
+  try{
+    await api('/v1/projects');            // 401 if wrong key
+    localStorage.setItem(KEY_LS, apiKey);
+    setConnected(true);
+    render();
+  }catch(e){ setConnected(false); toast(e.message); }
+}
+
+function esc(s){ return String(s).replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+function workloadLink(wl){
+  const url = (wl.subroutes && wl.subroutes[0]) || (wl.endpoints && wl.endpoints[0]) || '';
+  if(!url) return '<span class="dim">no route</span>';
+  const isTb = wl.type === 'tinbase-project';
+  const open = isTb ? url + '/_/' : url;   // tinbase -> Studio
+  return `<a href="${esc(open)}" target="_blank" rel="noopener">${esc(url.replace(/^https?:\/\//,''))}</a>`
+       + (isTb ? ' <span class="dim">(Studio)</span>' : '');
+}
+
+async function render(){
+  const projects = await api('/v1/projects');
+  const box = $('#projects');
+  if(!projects || !projects.length){ box.innerHTML = '<p class="muted">No projects yet.</p>'; return; }
+  box.innerHTML = projects.map(p => {
+    const rows = (p.workloads||[]).map(wl => `
+      <tr>
+        <td class="mono">${esc(wl.name||'(primary)')}</td>
+        <td class="dim">${esc(wl.type)}</td>
+        <td><span class="pill ${esc(wl.state)}">${esc(wl.state)}</span></td>
+        <td>${workloadLink(wl)}</td>
+      </tr>`).join('');
+    return `<div class="card">
+      <div class="proj-head">
+        <div><b class="mono">${esc(p.id)}</b> ${p.name?('<span class="dim">· '+esc(p.name)+'</span>'):''}
+          <span class="dim">· ${(p.workloads||[]).length} workload(s)</span></div>
+        <button class="danger" data-del="${esc(p.id)}">Delete</button>
+      </div>
+      <table><tr><th>Name</th><th>Type</th><th>State</th><th>Route</th></tr>${rows}</table>
+    </div>`;
+  }).join('');
+  box.querySelectorAll('[data-del]').forEach(b => b.onclick = () => del(b.getAttribute('data-del')));
+}
+
+async function del(id){
+  if(!confirm('Delete project '+id+' and all its workloads?')) return;
+  try{ await api('/v1/projects/'+id, {method:'DELETE'}); toast('deleted'); render(); }
+  catch(e){ toast(e.message); }
+}
+
+async function create(body, label){
+  toast('provisioning '+label+' …');
+  try{ await api('/v1/projects', {method:'POST', body:JSON.stringify(body)}); toast(label+' created'); render(); }
+  catch(e){ toast(e.message); }
+}
+
+$('#connect').onclick = connect;
+$('#key').addEventListener('keydown', e=>{ if(e.key==='Enter') connect(); });
+$('#forget').onclick = ()=>{ localStorage.removeItem(KEY_LS); apiKey=''; $('#key').value=''; setConnected(false); toast('key forgotten'); };
+$('#refresh').onclick = ()=>render().catch(e=>toast(e.message));
+$('#newTinbase').onclick = ()=>create({}, 'tinbase project');
+$('#newRapid').onclick = ()=>create({ name:'rapidnative', workloads:[
+  {preset:'tinbase'},{preset:'expo'},{preset:'vite'},{preset:'api'} ]}, 'RapidNative project');
+
+// auto-connect if a key is already stored
+if(apiKey){ $('#key').value = apiKey; connect(); }
+</script>
+</body>
+</html>

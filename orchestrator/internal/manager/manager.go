@@ -38,10 +38,29 @@ type liveInstance struct {
 
 // WorkloadSpec describes a workload to create within a project.
 type WorkloadSpec struct {
+	Preset string // optional: resolves Type/Image/Port/Name from the catalog
+	Type   runtime.WorkloadType
+	Name   string // role within the project ("" = primary, else "api"/"web"/...)
+	Image  string // optional image override
+	Port   int    // optional container port override
+}
+
+// preset is a named workload template so the API/UI can ask for "expo"/"vite"/
+// "api"/"tinbase" without spelling out image + port each time.
+type preset struct {
 	Type  runtime.WorkloadType
-	Name  string // role within the project ("" = primary, else "api"/"web"/...)
-	Image string // optional image override
-	Port  int    // optional container port override
+	Name  string
+	Image string // empty = driver default (tinbase image)
+	Port  int    // 0 = driver default (54321)
+}
+
+// Catalog is the built-in workload catalog. tinbase uses the driver default
+// image/port; the RapidNative runners are their own images listening on 8080.
+var Catalog = map[string]preset{
+	"tinbase": {Type: runtime.WorkloadTinbaseProject, Name: "", Image: "", Port: 0},
+	"expo":    {Type: runtime.WorkloadRapidNativeDev, Name: "app", Image: "rn-expo:dev", Port: 8080},
+	"vite":    {Type: runtime.WorkloadRapidNativeDev, Name: "web", Image: "rn-vite:dev", Port: 8080},
+	"api":     {Type: runtime.WorkloadRapidNativeDev, Name: "api", Image: "rn-api:dev", Port: 8080},
 }
 
 func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
@@ -88,6 +107,25 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 	if err != nil {
 		return nil, err
 	}
+	// Resolve a preset (explicit fields still win if set).
+	if ws.Preset != "" {
+		p, ok := Catalog[ws.Preset]
+		if !ok {
+			return nil, fmt.Errorf("unknown preset %q", ws.Preset)
+		}
+		if ws.Type == "" {
+			ws.Type = p.Type
+		}
+		if ws.Name == "" {
+			ws.Name = p.Name
+		}
+		if ws.Image == "" {
+			ws.Image = p.Image
+		}
+		if ws.Port == 0 {
+			ws.Port = p.Port
+		}
+	}
 	if ws.Type == "" {
 		ws.Type = runtime.WorkloadTinbaseProject
 	}
@@ -124,11 +162,12 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		return nil, err
 	}
 
-	// Assign the default route: <ref>.<base> for the primary workload,
-	// <ref>-<name>.<base> for named ones. Additional routes (custom domains) can
-	// be attached later via AddRoute.
-	host := m.hostFor(proj.ID, ws.Name)
-	if err := m.store.PutRoute(&store.Route{Host: host, WorkloadID: wid, CreatedAt: time.Now()}); err != nil {
+	// Assign the default route. Key is <ref> for the primary workload,
+	// <ref>-<name> for named ones; it drives both the subdomain (<key>.<base>)
+	// and the subroute (/w/<key>). Additional routes can be attached via AddRoute.
+	key := m.keyFor(proj.ID, ws.Name)
+	host := key + "." + m.cfg.BaseDomain
+	if err := m.store.PutRoute(&store.Route{Host: host, Key: key, WorkloadID: wid, CreatedAt: time.Now()}); err != nil {
 		return nil, err
 	}
 
@@ -148,12 +187,21 @@ func (m *Manager) AddRoute(host, workloadID string) error {
 	if _, err := m.store.GetWorkload(workloadID); err != nil {
 		return err
 	}
-	return m.store.PutRoute(&store.Route{Host: host, WorkloadID: workloadID, CreatedAt: time.Now()})
+	return m.store.PutRoute(&store.Route{Host: host, Key: host, WorkloadID: workloadID, CreatedAt: time.Now()})
 }
 
 // ResolveHost maps a request hostname to its workload via the route table.
 func (m *Manager) ResolveHost(host string) (*store.Workload, error) {
 	r, err := m.store.GetRouteByHost(host)
+	if err != nil {
+		return nil, err
+	}
+	return m.store.GetWorkload(r.WorkloadID)
+}
+
+// ResolveKey maps a subroute key to its workload via the route table.
+func (m *Manager) ResolveKey(key string) (*store.Workload, error) {
+	r, err := m.store.GetRouteByKey(key)
 	if err != nil {
 		return nil, err
 	}
@@ -253,12 +301,13 @@ func (m *Manager) RunReaper(ctx context.Context) {
 
 func (m *Manager) Store() *store.Store { return m.store }
 
-// hostFor builds the default route hostname for a workload.
-func (m *Manager) hostFor(ref, name string) string {
+// keyFor builds the route key for a workload: <ref> for the primary, else
+// <ref>-<name>. Used for both subdomain and subroute addressing.
+func (m *Manager) keyFor(ref, name string) string {
 	if name == "" {
-		return ref + "." + m.cfg.BaseDomain
+		return ref
 	}
-	return ref + "-" + name + "." + m.cfg.BaseDomain
+	return ref + "-" + name
 }
 
 func (m *Manager) specFor(w *store.Workload) runtime.Spec {

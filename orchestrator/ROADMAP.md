@@ -50,14 +50,19 @@ the same control plane / gateway / driver:
 - [x] API for workloads + routes; one project can own many isolated instances
 - [x] verified on the box: a RapidNative-shaped project (`app`/`web`/`tinbase`/`api`)
       → four subdomains, four isolated gVisor containers, delete cascades cleanly
+- [x] **subroutes** (`/w/<key>`) as the interim addressing before wildcard
+      subdomains: gateway resolves by path prefix and rewrites, Caddy proxies `/w/*`
+- [x] **heterogeneous workload images**: `rn-expo` (expo web export), `rn-vite`
+      (vite dev), `rn-api` (hono) built + wired via a preset catalog; verified a
+      four-image RapidNative project (tinbase/expo/vite/api) routing under gVisor
 - [ ] custom-domain routes + on-demand TLS (Caddy in front) for prod
-- [ ] heterogeneous workload images (web/expo runners) — Spec.Image/Port are wired;
-      needs the RapidNative runner images
+- [ ] full Metro expo dev server (heavier) as a bare-metal-tier variant
 
 ### Phase 1 — Make it real, safely
-- [ ] **API auth** — the control-plane API is unauthenticated but currently binds
-      `127.0.0.1` on the box and nothing proxies to it, so it is not internet-reachable
-      (loopback-locked). Add tokens/roles **before** binding `0.0.0.0` or routing to it
+- [x] **API auth** — bearer-token API key on the control plane (`/v1/*`), read from
+      a file on the box, never logged. `/healthz` stays open. The control API is now
+      reachable via Caddy at `/api/*` behind the key; a small **admin UI** (`/admin`)
+      drives it. Follow-ups: multiple keys / roles, rate limiting, audit log
 - [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)
 - [ ] **Backups** — scheduled `pg_dump` + WAL archiving to S3-compatible storage (R2/Backblaze); restore-on-wake
 - [ ] Per-project resource limits + fair-use quotas (free tier)

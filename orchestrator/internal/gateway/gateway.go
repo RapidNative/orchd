@@ -27,11 +27,9 @@ func New(mgr *manager.Manager) *Gateway {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	host := hostOnly(r.Host)
-
-	workload, err := g.mgr.ResolveHost(host)
+	workload, err := g.resolve(r)
 	if err != nil {
-		http.Error(w, "no route for host: "+host, http.StatusNotFound)
+		http.Error(w, "no route for request", http.StatusNotFound)
 		return
 	}
 
@@ -41,7 +39,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "workload not found", http.StatusNotFound)
 			return
 		}
-		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, host, err)
+		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, r.Host, err)
 		http.Error(w, "workload unavailable", http.StatusBadGateway)
 		return
 	}
@@ -49,10 +47,54 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	target := &url.URL{Scheme: "http", Host: addr}
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
-		log.Printf("gateway: proxy %s -> %s error: %v", host, addr, e)
+		log.Printf("gateway: proxy %s -> %s error: %v", workload.ID, addr, e)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// resolve finds the workload for a request, first by Host (subdomain routing),
+// then by a /w/<key>/... path prefix (subroute routing, the interim before
+// wildcard subdomains). Subroute matches rewrite the path to strip /w/<key> so
+// the upstream sees a normal root-relative path.
+func (g *Gateway) resolve(r *http.Request) (*store.Workload, error) {
+	if wl, err := g.mgr.ResolveHost(hostOnly(r.Host)); err == nil {
+		return wl, nil
+	}
+	if key, rest, ok := parseSubroute(r.URL.Path); ok {
+		wl, err := g.mgr.ResolveKey(key)
+		if err != nil {
+			return nil, err
+		}
+		r.URL.Path = rest
+		r.URL.RawPath = "" // let net/http re-derive from Path
+		return wl, nil
+	}
+	return nil, store.ErrNotFound
+}
+
+// parseSubroute splits "/w/<key>/rest..." into ("<key>", "/rest...", true).
+// "/w/<key>" (no trailing slash) yields ("<key>", "/", true).
+func parseSubroute(path string) (key, rest string, ok bool) {
+	const p = "/w/"
+	if !strings.HasPrefix(path, p) {
+		return "", "", false
+	}
+	tail := path[len(p):]
+	if tail == "" {
+		return "", "", false
+	}
+	if i := strings.IndexByte(tail, '/'); i >= 0 {
+		key = tail[:i]
+		rest = tail[i:]
+	} else {
+		key = tail
+		rest = "/"
+	}
+	if key == "" {
+		return "", "", false
+	}
+	return key, rest, true
 }
 
 // hostOnly strips any port from the Host header and lowercases it.

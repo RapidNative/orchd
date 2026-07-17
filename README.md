@@ -166,8 +166,36 @@ phased plan.
 ## Deployment (current)
 
 `orchd` runs as a systemd service on a Hetzner Cloud box (Ubuntu, Docker + gVisor).
-The control API listens on `127.0.0.1:8080` and the gateway on `127.0.0.1:8081`.
-A static overview page is served at `cloud.rapidnative.com` via Caddy.
+The control API and gateway both bind to loopback; **Caddy** is the front door for
+`cloud.rapidnative.com` (behind Cloudflare) and maps:
+
+| Path | Proxies to | Notes |
+| --- | --- | --- |
+| `/` | static site | project overview page |
+| `/admin` | static admin UI | provision/list/delete projects from the browser |
+| `/api/*` | control API `:8080` | prefix stripped; **requires the API key** |
+| `/w/*` | gateway `:8081` | subroute tenant routing (see below) |
+
+**API key.** Mutating control endpoints require a bearer-token key
+(`Authorization: Bearer <key>` or `X-API-Key`). The key is read from a file on the
+box (`ORCHD_API_KEY_FILE`), never logged, and never in the repo. `/healthz` stays
+open. With no key configured (local dev) the API is open.
+
+**Subroutes (interim).** Until wildcard subdomains + TLS are wired, a workload is
+reachable at `https://cloud.rapidnative.com/w/<key>` where `<key>` is `<ref>` for a
+project's primary workload and `<ref>-<name>` for the others. The gateway strips
+`/w/<key>` before proxying, so the upstream sees a normal root path. Subdomains
+(`<key>.<base>`) remain the target once DNS/TLS allow it; both share one route table.
+
+**Workload presets.** The control API and admin UI can create workloads by preset:
+`tinbase` (Supabase backend), `expo`, `vite`, `api` (RapidNative runners). Presets
+map to an image + port in the manager catalog. `POST /v1/projects` with
+`{"workloads":[{"preset":"tinbase"},{"preset":"expo"},{"preset":"vite"},{"preset":"api"}]}`
+provisions a full RapidNative-shaped project.
+
+**Runner images** live in `orchestrator/images/`: `tinbase`, `rn-expo` (expo web
+export served statically), `rn-vite` (vite dev server), `rn-api` (hono). All listen
+on `0.0.0.0` inside the container and run under gVisor.
 
 ## Quick start (local, macOS)
 

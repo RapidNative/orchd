@@ -1,0 +1,38 @@
+# Caddy front door for cloud.rapidnative.com (behind Cloudflare).
+# Serves both HTTP (:80, Cloudflare Flexible) and HTTPS (:443, self-signed via
+# tls internal, Cloudflare Full). Routes:
+#   /api/*   -> control-plane API (:8080), prefix stripped (API-key protected)
+#   /w/*     -> gateway (:8081), path kept (subroute tenant routing)
+#   /admin   -> admin UI (static)
+#   /        -> project overview page (static)
+{
+	auto_https disable_redirects
+}
+
+(site) {
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /w/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+	handle_path /admin* {
+		root * /opt/tinbase-cloud/admin
+		try_files {path} /index.html
+		file_server
+	}
+	handle {
+		root * /opt/tinbase-cloud/site
+		encode gzip
+		file_server
+	}
+}
+
+http://cloud.rapidnative.com {
+	import site
+}
+
+https://cloud.rapidnative.com {
+	tls internal
+	import site
+}

@@ -51,9 +51,12 @@ type Workload struct {
 	CreatedAt time.Time            `json:"created_at"`
 }
 
-// Route maps a hostname to a workload. Host is stored lowercased, without a port.
+// Route maps a workload to a hostname and a stable key. Host drives subdomain
+// routing (<key>.<base>); Key drives subroute routing (/w/<key>) until wildcard
+// subdomains are wired. Host is stored lowercased, without a port.
 type Route struct {
 	Host       string    `json:"host"`
+	Key        string    `json:"key"`
 	WorkloadID string    `json:"workload_id"`
 	CreatedAt  time.Time `json:"created_at"`
 }
@@ -240,6 +243,20 @@ func (s *Store) GetRouteByHost(host string) (*Route, error) {
 	}
 	cp := *r
 	return &cp, nil
+}
+
+// GetRouteByKey resolves a subroute key to its route.
+func (s *Store) GetRouteByKey(key string) (*Route, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	key = strings.ToLower(key)
+	for _, r := range s.routes {
+		if strings.ToLower(r.Key) == key {
+			cp := *r
+			return &cp, nil
+		}
+	}
+	return nil, ErrNotFound
 }
 
 func (s *Store) ListRoutesForWorkload(workloadID string) []*Route {

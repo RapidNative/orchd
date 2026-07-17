@@ -45,6 +45,14 @@ type Config struct {
 	IdleTimeout time.Duration
 	// Region is the single region this orchestrator serves for now.
 	Region string
+
+	// APIKeyFile is a path to a file holding the control-plane API key. When set
+	// and non-empty, mutating control endpoints require it. Empty = open (local
+	// dev). The key never lives in config or logs, only in this file.
+	APIKeyFile string
+	// PublicURL is the externally reachable base (e.g. https://cloud.rapidnative.com)
+	// used to build subroute endpoints (<PublicURL>/w/<key>) for display.
+	PublicURL string
 }
 
 func Load() Config {
@@ -62,6 +70,8 @@ func Load() Config {
 		DockerHost:    env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:   envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
 		Region:        env("ORCHD_REGION", "local"),
+		APIKeyFile:    env("ORCHD_API_KEY_FILE", ""),
+		PublicURL:     env("ORCHD_PUBLIC_URL", ""),
 	}
 }
 
