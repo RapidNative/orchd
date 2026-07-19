@@ -45,6 +45,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/workloads/{id}", a.deleteWorkload)
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
 	mux.HandleFunc("DELETE /v1/routes", a.removeRoute)
+	mux.HandleFunc("POST /v1/workloads/{id}/keepwarm", a.setKeepWarm)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
@@ -283,6 +284,21 @@ func (a *API) addWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, a.workloadView(wl))
+}
+
+func (a *API) setKeepWarm(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetKeepWarm(r.Context(), r.PathValue("id"), body.Enabled); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"keep_warm": body.Enabled})
 }
 
 func (a *API) workloadStats(w http.ResponseWriter, r *http.Request) {

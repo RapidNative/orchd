@@ -149,7 +149,10 @@ gVisor covers isolation until then.
       loaded back on restart. Next step to a fully relational, multi-writer store
       is more tables behind the same interface.
 - [ ] control plane becomes HA itself (multi-writer relational store + leader/replicas)
-- [ ] Warm-pool / keep-alive policy for hot projects
+- [x] **Keep-warm / always-on** — a per-workload flag (admin toggle) that exempts
+      it from scale-to-zero; enabling boots it now, and all always-on workloads are
+      woken at orchd startup. The Pro-tier compute primitive. Verified: a keep-warm
+      workload stays running past idle while a normal one suspends.
 
 ### Phase 4 — HA tier + multi-region
 - [ ] Per-project streaming replication + automatic failover (Team/Enterprise)

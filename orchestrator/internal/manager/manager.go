@@ -716,6 +716,42 @@ func (m *Manager) DeleteWorkload(ctx context.Context, workloadID string) error {
 	return nil
 }
 
+// SetKeepWarm toggles always-on for a workload. Enabling boots it now and exempts
+// it from scale-to-zero; disabling lets the reaper suspend it again when idle.
+func (m *Manager) SetKeepWarm(ctx context.Context, workloadID string, enabled bool) error {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	w.KeepWarm = enabled
+	if err := m.store.PutWorkload(w); err != nil {
+		return err
+	}
+	warm := "off"
+	if enabled {
+		warm = "on"
+	}
+	m.emit("workload.keepwarm", w.ProjectID, workloadID, warm)
+	if enabled {
+		if _, err := m.EnsureRunning(ctx, workloadID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// WakeKeepWarm boots all always-on workloads (run at startup so they are up
+// without waiting for a first request).
+func (m *Manager) WakeKeepWarm(ctx context.Context) {
+	for _, w := range m.store.ListWorkloads("") {
+		if w.KeepWarm {
+			if _, err := m.EnsureRunning(ctx, w.ID); err != nil {
+				log.Printf("keepwarm wake %s: %v", w.ID, err)
+			}
+		}
+	}
+}
+
 // ReapIdle suspends workloads idle longer than the configured timeout.
 func (m *Manager) ReapIdle(ctx context.Context) {
 	now := time.Now()
@@ -729,6 +765,9 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 	m.mu.Unlock()
 
 	for _, id := range stale {
+		if w, err := m.store.GetWorkload(id); err == nil && w.KeepWarm {
+			continue // always-on: never scale to zero
+		}
 		rl := m.refLock(id)
 		rl.Lock()
 		if err := m.rt.Suspend(ctx, id); err == nil {

@@ -7,6 +7,7 @@ export interface Workload {
   port?: number
   memory_mb?: number
   cpus?: number
+  keep_warm?: boolean
   state: 'provisioning' | 'running' | 'suspended' | 'stopped' | 'failed'
   anon_key?: string
   service_role_key?: string

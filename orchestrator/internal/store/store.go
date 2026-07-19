@@ -99,6 +99,7 @@ type Workload struct {
 	Port      int                  `json:"port,omitempty"`
 	MemoryMB  int                  `json:"memory_mb,omitempty"`
 	CPUs      float64              `json:"cpus,omitempty"`
+	KeepWarm  bool                 `json:"keep_warm,omitempty"` // always-on: exempt from scale-to-zero
 	State     runtime.State        `json:"state"`
 	DataDir   string               `json:"data_dir"`
 	JWTSecret string               `json:"jwt_secret,omitempty"`

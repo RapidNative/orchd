@@ -72,6 +72,8 @@ export const api = {
   addWorkload: (id: string, body: WorkloadSpecReq) =>
     req('/v1/projects/' + id + '/workloads', { method: 'POST', body: JSON.stringify(body) }),
   deleteWorkload: (id: string) => req<null>('/v1/workloads/' + id, { method: 'DELETE' }),
+  setKeepWarm: (id: string, enabled: boolean) =>
+    req('/v1/workloads/' + id + '/keepwarm', { method: 'POST', body: JSON.stringify({ enabled }) }),
   stats: (id: string) => req<Stats>('/v1/workloads/' + id + '/stats'),
   logs: (id: string, tail = 200) =>
     req<{ logs: string }>('/v1/workloads/' + id + '/logs?tail=' + tail),

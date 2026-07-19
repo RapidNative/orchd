@@ -172,6 +172,10 @@ export function ProjectDetail() {
       invalidate()
     },
   })
+  const keepWarm = useMutation({
+    mutationFn: (v: { wid: string; enabled: boolean }) => api.setKeepWarm(v.wid, v.enabled),
+    onSuccess: invalidate,
+  })
 
   const p = project.data
   const workloads = p?.workloads ?? []
@@ -279,6 +283,19 @@ export function ProjectDetail() {
                   </TD>
                   <TD className="text-right">
                     <div className="flex items-center justify-end gap-1.5">
+                      <Button
+                        size="sm"
+                        variant={w.keep_warm ? 'default' : 'ghost'}
+                        disabled={keepWarm.isPending}
+                        title={
+                          w.keep_warm
+                            ? 'Always-on — click to allow scale-to-zero'
+                            : 'Scales to zero when idle — click for always-on'
+                        }
+                        onClick={() => keepWarm.mutate({ wid: w.id, enabled: !w.keep_warm })}
+                      >
+                        {w.keep_warm ? 'always-on' : 'scale-to-zero'}
+                      </Button>
                       {w.type === 'tinbase-project' && (
                         <>
                           <Button
