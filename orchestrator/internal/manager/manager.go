@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -19,15 +20,21 @@ import (
 	"sync"
 	"time"
 
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
 
+// ErrBackupsDisabled is returned when a backup operation is requested but no
+// backup store is configured.
+var ErrBackupsDisabled = errors.New("backups not configured")
+
 type Manager struct {
-	cfg   config.Config
-	store *store.Store
-	rt    runtime.Runtime
+	cfg     config.Config
+	store   *store.Store
+	rt      runtime.Runtime
+	backups backup.Store // nil when backups are disabled
 
 	mu       sync.Mutex
 	live     map[string]*liveInstance // workloadID -> running instance
@@ -68,11 +75,12 @@ var Catalog = map[string]preset{
 	"api":     {Type: runtime.WorkloadRapidNativeDev, Name: "api", Image: "rn-api:dev", Port: 8080},
 }
 
-func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
+func New(cfg config.Config, st *store.Store, rt runtime.Runtime, backups backup.Store) *Manager {
 	return &Manager{
 		cfg:      cfg,
 		store:    st,
 		rt:       rt,
+		backups:  backups,
 		live:     make(map[string]*liveInstance),
 		refLocks: make(map[string]*sync.Mutex),
 	}
@@ -355,6 +363,129 @@ func (m *Manager) RunReaper(ctx context.Context) {
 }
 
 func (m *Manager) Store() *store.Store { return m.store }
+
+// ---- backups ----
+
+// BackupsEnabled reports whether a backup store is configured.
+func (m *Manager) BackupsEnabled() bool { return m.backups != nil }
+
+// BackupWorkload snapshots a workload's data volume. A running workload is
+// briefly suspended (graceful, so Postgres flushes) for a byte-consistent
+// archive, then brought back.
+func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup.Backup, error) {
+	if m.backups == nil {
+		return backup.Backup{}, ErrBackupsDisabled
+	}
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return backup.Backup{}, err
+	}
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+
+	wasRunning := false
+	if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
+		wasRunning = true
+		_ = m.rt.Suspend(ctx, workloadID)
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateSuspended)
+		m.forget(workloadID)
+	}
+
+	b, err := m.backups.Create(workloadID, w.DataDir)
+
+	if wasRunning {
+		if inst, e := m.rt.Start(ctx, m.specFor(w)); e == nil {
+			_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+			m.markLive(workloadID, inst.Addr)
+		}
+	}
+	if err != nil {
+		return backup.Backup{}, err
+	}
+	_ = m.backups.Retain(workloadID, m.cfg.BackupRetain)
+	return b, nil
+}
+
+// ListBackups lists backups for a workload ("" = every workload).
+func (m *Manager) ListBackups(workloadID string) ([]backup.Backup, error) {
+	if m.backups == nil {
+		return nil, ErrBackupsDisabled
+	}
+	return m.backups.List(workloadID)
+}
+
+// RestoreWorkload replaces a workload's data with a backup and boots it.
+func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID string) error {
+	if m.backups == nil {
+		return ErrBackupsDisabled
+	}
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+
+	_ = m.rt.Stop(ctx, workloadID) // remove container so we can replace the volume
+	m.forget(workloadID)
+
+	m.reclaimPath(w.DataDir) // wipe current data (guarded within the data root)
+	if err := os.MkdirAll(w.DataDir, 0o700); err != nil {
+		return err
+	}
+	if err := m.backups.Restore(backupID, w.DataDir); err != nil {
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+		return fmt.Errorf("restore: %w", err)
+	}
+	inst, err := m.rt.Start(ctx, m.specFor(w))
+	if err != nil {
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+		return fmt.Errorf("boot after restore: %w", err)
+	}
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+	m.markLive(workloadID, inst.Addr)
+	return nil
+}
+
+// DeleteBackup removes a single backup.
+func (m *Manager) DeleteBackup(id string) error {
+	if m.backups == nil {
+		return ErrBackupsDisabled
+	}
+	return m.backups.Delete(id)
+}
+
+// RunBackupScheduler auto-backs up tinbase workloads on the configured interval.
+func (m *Manager) RunBackupScheduler(ctx context.Context) {
+	if m.backups == nil || m.cfg.BackupInterval <= 0 {
+		return
+	}
+	t := time.NewTicker(m.cfg.BackupInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.backupAll(ctx)
+		}
+	}
+}
+
+func (m *Manager) backupAll(ctx context.Context) {
+	for _, w := range m.store.ListWorkloads("") {
+		if w.Type != runtime.WorkloadTinbaseProject {
+			continue // only tinbase workloads hold a database worth archiving
+		}
+		if b, err := m.BackupWorkload(ctx, w.ID); err != nil {
+			log.Printf("backup %s: %v", w.ID, err)
+		} else {
+			log.Printf("backup %s -> %s (%d bytes)", w.ID, b.ID, b.SizeBytes)
+		}
+	}
+}
 
 // keyFor builds the route key for a workload: <ref> for the primary, else
 // <ref>-<name>. Used for both subdomain and subroute addressing.

@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { IconExternal, IconPlus, IconTrash } from '@/components/icons'
+import { IconBackups, IconExternal, IconPlus, IconTrash } from '@/components/icons'
 import { relativeTime } from '@/lib/utils'
 
 function primaryUrl(w: Workload) {
@@ -81,6 +81,13 @@ export function ProjectDetail() {
   const delWorkload = useMutation({
     mutationFn: (wid: string) => api.deleteWorkload(wid),
     onSuccess: invalidate,
+  })
+  const backup = useMutation({
+    mutationFn: (wid: string) => api.createBackup(wid),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backups'] })
+      invalidate()
+    },
   })
 
   const p = project.data
@@ -181,6 +188,15 @@ export function ProjectDetail() {
                     <div className="flex items-center justify-end gap-1.5">
                       {w.type === 'tinbase-project' && (
                         <>
+                          <Button
+                            size="sm"
+                            variant="secondary"
+                            disabled={backup.isPending}
+                            title="Back up this workload's data now"
+                            onClick={() => backup.mutate(w.id)}
+                          >
+                            <IconBackups /> {backup.isPending ? '…' : 'Backup'}
+                          </Button>
                           <CopyButton value={w.service_role_key} label="service_role" />
                           <CopyButton value={w.anon_key} label="anon" />
                         </>

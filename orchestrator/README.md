@@ -108,6 +108,9 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_TINBASE_MEM_MB` / `ORCHD_TINBASE_CPUS` | `384` / `0.5` | default memory/CPU cap for tinbase workloads |
 | `ORCHD_DEV_MEM_MB` / `ORCHD_DEV_CPUS` | `512` / `1.0` | default memory/CPU cap for rapidnative-dev workloads |
 | `ORCHD_PIDS_LIMIT` | `512` | max processes per container (fork-bomb backstop) |
+| `ORCHD_BACKUP_DIR` | `<DataRoot>/backups` | local backup store root |
+| `ORCHD_BACKUP_INTERVAL` | `0` (off) | auto-backup interval for tinbase workloads (e.g. `24h`) |
+| `ORCHD_BACKUP_RETAIN` | `5` | backups kept per workload |
 
 ## Model: Project → Workload → Route
 

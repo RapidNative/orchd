@@ -1,5 +1,5 @@
 import { auth } from './auth'
-import type { Info, Project, Stats, WorkloadSpecReq } from './types'
+import type { Backup, Info, Project, Stats, WorkloadSpecReq } from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -47,4 +47,13 @@ export const api = {
   stats: (id: string) => req<Stats>('/v1/workloads/' + id + '/stats'),
   logs: (id: string, tail = 200) =>
     req<{ logs: string }>('/v1/workloads/' + id + '/logs?tail=' + tail),
+  backups: () => req<Backup[]>('/v1/backups'),
+  createBackup: (workloadId: string) =>
+    req<Backup>('/v1/workloads/' + workloadId + '/backups', { method: 'POST' }),
+  restore: (workloadId: string, backupId: string) =>
+    req('/v1/workloads/' + workloadId + '/restore', {
+      method: 'POST',
+      body: JSON.stringify({ backup_id: backupId }),
+    }),
+  deleteBackup: (id: string) => req<null>('/v1/backups/' + id, { method: 'DELETE' }),
 }

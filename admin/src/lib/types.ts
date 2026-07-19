@@ -31,6 +31,13 @@ export interface Stats {
   cpu_perc: string
 }
 
+export interface Backup {
+  id: string
+  workload_id: string
+  created_at: string
+  size_bytes: number
+}
+
 export interface Info {
   region: string
   driver: string
@@ -44,6 +51,11 @@ export interface Info {
     dev_mem_mb: number
     dev_cpus: number
     pids_limit: number
+  }
+  backups: {
+    enabled: boolean
+    interval: string
+    retain: number
   }
   presets: string[]
 }

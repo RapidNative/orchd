@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
@@ -45,6 +46,11 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
+	mux.HandleFunc("GET /v1/backups", a.listBackups)
+	mux.HandleFunc("GET /v1/workloads/{id}/backups", a.listWorkloadBackups)
+	mux.HandleFunc("POST /v1/workloads/{id}/backups", a.createBackup)
+	mux.HandleFunc("POST /v1/workloads/{id}/restore", a.restoreWorkload)
+	mux.HandleFunc("DELETE /v1/backups/{id}", a.deleteBackup)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
 	mux.HandleFunc("GET /v1/info", a.info)
 	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
@@ -290,8 +296,76 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 			"dev_cpus":       a.cfg.DevCPUs,
 			"pids_limit":     a.cfg.PidsLimit,
 		},
+		"backups": map[string]any{
+			"enabled":  a.mgr.BackupsEnabled(),
+			"interval": a.cfg.BackupInterval.String(),
+			"retain":   a.cfg.BackupRetain,
+		},
 		"presets": presetNames(),
 	})
+}
+
+func (a *API) listBackups(w http.ResponseWriter, r *http.Request) {
+	a.writeBackups(w, "")
+}
+
+func (a *API) listWorkloadBackups(w http.ResponseWriter, r *http.Request) {
+	a.writeBackups(w, r.PathValue("id"))
+}
+
+func (a *API) writeBackups(w http.ResponseWriter, workloadID string) {
+	bs, err := a.mgr.ListBackups(workloadID)
+	if err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	if bs == nil {
+		bs = []backup.Backup{}
+	}
+	writeJSON(w, http.StatusOK, bs)
+}
+
+func (a *API) createBackup(w http.ResponseWriter, r *http.Request) {
+	b, err := a.mgr.BackupWorkload(r.Context(), r.PathValue("id"))
+	if err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, b)
+}
+
+func (a *API) restoreWorkload(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		BackupID string `json:"backup_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.BackupID == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("backup_id required"))
+		return
+	}
+	if err := a.mgr.RestoreWorkload(r.Context(), r.PathValue("id"), body.BackupID); err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "restored"})
+}
+
+func (a *API) deleteBackup(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.DeleteBackup(r.PathValue("id")); err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) writeBackupErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, manager.ErrBackupsDisabled):
+		writeErr(w, http.StatusConflict, err)
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, err)
+	default:
+		writeErr(w, http.StatusInternalServerError, err)
+	}
 }
 
 func (a *API) getWorkload(w http.ResponseWriter, r *http.Request) {

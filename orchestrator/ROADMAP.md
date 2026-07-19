@@ -67,7 +67,12 @@ the same control plane / gateway / driver:
       reachable via Caddy at `/api/*` behind the key; a small **admin UI** (`/admin`)
       drives it. Follow-ups: multiple keys / roles, rate limiting, audit log
 - [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)
-- [ ] **Backups** — scheduled `pg_dump` + WAL archiving to S3-compatible storage (R2/Backblaze); restore-on-wake
+- [x] **Backups** — byte-exact volume snapshots (tar+gzip of the data dir, taken
+      with the instance briefly suspended so Postgres is consistent), scheduled +
+      on-demand, with retention. Restore verified end-to-end (data rolls back to the
+      exact backup point). Local store today behind a `Store` interface. Follow-ups:
+      **off-box target (S3/R2)** for box-loss durability; hot/WAL backups to remove
+      the brief suspend; backups surviving project delete for undo
 - [x] **Per-container resource limits (cgroups)** — memory / CPU / pids caps via the
       DockerDriver, defaults by workload type (tinbase 384 MB·0.5 CPU, dev 512 MB·1.0
       CPU, 512 pids), env-tunable and per-workload override-able. One tenant can no

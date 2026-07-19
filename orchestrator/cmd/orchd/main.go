@@ -19,6 +19,7 @@ import (
 	"syscall"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/gateway"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
@@ -44,12 +45,21 @@ func main() {
 	default:
 		rt = runtime.NewLocalDriver(cfg.TinbaseBin, cfg.Engine)
 	}
-	mgr := manager.New(cfg, st, rt)
+	var backups backup.Store
+	if cfg.BackupDir != "" {
+		bs, err := backup.NewLocalStore(cfg.BackupDir)
+		if err != nil {
+			log.Fatalf("open backup store: %v", err)
+		}
+		backups = bs
+	}
+	mgr := manager.New(cfg, st, rt, backups)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	go mgr.RunReaper(ctx)
+	go mgr.RunBackupScheduler(ctx)
 
 	// Load the control-plane API key (if configured). Never logged.
 	apiKey := loadAPIKey(cfg.APIKeyFile)
