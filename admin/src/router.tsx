@@ -7,6 +7,7 @@ import { Backups } from './routes/backups'
 import { Activity } from './routes/activity'
 import { System } from './routes/system'
 import { Settings } from './routes/settings'
+import { Docs } from './routes/docs'
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
@@ -18,6 +19,7 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/activity', component: Activity }),
   createRoute({ getParentRoute: () => rootRoute, path: '/system', component: System }),
   createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: Settings }),
+  createRoute({ getParentRoute: () => rootRoute, path: '/docs', component: Docs }),
 ])
 
 export const router = createRouter({ routeTree })
