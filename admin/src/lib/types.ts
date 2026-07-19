@@ -104,7 +104,17 @@ export interface Info {
     interval: string
     retain: number
   }
+  images_supported: boolean
   presets: string[]
+}
+
+export interface Image {
+  repository: string
+  tag: string
+  ref: string
+  id: string
+  size: string
+  created_at: string
 }
 
 export interface WorkloadSpecReq {

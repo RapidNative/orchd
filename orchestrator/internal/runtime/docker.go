@@ -265,6 +265,78 @@ func (d *DockerDriver) Logs(ctx context.Context, ref string, tail int) (string, 
 	return string(out), nil
 }
 
+// ---- image management (runtime.ImageManager) ----
+
+// ListImages returns the non-dangling images on the given daemon.
+func (d *DockerDriver) ListImages(ctx context.Context, host string) ([]ImageInfo, error) {
+	// Tab-separated so repositories/tags with spaces are impossible to confuse.
+	out, err := d.docker(ctx, host, "images", "--no-trunc=false", "--filter", "dangling=false",
+		"--format", "{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}").Output()
+	if err != nil {
+		return nil, dockerErr(err)
+	}
+	var imgs []ImageInfo
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		if line == "" {
+			continue
+		}
+		f := strings.Split(line, "\t")
+		if len(f) < 5 || f[0] == "<none>" {
+			continue // skip untagged/dangling
+		}
+		id := f[2]
+		if i := strings.IndexByte(id, ':'); i >= 0 && len(id) > i+13 {
+			id = id[i+1 : i+13] // sha256:<12 hex>
+		}
+		imgs = append(imgs, ImageInfo{
+			Repository: f[0], Tag: f[1], Ref: f[0] + ":" + f[1],
+			ID: id, Size: f[3], CreatedAt: f[4],
+		})
+	}
+	return imgs, nil
+}
+
+// PullImage pulls ref on the given daemon and returns the combined CLI output.
+func (d *DockerDriver) PullImage(ctx context.Context, host, ref string) (string, error) {
+	out, err := d.docker(ctx, host, "pull", ref).CombinedOutput()
+	if err != nil {
+		return string(out), fmt.Errorf("pull %s: %s", ref, firstLine(string(out)))
+	}
+	return string(out), nil
+}
+
+// RemoveImage deletes an image by ref or id on the given daemon.
+func (d *DockerDriver) RemoveImage(ctx context.Context, host, ref string, force bool) error {
+	args := []string{"rmi"}
+	if force {
+		args = append(args, "-f")
+	}
+	args = append(args, ref)
+	out, err := d.docker(ctx, host, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s", firstLine(string(out)))
+	}
+	return nil
+}
+
+func dockerErr(err error) error {
+	if ee, ok := err.(*exec.ExitError); ok {
+		return fmt.Errorf("%s", firstLine(string(ee.Stderr)))
+	}
+	return err
+}
+
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	if s == "" {
+		return "docker command failed"
+	}
+	return s
+}
+
 // docker builds a docker CLI command targeting the given daemon (host), falling
 // back to the driver default.
 func (d *DockerDriver) docker(ctx context.Context, host string, args ...string) *exec.Cmd {

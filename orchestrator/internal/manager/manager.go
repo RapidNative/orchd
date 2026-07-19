@@ -33,6 +33,7 @@ import (
 // ErrBackupsDisabled is returned when a backup operation is requested but no
 // backup store is configured.
 var ErrBackupsDisabled = errors.New("backups not configured")
+var ErrImagesUnsupported = errors.New("image management not supported by this runtime")
 
 type Manager struct {
 	cfg     config.Config
@@ -670,6 +671,80 @@ func (m *Manager) Logs(ctx context.Context, workloadID string, tail int) (string
 		return "", err
 	}
 	return m.rt.Logs(ctx, workloadID, tail)
+}
+
+// ---- image management ----
+
+// ImagesSupported reports whether the active runtime driver can manage container
+// images (DockerDriver yes, LocalDriver no).
+func (m *Manager) ImagesSupported() bool {
+	_, ok := m.rt.(runtime.ImageManager)
+	return ok
+}
+
+// dockerHostForRegion resolves a region id to its docker_host. An empty regionID
+// means the default region; empty result means the local daemon.
+func (m *Manager) dockerHostForRegion(regionID string) (string, error) {
+	if regionID == "" {
+		regionID = m.defaultRegionID()
+	}
+	if regionID == "" {
+		return "", nil // no regions configured: local daemon
+	}
+	rg, err := m.store.GetRegion(regionID)
+	if err != nil {
+		return "", err
+	}
+	return rg.DockerHost, nil
+}
+
+// ListImages lists the container images available on a region's Docker host.
+func (m *Manager) ListImages(ctx context.Context, regionID string) ([]runtime.ImageInfo, error) {
+	im, ok := m.rt.(runtime.ImageManager)
+	if !ok {
+		return nil, ErrImagesUnsupported
+	}
+	host, err := m.dockerHostForRegion(regionID)
+	if err != nil {
+		return nil, err
+	}
+	return im.ListImages(ctx, host)
+}
+
+// PullImage pulls an image ref onto a region's Docker host, emits an event, and
+// returns the CLI output.
+func (m *Manager) PullImage(ctx context.Context, regionID, ref string) (string, error) {
+	im, ok := m.rt.(runtime.ImageManager)
+	if !ok {
+		return "", ErrImagesUnsupported
+	}
+	host, err := m.dockerHostForRegion(regionID)
+	if err != nil {
+		return "", err
+	}
+	out, err := im.PullImage(ctx, host, ref)
+	if err != nil {
+		return out, err
+	}
+	m.emit("image.pulled", "", "", ref)
+	return out, nil
+}
+
+// RemoveImage deletes an image from a region's Docker host and emits an event.
+func (m *Manager) RemoveImage(ctx context.Context, regionID, ref string, force bool) error {
+	im, ok := m.rt.(runtime.ImageManager)
+	if !ok {
+		return ErrImagesUnsupported
+	}
+	host, err := m.dockerHostForRegion(regionID)
+	if err != nil {
+		return err
+	}
+	if err := im.RemoveImage(ctx, host, ref, force); err != nil {
+		return err
+	}
+	m.emit("image.removed", "", "", ref)
+	return nil
 }
 
 // LastSeen reports when a running workload last served a request ("last box hit").

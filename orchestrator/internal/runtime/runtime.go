@@ -96,6 +96,34 @@ type Stats struct {
 	CPUPerc  string `json:"cpu_perc"`  // e.g. "2.00%"
 }
 
+// ImageInfo describes one container image available on a daemon. Fields are
+// human-readable strings straight from the driver so the UI needs no unit math.
+type ImageInfo struct {
+	Repository string `json:"repository"` // e.g. "rn-vite"
+	Tag        string `json:"tag"`        // e.g. "dev"
+	Ref        string `json:"ref"`        // "repository:tag", the value used as a workload image
+	ID         string `json:"id"`         // short image id
+	Size       string `json:"size"`       // e.g. "412MB"
+	CreatedAt  string `json:"created_at"` // e.g. "2 days ago"
+}
+
+// ImageManager is an optional driver capability: manage the container images a
+// daemon can launch. Drivers that back workloads with images (DockerDriver)
+// implement it; others (LocalDriver) do not, and the control plane reports image
+// management as unsupported. host selects the daemon (a region's docker_host,
+// empty = local), mirroring Spec.DockerHost.
+type ImageManager interface {
+	// ListImages returns the images present on the daemon (excludes intermediate
+	// and dangling layers).
+	ListImages(ctx context.Context, host string) ([]ImageInfo, error)
+	// PullImage pulls ref (e.g. "ghcr.io/acme/app:1.2.0") and returns the CLI
+	// output. It blocks until the pull completes or the context is cancelled.
+	PullImage(ctx context.Context, host, ref string) (string, error)
+	// RemoveImage deletes an image by ref or id. It fails if a container still
+	// uses it unless force is set.
+	RemoveImage(ctx context.Context, host, ref string, force bool) error
+}
+
 // Runtime is the substrate driver contract. Implementations must be safe for
 // concurrent use across refs.
 type Runtime interface {

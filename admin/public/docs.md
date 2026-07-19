@@ -22,7 +22,7 @@ high-availability alternative to Supabase Cloud. The same control plane also pow
 
 **API reference**
 6. [Authentication](#authentication)
-7. [Endpoints](#endpoints) — Health · Projects · Workloads · Domains · Backups · Regions · API keys · Settings · Metrics & events · Metadata · Internal
+7. [Endpoints](#endpoints) — Health · Projects · Workloads · Domains · Images · Backups · Regions · API keys · Settings · Metrics & events · Metadata · Internal
 
 ---
 
@@ -116,19 +116,23 @@ always bypass presets and pass `image` / `port` / `memory_mb` / `cpus` explicitl
   "memory_mb": 512, "cpus": 1.0 }
 ```
 
-### How do I add a new type of image?
+### Managing images from the panel
 
-The image has to exist on the box's Docker daemon first. **There is no upload button in the panel
-yet** — you add images the standard Docker way:
+The **Images** page (and the `/v1/images` API) lists, pulls and removes images on a region's Docker
+host — no shell needed to **pull** a published tag. Pick the region, paste a ref like
+`ghcr.io/acme/app:1.2.0`, and pull; delete removes a tag (with a forced-removal fallback when a
+container still holds it). See the [Images API](#images-api).
+
+### Building a custom image
+
+Pulling is in the panel; **building** is not yet (a build needs a Docker context upload, which is on
+the roadmap). Until then, build on the box the standard way and reference it — no redeploy needed:
 
 ```bash
-# option A — pull a published image
-docker pull ghcr.io/acme/my-runtime:1.2.0
-
-# option B — build one from a Dockerfile
+# build from a Dockerfile
 docker build -t my-runtime:dev .
 
-# then reference it when creating a workload — no redeploy needed
+# then reference it when creating a workload
 curl -X POST https://api.tinbase.dev/v1/projects/<id>/workloads \
   -H "Authorization: Bearer $TINBASE_KEY" \
   -H "Content-Type: application/json" \
@@ -139,9 +143,6 @@ Requirements for a custom image: it must **listen on `0.0.0.0`** at the `port` y
 `127.0.0.1`), and start in the foreground. To make it a first-class named preset (so it shows in
 `/v1/presets` and the create dropdown), add it to the preset catalog in
 `orchestrator/internal/runtime` and redeploy.
-
-**Roadmap:** a registry/build integration + an "add image" screen in the panel, so new runtimes can
-be pushed without shell access. Until then, images are added on the host.
 
 ---
 
@@ -219,7 +220,7 @@ curl -X POST https://api.tinbase.dev/v1/projects \
 
 Errors are JSON: `{ "error": "…" }`. Status codes: `200/201` ok, `204` no content, `400` bad
 request, `401` unauthorized, `403` forbidden (role), `404` not found, `409` conflict, `429` rate
-limited.
+limited, `501` not implemented (capability off, e.g. image management on `LocalDriver`).
 
 **Role legend below:** *no auth* = open · *any key* = readonly ok · *admin key* = admin only.
 
@@ -346,6 +347,33 @@ Attach a hostname (custom domain) to a workload.
 
 #### `DELETE /v1/routes` — *admin key*
 Detach a hostname. `204`. Params: `host=<hostname>` (query, required).
+
+<a id="images-api"></a>
+### Images
+
+Manage the Docker images a region's daemon can launch as workloads. Requires the Docker driver —
+`LocalDriver` returns `501`. Select a region with the optional `region` query/body param (empty =
+default region).
+
+#### `GET /v1/images` — *any key*
+List images on a region's Docker host (excludes dangling layers). Params: `region=<id>` (optional).
+```json
+[ { "repository": "rn-vite", "tag": "dev", "ref": "rn-vite:dev",
+    "id": "a1b2c3d4e5f6", "size": "412MB", "created_at": "2 days ago" } ]
+```
+
+#### `POST /v1/images/pull` — *admin key*
+Pull an image tag onto a region's Docker host. Blocks until the pull finishes; returns CLI output.
+```jsonc
+// request
+{ "ref": "ghcr.io/acme/app:1.2.0", "region": "" }
+// response
+{ "ref": "ghcr.io/acme/app:1.2.0", "output": "…docker pull output…" }
+```
+
+#### `DELETE /v1/images` — *admin key*
+Remove an image by ref or id. Fails if a container still uses it unless `force=true`. `204`.
+Params: `ref=<ref|id>` (required) · `region=<id>` (optional) · `force=true` (optional).
 
 ### Backups
 
@@ -505,6 +533,7 @@ limit, backups/metrics status, presets.
   "idle_timeout": "2m0s", "image": "tinbase:0.10.0", "rate_limit_per_min": 600,
   "limits": { "tinbase_mem_mb": 384, "tinbase_cpus": 0.5, "dev_mem_mb": 512, "dev_cpus": 1, "pids_limit": 512 },
   "backups": { "enabled": true, "interval": "24h0m0s", "retain": 7 },
+  "images_supported": true,
   "metrics": { "type": "nop" },
   "presets": ["api","expo","tinbase","vite"]
 }

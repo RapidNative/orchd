@@ -109,6 +109,13 @@ export const IconDocs = (p: P) => (
     <path d="M9 7h7M9 11h7" />
   </S>
 )
+export const IconImage = (p: P) => (
+  <S {...p}>
+    <rect x="3" y="3" width="18" height="18" rx="2" />
+    <circle cx="9" cy="9" r="2" />
+    <path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21" />
+  </S>
+)
 export const IconLogout = (p: P) => (
   <S {...p}>
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />

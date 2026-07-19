@@ -4,6 +4,7 @@ import type {
   Backup,
   BackupTarget,
   Event,
+  Image,
   Info,
   MetricsTarget,
   Project,
@@ -99,4 +100,19 @@ export const api = {
   setMetrics: (t: MetricsTarget) =>
     req<MetricsTarget>('/v1/settings/metrics', { method: 'PUT', body: JSON.stringify(t) }),
   events: (limit = 100) => req<Event[]>('/v1/events?limit=' + limit),
+  images: (region?: string) =>
+    req<Image[]>('/v1/images' + (region ? '?region=' + encodeURIComponent(region) : '')),
+  pullImage: (ref: string, region?: string) =>
+    req<{ ref: string; output: string }>('/v1/images/pull', {
+      method: 'POST',
+      body: JSON.stringify({ ref, region: region ?? '' }),
+    }),
+  removeImage: (ref: string, region?: string, force = false) =>
+    req<null>(
+      '/v1/images?ref=' +
+        encodeURIComponent(ref) +
+        (region ? '&region=' + encodeURIComponent(region) : '') +
+        (force ? '&force=true' : ''),
+      { method: 'DELETE' },
+    ),
 }

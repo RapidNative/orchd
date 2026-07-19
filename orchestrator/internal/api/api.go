@@ -64,6 +64,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/regions", a.createRegion)
 	mux.HandleFunc("DELETE /v1/regions/{id}", a.deleteRegion)
 	mux.HandleFunc("POST /v1/regions/{id}/default", a.setDefaultRegion)
+	mux.HandleFunc("GET /v1/images", a.listImages)
+	mux.HandleFunc("POST /v1/images/pull", a.pullImage)
+	mux.HandleFunc("DELETE /v1/images", a.removeImage)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
@@ -358,7 +361,8 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 			"interval": a.cfg.BackupInterval.String(),
 			"retain":   a.cfg.BackupRetain,
 		},
-		"presets": presetNames(),
+		"images_supported": a.mgr.ImagesSupported(),
+		"presets":          presetNames(),
 	})
 }
 
@@ -495,6 +499,67 @@ func (a *API) setDefaultRegion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"default": r.PathValue("id")})
+}
+
+// ---- images ----
+
+// writeImageErr maps image-management errors to HTTP status codes.
+func (a *API) writeImageErr(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, manager.ErrImagesUnsupported):
+		writeErr(w, http.StatusNotImplemented, err)
+	case errors.Is(err, store.ErrNotFound):
+		writeErr(w, http.StatusNotFound, err)
+	default:
+		writeErr(w, http.StatusBadRequest, err)
+	}
+}
+
+func (a *API) listImages(w http.ResponseWriter, r *http.Request) {
+	imgs, err := a.mgr.ListImages(r.Context(), r.URL.Query().Get("region"))
+	if err != nil {
+		a.writeImageErr(w, err)
+		return
+	}
+	if imgs == nil {
+		imgs = []runtime.ImageInfo{}
+	}
+	writeJSON(w, http.StatusOK, imgs)
+}
+
+func (a *API) pullImage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Ref    string `json:"ref"`
+		Region string `json:"region"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(body.Ref) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("ref required"))
+		return
+	}
+	out, err := a.mgr.PullImage(r.Context(), body.Region, strings.TrimSpace(body.Ref))
+	if err != nil {
+		a.writeImageErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"ref": body.Ref, "output": out})
+}
+
+func (a *API) removeImage(w http.ResponseWriter, r *http.Request) {
+	ref := r.URL.Query().Get("ref")
+	if ref == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("ref query param required"))
+		return
+	}
+	force := r.URL.Query().Get("force") == "true"
+	if err := a.mgr.RemoveImage(r.Context(), r.URL.Query().Get("region"), ref, force); err != nil {
+		a.writeImageErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {

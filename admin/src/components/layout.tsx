@@ -7,6 +7,7 @@ import {
   IconDashboard,
   IconDatabase,
   IconDocs,
+  IconImage,
   IconLogout,
   IconProjects,
   IconSettings,
@@ -17,10 +18,11 @@ const nav = [
   { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true },
   { to: '/projects', label: 'Projects', Icon: IconProjects, exact: false },
   { to: '/backups', label: 'Backups', Icon: IconBackups, exact: false },
+  { to: '/images', label: 'Images', Icon: IconImage, exact: false },
   { to: '/activity', label: 'Activity', Icon: IconActivity, exact: false },
   { to: '/system', label: 'System', Icon: IconDatabase, exact: false },
   { to: '/settings', label: 'Settings', Icon: IconSettings, exact: false },
-  { to: '/docs', label: 'API Docs', Icon: IconDocs, exact: false },
+  { to: '/docs', label: 'Docs', Icon: IconDocs, exact: false },
 ]
 
 export function RootLayout() {
