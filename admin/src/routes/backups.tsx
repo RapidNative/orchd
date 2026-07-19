@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { Link } from '@tanstack/react-router'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { PageHeader } from '@/components/bits'
@@ -13,6 +14,7 @@ import { formatBytes, relativeTime } from '@/lib/utils'
 export function Backups() {
   const qc = useQueryClient()
   const info = useQuery({ queryKey: ['info'], queryFn: api.info })
+  const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects })
   const backups = useQuery({
     queryKey: ['backups'],
@@ -61,6 +63,9 @@ export function Backups() {
   )
 
   const enabled = info.data?.backups.enabled
+  const target = settings.data?.backup
+  const offBox = target?.type === 's3'
+  const store = offBox ? `S3/R2 (${target?.bucket || 'bucket'})` : 'local box'
 
   return (
     <div>
@@ -68,7 +73,7 @@ export function Backups() {
         title="Backups"
         subtitle={
           enabled
-            ? `local store · every ${info.data?.backups.interval} · keep ${info.data?.backups.retain}`
+            ? `${store} · every ${info.data?.backups.interval} · keep ${info.data?.backups.retain}`
             : 'durability for project data'
         }
         actions={
@@ -104,11 +109,23 @@ export function Backups() {
 
       {enabled && (
         <>
-          <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm text-muted-foreground">
-            Backups are stored <b className="text-foreground">on the box</b> — they protect against
-            accidental deletes and corruption, but not box loss. Off-box (S3/R2) is the next step.
-            Restoring replaces the workload's current data.
-          </div>
+          {offBox ? (
+            <div className="mb-4 rounded-lg border border-primary/30 bg-primary/5 px-4 py-2.5 text-sm text-muted-foreground">
+              Backups are stored <b className="text-foreground">off-box</b> in{' '}
+              <b className="text-foreground">{store}</b> — they survive box loss. Restoring replaces
+              the workload's current data.
+            </div>
+          ) : (
+            <div className="mb-4 rounded-lg border border-warning/30 bg-warning/5 px-4 py-2.5 text-sm text-muted-foreground">
+              Backups are stored <b className="text-foreground">on the box</b> — they protect against
+              accidental deletes and corruption, but <b className="text-foreground">not box loss</b>.
+              For off-box durability, point the target at S3/R2 in{' '}
+              <Link to="/settings" className="text-primary hover:underline">
+                Settings
+              </Link>
+              . Restoring replaces the workload's current data.
+            </div>
+          )}
 
           <Card>
             <Table>

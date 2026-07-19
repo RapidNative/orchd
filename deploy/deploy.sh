@@ -15,6 +15,9 @@ cd "$ROOT"
 
 say(){ printf '\n==> %s\n' "$*"; }
 
+say "preflight (go vet/test, admin typecheck/lint)"
+"$ROOT/deploy/preflight.sh"
+
 say "build orchd (linux/amd64)"
 ( cd orchestrator && GOOS=linux GOARCH=amd64 go build -o /tmp/orchd-linux ./cmd/orchd )
 
