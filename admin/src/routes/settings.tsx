@@ -120,6 +120,108 @@ function Field({ label, children, hint }: { label: string; children: ReactNode; 
   )
 }
 
+function KeysCard() {
+  const qc = useQueryClient()
+  const keys = useQuery({ queryKey: ['keys'], queryFn: API.keys })
+  const [name, setName] = useState('')
+  const [role, setRole] = useState('readonly')
+  const [freshKey, setFreshKey] = useState('')
+  const inval = () => qc.invalidateQueries({ queryKey: ['keys'] })
+  const add = useMutation({
+    mutationFn: () => API.createKey(name, role),
+    onSuccess: (r) => {
+      setFreshKey(r.key)
+      setName('')
+      inval()
+    },
+  })
+  const del = useMutation({ mutationFn: (id: string) => API.deleteKey(id), onSuccess: inval })
+
+  return (
+    <Card className="mb-6 max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">API keys</CardTitle>
+      </CardHeader>
+      <CardContent>
+        {freshKey && (
+          <div className="mb-3 rounded-md border border-primary/40 bg-primary/10 p-3">
+            <div className="text-xs text-muted-foreground">
+              Copy this key now — it is shown only once.
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <code className="flex-1 truncate font-mono text-sm text-foreground">{freshKey}</code>
+              <Button size="sm" variant="secondary" onClick={() => navigator.clipboard.writeText(freshKey)}>
+                Copy
+              </Button>
+              <Button size="sm" variant="ghost" onClick={() => setFreshKey('')}>
+                Dismiss
+              </Button>
+            </div>
+          </div>
+        )}
+        <Table>
+          <THead>
+            <TR>
+              <TH>Name</TH>
+              <TH>Role</TH>
+              <TH>Created</TH>
+              <TH></TH>
+            </TR>
+          </THead>
+          <TBody>
+            {(keys.data ?? []).map((k) => (
+              <TR key={k.id}>
+                <TD className="font-mono">{k.name}</TD>
+                <TD>
+                  <Badge variant={k.role === 'admin' ? 'running' : 'neutral'}>{k.role}</Badge>
+                </TD>
+                <TD className="text-xs text-muted-foreground">
+                  {new Date(k.created_at).toLocaleDateString()}
+                </TD>
+                <TD className="text-right">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => {
+                      if (confirm(`Revoke key "${k.name}"?`)) del.mutate(k.id)
+                    }}
+                  >
+                    <IconTrash />
+                  </Button>
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Input
+            className="max-w-48"
+            placeholder="key name (e.g. ci-bot)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <select
+            value={role}
+            onChange={(e) => setRole(e.target.value)}
+            className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+          >
+            <option value="readonly">readonly</option>
+            <option value="admin">admin</option>
+          </select>
+          <Button onClick={() => add.mutate()} disabled={add.isPending || !name.trim()}>
+            Create key
+          </Button>
+          {add.isError && <span className="text-sm text-destructive">{(add.error as Error).message}</span>}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          The bootstrap key (from the server key file) is always admin. Readonly keys can only make
+          GET requests.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 export function Settings() {
   const qc = useQueryClient()
   const settings = useQuery({ queryKey: ['settings'], queryFn: api.settings })
@@ -158,6 +260,7 @@ export function Settings() {
       <PageHeader title="Settings" subtitle="Regions, backups, notifications" />
 
       <RegionsCard />
+      <KeysCard />
 
       <Card className="max-w-2xl">
         <CardHeader className="flex-row items-center justify-between">

@@ -102,7 +102,11 @@ from the admin **Settings**. Done: backup store (local/S3), events sink (memory/
 - [ ] DNS provider adaptor (manual / Cloudflare / Vercel) for custom domains
 - [ ] Mailer adaptor surfaced per project (console / SMTP / webhook)
 - [ ] Metrics sink adaptor (none / log / statsd / prometheus)
-- [ ] Control-plane auth adaptor (single key today → multiple keys + roles)
+- [x] **Control-plane auth adaptor** — multiple named API keys with roles
+      (admin/readonly), stored hashed (sha256; plaintext shown once), managed in the
+      admin panel. The bootstrap file key stays the always-admin root; readonly keys
+      are blocked from mutating calls (403). Verified: readonly GET 200 / POST 403,
+      admin POST 201, bogus 401. Follow-ups: rate limiting, audit already via events
 
 ### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
 Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`

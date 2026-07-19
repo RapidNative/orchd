@@ -8,6 +8,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -108,6 +110,74 @@ func (m *Manager) seedRegions() {
 }
 
 func (m *Manager) ListRegions() []*store.Region { return m.store.ListRegions() }
+
+// ---- API keys (control-plane credentials with roles) ----
+
+func hashKey(k string) string {
+	s := sha256.Sum256([]byte(k))
+	return hex.EncodeToString(s[:])
+}
+
+// CreateAPIKey mints a key with a role and returns the plaintext ONCE. Only the
+// hash is persisted.
+func (m *Manager) CreateAPIKey(name, role string) (*store.APIKey, string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, "", fmt.Errorf("key name required")
+	}
+	if role != "admin" && role != "readonly" {
+		role = "readonly"
+	}
+	raw, err := newSecret()
+	if err != nil {
+		return nil, "", err
+	}
+	key := "tbk_" + raw
+	id, err := newRef()
+	if err != nil {
+		return nil, "", err
+	}
+	ak := &store.APIKey{ID: id, Name: name, Role: role, Hash: hashKey(key), CreatedAt: time.Now()}
+	if err := m.store.PutAPIKey(ak); err != nil {
+		return nil, "", err
+	}
+	m.emit("apikey.created", "", "", name+" ("+role+")")
+	out := *ak
+	out.Hash = ""
+	return &out, key, nil
+}
+
+// ListAPIKeys lists keys with hashes stripped.
+func (m *Manager) ListAPIKeys() []*store.APIKey {
+	keys := m.store.ListAPIKeys()
+	for _, k := range keys {
+		k.Hash = ""
+	}
+	return keys
+}
+
+func (m *Manager) DeleteAPIKey(id string) error {
+	if err := m.store.DeleteAPIKey(id); err != nil {
+		return err
+	}
+	m.emit("apikey.deleted", "", "", id)
+	return nil
+}
+
+// ValidateStoredKey returns the role for a presented key if it matches a stored
+// one (constant-time), else ok=false.
+func (m *Manager) ValidateStoredKey(presented string) (string, bool) {
+	if presented == "" {
+		return "", false
+	}
+	h := hashKey(presented)
+	for _, ak := range m.store.ListAPIKeys() {
+		if subtle.ConstantTimeCompare([]byte(ak.Hash), []byte(h)) == 1 {
+			return ak.Role, true
+		}
+	}
+	return "", false
+}
 
 func (m *Manager) defaultRegionID() string {
 	regions := m.store.ListRegions()

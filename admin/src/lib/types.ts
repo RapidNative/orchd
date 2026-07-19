@@ -71,6 +71,13 @@ export interface Region {
   created_at: string
 }
 
+export interface ApiKeyMeta {
+  id: string
+  name: string
+  role: 'admin' | 'readonly'
+  created_at: string
+}
+
 export interface Info {
   region: string
   driver: string

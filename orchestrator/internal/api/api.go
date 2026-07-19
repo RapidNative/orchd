@@ -54,6 +54,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/backups/{id}", a.deleteBackup)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
 	mux.HandleFunc("GET /v1/info", a.info)
+	mux.HandleFunc("GET /v1/keys", a.listKeys)
+	mux.HandleFunc("POST /v1/keys", a.createKey)
+	mux.HandleFunc("DELETE /v1/keys/{id}", a.deleteKey)
 	mux.HandleFunc("GET /v1/regions", a.listRegions)
 	mux.HandleFunc("POST /v1/regions", a.createRegion)
 	mux.HandleFunc("DELETE /v1/regions/{id}", a.deleteRegion)
@@ -100,23 +103,40 @@ func (a *API) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		if !a.validKey(r) {
+		role, ok := a.resolveKey(presentedKey(r))
+		if !ok {
 			writeErr(w, http.StatusUnauthorized, errors.New("missing or invalid API key"))
+			return
+		}
+		if role == "readonly" && !isReadMethod(r.Method) {
+			writeErr(w, http.StatusForbidden, errors.New("read-only key: this action requires an admin key"))
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func (a *API) validKey(r *http.Request) bool {
-	presented := r.Header.Get("X-API-Key")
+func presentedKey(r *http.Request) string {
 	if h := r.Header.Get("Authorization"); strings.HasPrefix(h, "Bearer ") {
-		presented = strings.TrimPrefix(h, "Bearer ")
+		return strings.TrimPrefix(h, "Bearer ")
 	}
+	return r.Header.Get("X-API-Key")
+}
+
+// resolveKey returns the role for a presented key: the bootstrap file key is
+// always admin; otherwise a stored key's role, if it matches.
+func (a *API) resolveKey(presented string) (string, bool) {
 	if presented == "" {
-		return false
+		return "", false
 	}
-	return subtle.ConstantTimeCompare([]byte(presented), []byte(a.apiKey)) == 1
+	if subtle.ConstantTimeCompare([]byte(presented), []byte(a.apiKey)) == 1 {
+		return "admin", true
+	}
+	return a.mgr.ValidateStoredKey(presented)
+}
+
+func isReadMethod(m string) bool {
+	return m == http.MethodGet || m == http.MethodHead || m == http.MethodOptions
 }
 
 func (a *API) listPresets(w http.ResponseWriter, r *http.Request) {
@@ -374,6 +394,36 @@ func (a *API) restoreWorkload(w http.ResponseWriter, r *http.Request) {
 func (a *API) deleteBackup(w http.ResponseWriter, r *http.Request) {
 	if err := a.mgr.DeleteBackup(r.PathValue("id")); err != nil {
 		a.writeBackupErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) listKeys(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.mgr.ListAPIKeys())
+}
+
+func (a *API) createKey(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	meta, key, err := a.mgr.CreateAPIKey(body.Name, body.Role)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// Plaintext key is returned exactly once.
+	writeJSON(w, http.StatusCreated, map[string]any{"key": key, "meta": meta})
+}
+
+func (a *API) deleteKey(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.DeleteAPIKey(r.PathValue("id")); err != nil {
+		a.writeLookupErr(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

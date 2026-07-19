@@ -25,6 +25,16 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// APIKey is a named control-plane credential with a role. Only the sha256 hash
+// is stored; the plaintext key is shown once at creation and never again.
+type APIKey struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Role      string    `json:"role"` // "admin" | "readonly"
+	Hash      string    `json:"hash,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 // Region is a placement target. Today all regions run on the local box; the
 // DockerHost field is the seam for pointing a region at a remote worker node
 // (the DockerDriver already accepts a remote daemon), enabling multi-node later.
@@ -106,6 +116,7 @@ type Store struct {
 	workloads map[string]*Workload
 	routes    map[string]*Route // key: lowercased host
 	regions   map[string]*Region
+	apikeys   map[string]*APIKey
 	settings  Settings
 }
 
@@ -114,6 +125,7 @@ type snapshot struct {
 	Workloads []*Workload `json:"workloads"`
 	Routes    []*Route    `json:"routes"`
 	Regions   []*Region   `json:"regions"`
+	APIKeys   []*APIKey   `json:"api_keys"`
 	Settings  Settings    `json:"settings"`
 }
 
@@ -125,6 +137,7 @@ func Open(path string) (*Store, error) {
 		workloads: make(map[string]*Workload),
 		routes:    make(map[string]*Route),
 		regions:   make(map[string]*Region),
+		apikeys:   make(map[string]*APIKey),
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -153,9 +166,44 @@ func Open(path string) (*Store, error) {
 		for _, rg := range snap.Regions {
 			s.regions[rg.ID] = rg
 		}
+		for _, ak := range snap.APIKeys {
+			s.apikeys[ak.ID] = ak
+		}
 		s.settings = snap.Settings
 	}
 	return s, nil
+}
+
+// ---- API keys ----
+
+func (s *Store) PutAPIKey(ak *APIKey) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *ak
+	s.apikeys[ak.ID] = &cp
+	return s.flushLocked()
+}
+
+func (s *Store) ListAPIKeys() []*APIKey {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*APIKey, 0, len(s.apikeys))
+	for _, ak := range s.apikeys {
+		cp := *ak
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
+func (s *Store) DeleteAPIKey(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.apikeys[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.apikeys, id)
+	return s.flushLocked()
 }
 
 // ---- Regions ----
@@ -400,6 +448,9 @@ func (s *Store) flushLocked() error {
 	}
 	for _, rg := range s.regions {
 		snap.Regions = append(snap.Regions, rg)
+	}
+	for _, ak := range s.apikeys {
+		snap.APIKeys = append(snap.APIKeys, ak)
 	}
 	snap.Settings = s.settings
 	sort.Slice(snap.Projects, func(i, j int) bool { return snap.Projects[i].CreatedAt.Before(snap.Projects[j].CreatedAt) })

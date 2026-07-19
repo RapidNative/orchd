@@ -1,5 +1,6 @@
 import { auth } from './auth'
 import type {
+  ApiKeyMeta,
   Backup,
   BackupTarget,
   Event,
@@ -55,6 +56,13 @@ export const api = {
     req<Region>('/v1/regions', { method: 'POST', body: JSON.stringify({ name, docker_host }) }),
   deleteRegion: (id: string) => req<null>('/v1/regions/' + id, { method: 'DELETE' }),
   setDefaultRegion: (id: string) => req('/v1/regions/' + id + '/default', { method: 'POST' }),
+  keys: () => req<ApiKeyMeta[]>('/v1/keys'),
+  createKey: (name: string, role: string) =>
+    req<{ key: string; meta: ApiKeyMeta }>('/v1/keys', {
+      method: 'POST',
+      body: JSON.stringify({ name, role }),
+    }),
+  deleteKey: (id: string) => req<null>('/v1/keys/' + id, { method: 'DELETE' }),
   deleteProject: (id: string) => req<null>('/v1/projects/' + id, { method: 'DELETE' }),
   addWorkload: (id: string, body: WorkloadSpecReq) =>
     req('/v1/projects/' + id + '/workloads', { method: 'POST', body: JSON.stringify(body) }),
