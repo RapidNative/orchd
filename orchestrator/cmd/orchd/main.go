@@ -48,6 +48,10 @@ func main() {
 		d := runtime.NewDockerDriver(cfg.Image, cfg.DockerRuntime)
 		d.DockerHost = cfg.DockerHost
 		rt = d
+	case "mock":
+		// In-memory driver: runs the full control plane (incl. image management)
+		// without Docker. For local dev and browser E2E.
+		rt = runtime.NewMockDriver()
 	default:
 		rt = runtime.NewLocalDriver(cfg.TinbaseBin, cfg.Engine)
 	}
