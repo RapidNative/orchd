@@ -165,7 +165,11 @@ phased plan.
 
 ## Deployment (current)
 
-`orchd` runs as a systemd service on a Hetzner Cloud box (Ubuntu, Docker + gVisor).
+Everything on the box is tracked here and reproducible from the repo, see
+[deploy/](deploy/): `bootstrap.sh` (one-time provisioning), `deploy.sh` (sync +
+reload), the Caddyfile, and the systemd units. Only the API key and per-project
+data live solely on the box. `orchd` runs as a systemd service on a Hetzner Cloud
+box (Ubuntu, Docker + gVisor).
 The control API and gateway both bind to loopback; **Caddy** is the front door for
 `cloud.rapidnative.com` (behind Cloudflare) and maps:
 
