@@ -69,10 +69,15 @@ the same control plane / gateway / driver:
 - [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)
 - [x] **Backups** — byte-exact volume snapshots (tar+gzip of the data dir, taken
       with the instance briefly suspended so Postgres is consistent), scheduled +
-      on-demand, with retention. Restore verified end-to-end (data rolls back to the
-      exact backup point). Local store today behind a `Store` interface. Follow-ups:
-      **off-box target (S3/R2)** for box-loss durability; hot/WAL backups to remove
-      the brief suspend; backups surviving project delete for undo
+      on-demand, per-workload **and per-project** (generic across workload types),
+      with retention. Restore verified end-to-end (data rolls back to the exact
+      backup point).
+- [x] **Off-box target (S3/R2)** — `Store` interface with `LocalStore` and an
+      `S3Store` (hand-rolled SigV4, zero deps; works with S3/R2/B2/MinIO). Target is
+      runtime-configurable from the admin panel (persisted in settings, secret
+      masked). Verified against MinIO on the box (the on-box S3 mock): backup upload,
+      list, and **restore all via SigV4**. Follow-ups: hot/WAL backups to remove the
+      brief suspend; backups surviving project delete for undo; per-node S3 offload
 - [x] **Per-container resource limits (cgroups)** — memory / CPU / pids caps via the
       DockerDriver, defaults by workload type (tinbase 384 MB·0.5 CPU, dev 512 MB·1.0
       CPU, 512 pids), env-tunable and per-workload override-able. One tenant can no

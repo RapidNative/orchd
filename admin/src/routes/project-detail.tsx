@@ -89,6 +89,13 @@ export function ProjectDetail() {
       invalidate()
     },
   })
+  const backupProject = useMutation({
+    mutationFn: () => api.backupProject(id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['backups'] })
+      invalidate()
+    },
+  })
 
   const p = project.data
   const workloads = p?.workloads ?? []
@@ -104,16 +111,26 @@ export function ProjectDetail() {
         title={id}
         subtitle={p ? `${p.name || 'project'} · region ${p.region} · ${relativeTime(p.created_at)}` : ''}
         actions={
-          <Button
-            variant="destructive"
-            disabled={delProject.isPending}
-            onClick={() => {
-              if (confirm(`Delete project ${id} and all its data? This cannot be undone.`))
-                delProject.mutate()
-            }}
-          >
-            <IconTrash /> Delete project
-          </Button>
+          <>
+            <Button
+              variant="secondary"
+              disabled={backupProject.isPending}
+              title="Back up every workload in this project"
+              onClick={() => backupProject.mutate()}
+            >
+              <IconBackups /> {backupProject.isPending ? 'Backing up…' : 'Backup project'}
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={delProject.isPending}
+              onClick={() => {
+                if (confirm(`Delete project ${id} and all its data? This cannot be undone.`))
+                  delProject.mutate()
+              }}
+            >
+              <IconTrash /> Delete project
+            </Button>
+          </>
         }
       />
 

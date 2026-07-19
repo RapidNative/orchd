@@ -4,6 +4,7 @@ import { KeyGate } from './key-gate'
 import {
   IconBackups,
   IconDashboard,
+  IconDatabase,
   IconLogout,
   IconProjects,
   IconSettings,
@@ -13,7 +14,8 @@ const nav = [
   { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true },
   { to: '/projects', label: 'Projects', Icon: IconProjects, exact: false },
   { to: '/backups', label: 'Backups', Icon: IconBackups, exact: false },
-  { to: '/system', label: 'System', Icon: IconSettings, exact: false },
+  { to: '/system', label: 'System', Icon: IconDatabase, exact: false },
+  { to: '/settings', label: 'Settings', Icon: IconSettings, exact: false },
 ]
 
 export function RootLayout() {

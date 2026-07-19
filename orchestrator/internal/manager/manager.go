@@ -75,15 +75,69 @@ var Catalog = map[string]preset{
 	"api":     {Type: runtime.WorkloadRapidNativeDev, Name: "api", Image: "rn-api:dev", Port: 8080},
 }
 
-func New(cfg config.Config, st *store.Store, rt runtime.Runtime, backups backup.Store) *Manager {
-	return &Manager{
+func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
+	m := &Manager{
 		cfg:      cfg,
 		store:    st,
 		rt:       rt,
-		backups:  backups,
 		live:     make(map[string]*liveInstance),
 		refLocks: make(map[string]*sync.Mutex),
 	}
+	m.applyBackupSettings() // build the backup store from persisted settings (or default)
+	return m
+}
+
+// backupStore returns the current backup store (nil = disabled), guarded so it
+// can be swapped at runtime when the target is reconfigured.
+func (m *Manager) backupStore() backup.Store {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.backups
+}
+
+func (m *Manager) buildBackupStore(t store.BackupTarget) (backup.Store, error) {
+	switch t.Type {
+	case "s3":
+		return backup.NewS3Store(t.Endpoint, t.Bucket, t.Region, t.Prefix, t.AccessKey, t.SecretKey)
+	default: // "local" or unset
+		if m.cfg.BackupDir == "" {
+			return nil, nil // backups disabled
+		}
+		return backup.NewLocalStore(m.cfg.BackupDir)
+	}
+}
+
+func (m *Manager) applyBackupSettings() {
+	t := m.store.GetSettings().Backup
+	bs, err := m.buildBackupStore(t)
+	if err != nil {
+		log.Printf("backup store (%s) invalid: %v; falling back to local", t.Type, err)
+		bs, _ = m.buildBackupStore(store.BackupTarget{Type: "local"})
+	}
+	m.mu.Lock()
+	m.backups = bs
+	m.mu.Unlock()
+}
+
+// GetBackupTarget returns the configured backup target.
+func (m *Manager) GetBackupTarget() store.BackupTarget { return m.store.GetSettings().Backup }
+
+// SetBackupTarget validates and persists a new backup target, then swaps the
+// live backup store to it.
+func (m *Manager) SetBackupTarget(t store.BackupTarget) error {
+	bs, err := m.buildBackupStore(t) // validates the config by constructing it
+	if err != nil {
+		return err
+	}
+	s := m.store.GetSettings()
+	s.Backup = t
+	if err := m.store.SetSettings(s); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	m.backups = bs
+	m.mu.Unlock()
+	return nil
 }
 
 // CreateProject creates a project grouping and provisions its workloads. With no
@@ -367,13 +421,14 @@ func (m *Manager) Store() *store.Store { return m.store }
 // ---- backups ----
 
 // BackupsEnabled reports whether a backup store is configured.
-func (m *Manager) BackupsEnabled() bool { return m.backups != nil }
+func (m *Manager) BackupsEnabled() bool { return m.backupStore() != nil }
 
 // BackupWorkload snapshots a workload's data volume. A running workload is
 // briefly suspended (graceful, so Postgres flushes) for a byte-consistent
 // archive, then brought back.
 func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup.Backup, error) {
-	if m.backups == nil {
+	bk := m.backupStore()
+	if bk == nil {
 		return backup.Backup{}, ErrBackupsDisabled
 	}
 	w, err := m.store.GetWorkload(workloadID)
@@ -392,7 +447,7 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 		m.forget(workloadID)
 	}
 
-	b, err := m.backups.Create(workloadID, w.DataDir)
+	b, err := bk.Create(workloadID, w.DataDir)
 
 	if wasRunning {
 		if inst, e := m.rt.Start(ctx, m.specFor(w)); e == nil {
@@ -403,21 +458,48 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 	if err != nil {
 		return backup.Backup{}, err
 	}
-	_ = m.backups.Retain(workloadID, m.cfg.BackupRetain)
+	_ = bk.Retain(workloadID, m.cfg.BackupRetain)
 	return b, nil
+}
+
+// BackupProject snapshots every workload in a project (generic across workload
+// types — a RapidNative project's runners and its tinbase backend alike).
+func (m *Manager) BackupProject(ctx context.Context, projectID string) ([]backup.Backup, error) {
+	if m.backupStore() == nil {
+		return nil, ErrBackupsDisabled
+	}
+	if _, err := m.store.GetProject(projectID); err != nil {
+		return nil, err
+	}
+	var out []backup.Backup
+	var firstErr error
+	for _, w := range m.store.ListWorkloads(projectID) {
+		b, err := m.BackupWorkload(ctx, w.ID)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			log.Printf("backup %s: %v", w.ID, err)
+			continue
+		}
+		out = append(out, b)
+	}
+	return out, firstErr
 }
 
 // ListBackups lists backups for a workload ("" = every workload).
 func (m *Manager) ListBackups(workloadID string) ([]backup.Backup, error) {
-	if m.backups == nil {
+	bk := m.backupStore()
+	if bk == nil {
 		return nil, ErrBackupsDisabled
 	}
-	return m.backups.List(workloadID)
+	return bk.List(workloadID)
 }
 
 // RestoreWorkload replaces a workload's data with a backup and boots it.
 func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID string) error {
-	if m.backups == nil {
+	bk := m.backupStore()
+	if bk == nil {
 		return ErrBackupsDisabled
 	}
 	w, err := m.store.GetWorkload(workloadID)
@@ -435,7 +517,7 @@ func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID stri
 	if err := os.MkdirAll(w.DataDir, 0o700); err != nil {
 		return err
 	}
-	if err := m.backups.Restore(backupID, w.DataDir); err != nil {
+	if err := bk.Restore(backupID, w.DataDir); err != nil {
 		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
 		return fmt.Errorf("restore: %w", err)
 	}
@@ -451,15 +533,16 @@ func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID stri
 
 // DeleteBackup removes a single backup.
 func (m *Manager) DeleteBackup(id string) error {
-	if m.backups == nil {
+	bk := m.backupStore()
+	if bk == nil {
 		return ErrBackupsDisabled
 	}
-	return m.backups.Delete(id)
+	return bk.Delete(id)
 }
 
 // RunBackupScheduler auto-backs up tinbase workloads on the configured interval.
 func (m *Manager) RunBackupScheduler(ctx context.Context) {
-	if m.backups == nil || m.cfg.BackupInterval <= 0 {
+	if m.backupStore() == nil || m.cfg.BackupInterval <= 0 {
 		return
 	}
 	t := time.NewTicker(m.cfg.BackupInterval)
@@ -475,10 +558,9 @@ func (m *Manager) RunBackupScheduler(ctx context.Context) {
 }
 
 func (m *Manager) backupAll(ctx context.Context) {
+	// Generic: back up every workload of every project (a project's runners and
+	// its tinbase backend alike), not just tinbase.
 	for _, w := range m.store.ListWorkloads("") {
-		if w.Type != runtime.WorkloadTinbaseProject {
-			continue // only tinbase workloads hold a database worth archiving
-		}
 		if b, err := m.BackupWorkload(ctx, w.ID); err != nil {
 			log.Printf("backup %s: %v", w.ID, err)
 		} else {

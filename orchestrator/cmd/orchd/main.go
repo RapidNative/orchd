@@ -19,7 +19,6 @@ import (
 	"syscall"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
-	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/gateway"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
@@ -45,15 +44,7 @@ func main() {
 	default:
 		rt = runtime.NewLocalDriver(cfg.TinbaseBin, cfg.Engine)
 	}
-	var backups backup.Store
-	if cfg.BackupDir != "" {
-		bs, err := backup.NewLocalStore(cfg.BackupDir)
-		if err != nil {
-			log.Fatalf("open backup store: %v", err)
-		}
-		backups = bs
-	}
-	mgr := manager.New(cfg, st, rt, backups)
+	mgr := manager.New(cfg, st, rt)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

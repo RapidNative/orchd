@@ -38,6 +38,21 @@ export interface Backup {
   size_bytes: number
 }
 
+export interface BackupTarget {
+  type: 'local' | 's3'
+  endpoint?: string
+  bucket?: string
+  region?: string
+  prefix?: string
+  access_key?: string
+  secret_key?: string
+}
+
+export interface SettingsResp {
+  backup: BackupTarget
+  backup_secret_set: boolean
+}
+
 export interface Info {
   region: string
   driver: string

@@ -43,6 +43,27 @@ orchd (tenant containers keep running and re-attach), and reloads Caddy in place
 It does **not** rebuild workload images; if a Dockerfile changed, rebuild on the
 box: `ssh root@HOST 'docker build -t <tag> /opt/tinbase-cloud/images/<name>'`.
 
+## Backups (S3/R2) and the on-box S3 mock
+
+Backups go to a `Store` chosen at runtime from the admin **Settings** page (or
+`PUT /v1/settings/backup`), persisted in the orchestrator state: `local` (on the
+box) or `s3` (any S3-compatible endpoint — S3, R2, Backblaze, MinIO). The S3
+adaptor signs requests with hand-rolled SigV4 (no SDK).
+
+For testing the S3 path without external credentials, a **MinIO** container runs
+on the box as an S3-compatible mock:
+
+```bash
+docker run -d --name minio -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin123 \
+  -v /opt/tinbase-cloud/minio-data:/data minio/minio server /data --console-address ":9001"
+docker run --rm --network host --entrypoint sh minio/mc -c \
+  'mc alias set loc http://127.0.0.1:9000 minioadmin minioadmin123 && mc mb -p loc/tbc-backups'
+```
+
+Then point the backup target at `http://127.0.0.1:9000`, bucket `tbc-backups`,
+region `us-east-1`. Swap in real R2 credentials for genuine off-box durability.
+
 ## Routing (Caddyfile)
 
 - `admin.tinbase.dev` → admin UI (+ same-origin `/api` proxy to the control API)

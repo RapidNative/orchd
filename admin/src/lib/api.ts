@@ -1,5 +1,13 @@
 import { auth } from './auth'
-import type { Backup, Info, Project, Stats, WorkloadSpecReq } from './types'
+import type {
+  Backup,
+  BackupTarget,
+  Info,
+  Project,
+  SettingsResp,
+  Stats,
+  WorkloadSpecReq,
+} from './types'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -56,4 +64,12 @@ export const api = {
       body: JSON.stringify({ backup_id: backupId }),
     }),
   deleteBackup: (id: string) => req<null>('/v1/backups/' + id, { method: 'DELETE' }),
+  backupProject: (projectId: string) =>
+    req<Backup[]>('/v1/projects/' + projectId + '/backups', { method: 'POST' }),
+  settings: () => req<SettingsResp>('/v1/settings'),
+  setBackupTarget: (t: BackupTarget) =>
+    req<{ backup: BackupTarget }>('/v1/settings/backup', {
+      method: 'PUT',
+      body: JSON.stringify(t),
+    }),
 }

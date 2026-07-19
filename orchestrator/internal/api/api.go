@@ -49,10 +49,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
 	mux.HandleFunc("GET /v1/workloads/{id}/backups", a.listWorkloadBackups)
 	mux.HandleFunc("POST /v1/workloads/{id}/backups", a.createBackup)
+	mux.HandleFunc("POST /v1/projects/{id}/backups", a.backupProject)
 	mux.HandleFunc("POST /v1/workloads/{id}/restore", a.restoreWorkload)
 	mux.HandleFunc("DELETE /v1/backups/{id}", a.deleteBackup)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
 	mux.HandleFunc("GET /v1/info", a.info)
+	mux.HandleFunc("GET /v1/settings", a.getSettings)
+	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
 	mux.HandleFunc("GET /internal/tls-allow", a.tlsAllow)
 	return a.auth(mux)
@@ -334,6 +337,18 @@ func (a *API) createBackup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, b)
 }
 
+func (a *API) backupProject(w http.ResponseWriter, r *http.Request) {
+	bs, err := a.mgr.BackupProject(r.Context(), r.PathValue("id"))
+	if err != nil && len(bs) == 0 {
+		a.writeBackupErr(w, err)
+		return
+	}
+	if bs == nil {
+		bs = []backup.Backup{}
+	}
+	writeJSON(w, http.StatusCreated, bs)
+}
+
 func (a *API) restoreWorkload(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		BackupID string `json:"backup_id"`
@@ -355,6 +370,34 @@ func (a *API) deleteBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
+	t := a.mgr.GetBackupTarget()
+	secretSet := t.SecretKey != ""
+	t.SecretKey = "" // never return the secret
+	writeJSON(w, http.StatusOK, map[string]any{"backup": t, "backup_secret_set": secretSet})
+}
+
+func (a *API) setBackupTarget(w http.ResponseWriter, r *http.Request) {
+	var t store.BackupTarget
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	// If the secret is left blank on an s3 target, keep the existing one (so the
+	// admin can edit other fields without re-entering it).
+	if t.Type == "s3" && t.SecretKey == "" {
+		if cur := a.mgr.GetBackupTarget(); cur.Type == "s3" {
+			t.SecretKey = cur.SecretKey
+		}
+	}
+	if err := a.mgr.SetBackupTarget(t); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	t.SecretKey = ""
+	writeJSON(w, http.StatusOK, map[string]any{"backup": t})
 }
 
 func (a *API) writeBackupErr(w http.ResponseWriter, err error) {

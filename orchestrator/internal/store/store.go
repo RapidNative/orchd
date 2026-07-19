@@ -53,6 +53,25 @@ type Workload struct {
 	CreatedAt time.Time            `json:"created_at"`
 }
 
+// BackupTarget configures where backups are stored. Type "local" uses the
+// on-box store; "s3" uses an S3-compatible object store (S3/R2/B2/MinIO). The
+// secret is persisted like other secrets in this store (plaintext on disk) and
+// masked by the API.
+type BackupTarget struct {
+	Type      string `json:"type"` // "local" | "s3"
+	Endpoint  string `json:"endpoint,omitempty"`
+	Bucket    string `json:"bucket,omitempty"`
+	Region    string `json:"region,omitempty"`
+	Prefix    string `json:"prefix,omitempty"`
+	AccessKey string `json:"access_key,omitempty"`
+	SecretKey string `json:"secret_key,omitempty"`
+}
+
+// Settings is the mutable platform configuration set at runtime (via the admin).
+type Settings struct {
+	Backup BackupTarget `json:"backup"`
+}
+
 // Route maps a workload to a hostname and a stable key. Host drives subdomain
 // routing (<key>.<base>); Key drives subroute routing (/w/<key>) until wildcard
 // subdomains are wired. Host is stored lowercased, without a port.
@@ -69,12 +88,14 @@ type Store struct {
 	projects  map[string]*Project
 	workloads map[string]*Workload
 	routes    map[string]*Route // key: lowercased host
+	settings  Settings
 }
 
 type snapshot struct {
 	Projects  []*Project  `json:"projects"`
 	Workloads []*Workload `json:"workloads"`
 	Routes    []*Route    `json:"routes"`
+	Settings  Settings    `json:"settings"`
 }
 
 // Open loads the store from path, creating an empty one if it does not exist.
@@ -109,8 +130,24 @@ func Open(path string) (*Store, error) {
 		for _, r := range snap.Routes {
 			s.routes[strings.ToLower(r.Host)] = r
 		}
+		s.settings = snap.Settings
 	}
 	return s, nil
+}
+
+// GetSettings returns a copy of the current platform settings.
+func (s *Store) GetSettings() Settings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.settings
+}
+
+// SetSettings replaces the platform settings and flushes to disk.
+func (s *Store) SetSettings(st Settings) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.settings = st
+	return s.flushLocked()
 }
 
 // ---- Projects ----
@@ -295,6 +332,7 @@ func (s *Store) flushLocked() error {
 	for _, r := range s.routes {
 		snap.Routes = append(snap.Routes, r)
 	}
+	snap.Settings = s.settings
 	sort.Slice(snap.Projects, func(i, j int) bool { return snap.Projects[i].CreatedAt.Before(snap.Projects[j].CreatedAt) })
 	sort.Slice(snap.Workloads, func(i, j int) bool { return snap.Workloads[i].CreatedAt.Before(snap.Workloads[j].CreatedAt) })
 	sort.Slice(snap.Routes, func(i, j int) bool { return snap.Routes[i].Host < snap.Routes[j].Host })
