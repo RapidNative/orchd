@@ -74,34 +74,38 @@ type Config struct {
 	BackupInterval time.Duration
 	// BackupRetain is how many backups to keep per workload.
 	BackupRetain int
+
+	// MetricsInterval is how often the platform metrics snapshot is published.
+	MetricsInterval time.Duration
 }
 
 func Load() Config {
 	home, _ := os.UserHomeDir()
 	return Config{
-		APIAddr:        env("ORCHD_API_ADDR", "127.0.0.1:8080"),
-		GatewayAddr:    env("ORCHD_GATEWAY_ADDR", "127.0.0.1:8081"),
-		BaseDomain:     env("ORCHD_BASE_DOMAIN", "lvh.me"),
-		DataRoot:       env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
-		Driver:         env("ORCHD_DRIVER", "local"),
-		TinbaseBin:     env("ORCHD_TINBASE_BIN", "tinbase"),
-		Engine:         env("ORCHD_ENGINE", ""),
-		Image:          env("ORCHD_IMAGE", "tinbase:0.10.0"),
-		DockerRuntime:  env("ORCHD_DOCKER_RUNTIME", "runsc"),
-		DockerHost:     env("ORCHD_DOCKER_HOST", ""),
-		IdleTimeout:    envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
-		Region:         env("ORCHD_REGION", "local"),
-		APIKeyFile:     env("ORCHD_API_KEY_FILE", ""),
-		PublicURL:      env("ORCHD_PUBLIC_URL", ""),
-		PublicScheme:   env("ORCHD_PUBLIC_SCHEME", "http"),
-		TinbaseMemMB:   envInt("ORCHD_TINBASE_MEM_MB", 384),
-		TinbaseCPUs:    envFloat("ORCHD_TINBASE_CPUS", 0.5),
-		DevMemMB:       envInt("ORCHD_DEV_MEM_MB", 512),
-		DevCPUs:        envFloat("ORCHD_DEV_CPUS", 1.0),
-		PidsLimit:      envInt("ORCHD_PIDS_LIMIT", 512),
-		BackupDir:      env("ORCHD_BACKUP_DIR", filepath.Join(env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")), "backups")),
-		BackupInterval: envDuration("ORCHD_BACKUP_INTERVAL", 0),
-		BackupRetain:   envInt("ORCHD_BACKUP_RETAIN", 5),
+		APIAddr:         env("ORCHD_API_ADDR", "127.0.0.1:8080"),
+		GatewayAddr:     env("ORCHD_GATEWAY_ADDR", "127.0.0.1:8081"),
+		BaseDomain:      env("ORCHD_BASE_DOMAIN", "lvh.me"),
+		DataRoot:        env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
+		Driver:          env("ORCHD_DRIVER", "local"),
+		TinbaseBin:      env("ORCHD_TINBASE_BIN", "tinbase"),
+		Engine:          env("ORCHD_ENGINE", ""),
+		Image:           env("ORCHD_IMAGE", "tinbase:0.10.0"),
+		DockerRuntime:   env("ORCHD_DOCKER_RUNTIME", "runsc"),
+		DockerHost:      env("ORCHD_DOCKER_HOST", ""),
+		IdleTimeout:     envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
+		Region:          env("ORCHD_REGION", "local"),
+		APIKeyFile:      env("ORCHD_API_KEY_FILE", ""),
+		PublicURL:       env("ORCHD_PUBLIC_URL", ""),
+		PublicScheme:    env("ORCHD_PUBLIC_SCHEME", "http"),
+		TinbaseMemMB:    envInt("ORCHD_TINBASE_MEM_MB", 384),
+		TinbaseCPUs:     envFloat("ORCHD_TINBASE_CPUS", 0.5),
+		DevMemMB:        envInt("ORCHD_DEV_MEM_MB", 512),
+		DevCPUs:         envFloat("ORCHD_DEV_CPUS", 1.0),
+		PidsLimit:       envInt("ORCHD_PIDS_LIMIT", 512),
+		BackupDir:       env("ORCHD_BACKUP_DIR", filepath.Join(env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")), "backups")),
+		BackupInterval:  envDuration("ORCHD_BACKUP_INTERVAL", 0),
+		BackupRetain:    envInt("ORCHD_BACKUP_RETAIN", 5),
+		MetricsInterval: envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 	}
 }
 

@@ -65,6 +65,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
+	mux.HandleFunc("PUT /v1/settings/metrics", a.setMetrics)
+	mux.HandleFunc("GET /v1/metrics", a.metrics)
 	mux.HandleFunc("GET /v1/events", a.events)
 	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
 	mux.HandleFunc("GET /internal/tls-allow", a.tlsAllow)
@@ -479,7 +481,25 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 		"backup":            t,
 		"backup_secret_set": secretSet,
 		"webhook":           map[string]string{"url": a.mgr.GetWebhook()},
+		"metrics":           a.mgr.GetMetricsTarget(),
 	})
+}
+
+func (a *API) setMetrics(w http.ResponseWriter, r *http.Request) {
+	var t store.MetricsTarget
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetMetricsTarget(t); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.mgr.Snapshot())
 }
 
 func (a *API) setWebhook(w http.ResponseWriter, r *http.Request) {

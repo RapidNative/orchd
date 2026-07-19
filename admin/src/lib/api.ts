@@ -5,6 +5,7 @@ import type {
   BackupTarget,
   Event,
   Info,
+  MetricsTarget,
   Project,
   Region,
   SettingsResp,
@@ -93,5 +94,7 @@ export const api = {
     }),
   setWebhook: (url: string) =>
     req<{ url: string }>('/v1/settings/webhook', { method: 'PUT', body: JSON.stringify({ url }) }),
+  setMetrics: (t: MetricsTarget) =>
+    req<MetricsTarget>('/v1/settings/metrics', { method: 'PUT', body: JSON.stringify(t) }),
   events: (limit = 100) => req<Event[]>('/v1/events?limit=' + limit),
 }

@@ -93,10 +93,17 @@ type Webhook struct {
 	URL string `json:"url,omitempty"`
 }
 
+// MetricsTarget selects where the platform metrics snapshot is published.
+type MetricsTarget struct {
+	Type string `json:"type"` // "nop" | "log" | "http"
+	URL  string `json:"url,omitempty"`
+}
+
 // Settings is the mutable platform configuration set at runtime (via the admin).
 type Settings struct {
-	Backup  BackupTarget `json:"backup"`
-	Webhook Webhook      `json:"webhook"`
+	Backup  BackupTarget  `json:"backup"`
+	Webhook Webhook       `json:"webhook"`
+	Metrics MetricsTarget `json:"metrics"`
 }
 
 // Route maps a workload to a hostname and a stable key. Host drives subdomain

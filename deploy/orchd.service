@@ -18,6 +18,7 @@ Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
 Environment=ORCHD_BACKUP_DIR=/opt/tinbase-cloud/backups
 Environment=ORCHD_BACKUP_INTERVAL=24h
 Environment=ORCHD_BACKUP_RETAIN=7
+Environment=ORCHD_METRICS_INTERVAL=15s
 ExecStart=/opt/tinbase-cloud/orchd
 Restart=on-failure
 

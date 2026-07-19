@@ -25,6 +25,7 @@ import (
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/events"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/metrics"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
@@ -39,8 +40,9 @@ type Manager struct {
 	rt      runtime.Runtime
 	backups backup.Store // nil when backups are disabled
 
-	mem  *events.MemorySink // activity feed (always on)
-	sink events.Sink        // fan-out sink (mem + optional webhook)
+	mem     *events.MemorySink // activity feed (always on)
+	sink    events.Sink        // fan-out sink (mem + optional webhook)
+	metrics metrics.Sink       // metrics publish target
 
 	mu       sync.Mutex
 	live     map[string]*liveInstance // workloadID -> running instance
@@ -92,8 +94,85 @@ func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
 	m.applyWebhookSettings()
+	m.applyMetricsSettings()
 	m.seedRegions()
 	return m
+}
+
+// ---- metrics ----
+
+func (m *Manager) buildMetricsSink(t store.MetricsTarget) metrics.Sink {
+	switch t.Type {
+	case "log":
+		return metrics.LogSink{}
+	case "http":
+		if t.URL != "" {
+			return metrics.NewHTTPSink(t.URL)
+		}
+	}
+	return metrics.NopSink{}
+}
+
+func (m *Manager) applyMetricsSettings() {
+	s := m.buildMetricsSink(m.store.GetSettings().Metrics)
+	m.mu.Lock()
+	m.metrics = s
+	m.mu.Unlock()
+}
+
+func (m *Manager) metricsSink() metrics.Sink {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.metrics
+}
+
+func (m *Manager) GetMetricsTarget() store.MetricsTarget { return m.store.GetSettings().Metrics }
+
+func (m *Manager) SetMetricsTarget(t store.MetricsTarget) error {
+	s := m.store.GetSettings()
+	s.Metrics = t
+	if err := m.store.SetSettings(s); err != nil {
+		return err
+	}
+	m.applyMetricsSettings()
+	return nil
+}
+
+// Snapshot computes a fleet snapshot from the store (cheap).
+func (m *Manager) Snapshot() metrics.Snapshot {
+	wls := m.store.ListWorkloads("")
+	running, suspended, mem := 0, 0, 0
+	for _, w := range wls {
+		switch w.State {
+		case runtime.StateRunning:
+			running++
+			mem += w.MemoryMB
+		case runtime.StateSuspended:
+			suspended++
+		}
+	}
+	return metrics.Snapshot{
+		Time: time.Now().UTC(), Projects: len(m.store.ListProjects()),
+		Workloads: len(wls), Running: running, Suspended: suspended, MemMBAllocated: mem,
+	}
+}
+
+// RunMetricsPublisher publishes a snapshot on the configured interval.
+func (m *Manager) RunMetricsPublisher(ctx context.Context) {
+	interval := m.cfg.MetricsInterval
+	if interval <= 0 {
+		interval = 60 * time.Second
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			m.metricsSink().Publish(m.Snapshot())
+		}
+	}
 }
 
 // ---- regions ----

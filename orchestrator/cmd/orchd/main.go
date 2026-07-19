@@ -51,6 +51,7 @@ func main() {
 
 	go mgr.RunReaper(ctx)
 	go mgr.RunBackupScheduler(ctx)
+	go mgr.RunMetricsPublisher(ctx)
 
 	// Load the control-plane API key (if configured). Never logged.
 	apiKey := loadAPIKey(cfg.APIKeyFile)

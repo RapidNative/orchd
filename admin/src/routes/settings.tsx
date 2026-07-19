@@ -229,17 +229,25 @@ export function Settings() {
   const [t, setT] = useState<BackupTarget>({ type: 'local' })
   const [secret, setSecret] = useState('')
   const [webhook, setWebhook] = useState('')
+  const [mType, setMType] = useState('nop')
+  const [mURL, setMURL] = useState('')
   const secretSet = settings.data?.backup_secret_set
 
   useEffect(() => {
     if (settings.data) {
       setT({ ...settings.data.backup, type: settings.data.backup.type || 'local' })
       setWebhook(settings.data.webhook?.url ?? '')
+      setMType(settings.data.metrics?.type || 'nop')
+      setMURL(settings.data.metrics?.url ?? '')
     }
   }, [settings.data])
 
   const saveWebhook = useMutation({
     mutationFn: () => api.setWebhook(webhook),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+  })
+  const saveMetrics = useMutation({
+    mutationFn: () => api.setMetrics({ type: mType as never, url: mURL || undefined }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
   })
 
@@ -355,6 +363,37 @@ export function Settings() {
               {saveWebhook.isPending ? 'Saving…' : 'Save'}
             </Button>
             {saveWebhook.isSuccess && <span className="text-sm text-primary">Saved.</span>}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6 max-w-2xl">
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle className="text-base">Metrics</CardTitle>
+          <Badge variant={mType === 'nop' ? 'neutral' : 'running'}>{mType}</Badge>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Field label="Sink" hint="periodic fleet snapshot (projects, running, memory)">
+            <select
+              value={mType}
+              onChange={(e) => setMType(e.target.value)}
+              className="h-9 rounded-md border border-border bg-input px-2 font-mono text-sm text-foreground"
+            >
+              <option value="nop">off</option>
+              <option value="log">log (server journal)</option>
+              <option value="http">http (POST to a collector)</option>
+            </select>
+          </Field>
+          {mType === 'http' && (
+            <Field label="Collector URL">
+              <Input value={mURL} onChange={(e) => setMURL(e.target.value)} placeholder="https://…" />
+            </Field>
+          )}
+          <div className="flex items-center gap-3">
+            <Button onClick={() => saveMetrics.mutate()} disabled={saveMetrics.isPending}>
+              {saveMetrics.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            {saveMetrics.isSuccess && <span className="text-sm text-primary">Saved.</span>}
           </div>
         </CardContent>
       </Card>

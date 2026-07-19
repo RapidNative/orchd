@@ -105,7 +105,11 @@ from the admin **Settings**. Done: backup store (local/S3), events sink (memory/
       + cross-node routing land (Phase 3)
 - [ ] DNS provider adaptor (manual / Cloudflare / Vercel) for custom domains
 - [ ] Mailer adaptor surfaced per project (console / SMTP / webhook)
-- [ ] Metrics sink adaptor (none / log / statsd / prometheus)
+- [x] **Metrics sink adaptor** — a `Sink` interface (nop / log / http) publishing a
+      periodic fleet snapshot (projects, workloads, running, suspended, allocated
+      memory) on `ORCHD_METRICS_INTERVAL`. Runtime-configurable in admin Settings;
+      `GET /v1/metrics` returns the live snapshot. Verified: http sink delivered a
+      snapshot to a collector. Follow-up: statsd/prometheus sinks
 - [x] **Control-plane auth adaptor** — multiple named API keys with roles
       (admin/readonly), stored hashed (sha256; plaintext shown once), managed in the
       admin panel. The bootstrap file key stays the always-admin root; readonly keys

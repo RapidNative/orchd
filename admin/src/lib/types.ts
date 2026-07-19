@@ -48,10 +48,16 @@ export interface BackupTarget {
   secret_key?: string
 }
 
+export interface MetricsTarget {
+  type: 'nop' | 'log' | 'http'
+  url?: string
+}
+
 export interface SettingsResp {
   backup: BackupTarget
   backup_secret_set: boolean
   webhook: { url: string }
+  metrics: MetricsTarget
 }
 
 export interface Event {
