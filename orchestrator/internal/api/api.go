@@ -9,7 +9,10 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"sort"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
@@ -40,7 +43,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/workloads/{id}", a.getWorkload)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", a.deleteWorkload)
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
+	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
+	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
+	mux.HandleFunc("GET /v1/info", a.info)
 	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
 	mux.HandleFunc("GET /internal/tls-allow", a.tlsAllow)
 	return a.auth(mux)
@@ -99,11 +105,16 @@ func (a *API) validKey(r *http.Request) bool {
 }
 
 func (a *API) listPresets(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, presetNames())
+}
+
+func presetNames() []string {
 	names := make([]string, 0, len(manager.Catalog))
 	for k := range manager.Catalog {
 		names = append(names, k)
 	}
-	writeJSON(w, http.StatusOK, names)
+	sort.Strings(names)
+	return names
 }
 
 // ---- views ----
@@ -127,9 +138,10 @@ func (r workloadSpecReq) toSpec() manager.WorkloadSpec {
 
 type workloadView struct {
 	*store.Workload
-	Routes    []string `json:"routes"`    // hostnames
-	Endpoints []string `json:"endpoints"` // subdomain endpoints (local dev)
-	Subroutes []string `json:"subroutes"` // public subroute endpoints (<PublicURL>/w/<key>)
+	Routes    []string `json:"routes"`              // hostnames
+	Endpoints []string `json:"endpoints"`           // subdomain endpoints (local dev)
+	Subroutes []string `json:"subroutes"`           // public subroute endpoints (<PublicURL>/w/<key>)
+	LastSeen  string   `json:"last_seen,omitempty"` // last request served, RFC3339
 }
 
 type projectView struct {
@@ -153,7 +165,11 @@ func (a *API) workloadView(w *store.Workload) workloadView {
 			subroutes = append(subroutes, strings.TrimRight(a.cfg.PublicURL, "/")+"/w/"+r.Key)
 		}
 	}
-	return workloadView{Workload: w, Routes: hosts, Endpoints: endpoints, Subroutes: subroutes}
+	v := workloadView{Workload: w, Routes: hosts, Endpoints: endpoints, Subroutes: subroutes}
+	if t, ok := a.mgr.LastSeen(w.ID); ok {
+		v.LastSeen = t.UTC().Format(time.RFC3339)
+	}
+	return v
 }
 
 func (a *API) projectView(p *store.Project) projectView {
@@ -228,6 +244,54 @@ func (a *API) addWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, a.workloadView(wl))
+}
+
+func (a *API) workloadStats(w http.ResponseWriter, r *http.Request) {
+	s, err := a.mgr.Stats(r.Context(), r.PathValue("id"))
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		// A stopped/suspended instance has no live stats; report empty, not error.
+		writeJSON(w, http.StatusOK, runtime.Stats{})
+		return
+	}
+	writeJSON(w, http.StatusOK, s)
+}
+
+func (a *API) workloadLogs(w http.ResponseWriter, r *http.Request) {
+	tail := 200
+	if v := r.URL.Query().Get("tail"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			tail = n
+		}
+	}
+	logs, err := a.mgr.Logs(r.Context(), r.PathValue("id"), tail)
+	if err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
+}
+
+func (a *API) info(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{
+		"region":       a.cfg.Region,
+		"driver":       a.cfg.Driver,
+		"base_domain":  a.cfg.BaseDomain,
+		"public_url":   a.cfg.PublicURL,
+		"idle_timeout": a.cfg.IdleTimeout.String(),
+		"image":        a.cfg.Image,
+		"limits": map[string]any{
+			"tinbase_mem_mb": a.cfg.TinbaseMemMB,
+			"tinbase_cpus":   a.cfg.TinbaseCPUs,
+			"dev_mem_mb":     a.cfg.DevMemMB,
+			"dev_cpus":       a.cfg.DevCPUs,
+			"pids_limit":     a.cfg.PidsLimit,
+		},
+		"presets": presetNames(),
+	})
 }
 
 func (a *API) getWorkload(w http.ResponseWriter, r *http.Request) {

@@ -81,11 +81,26 @@ type Instance struct {
 	StartedAt time.Time // zero when not currently running
 }
 
+// Stats is a point-in-time resource snapshot for a running instance. Values are
+// human-readable strings straight from the driver (e.g. docker stats) so the UI
+// can display them without unit math.
+type Stats struct {
+	MemUsage string `json:"mem_usage"` // e.g. "76.2MiB / 384MiB"
+	MemPerc  string `json:"mem_perc"`  // e.g. "19.8%"
+	CPUPerc  string `json:"cpu_perc"`  // e.g. "2.00%"
+}
+
 // Runtime is the substrate driver contract. Implementations must be safe for
 // concurrent use across refs.
 type Runtime interface {
 	// Name identifies the driver (e.g. "local", "firecracker") for logging/metrics.
 	Name() string
+
+	// Stats returns a live resource snapshot for a running instance.
+	Stats(ctx context.Context, ref string) (Stats, error)
+
+	// Logs returns the last `tail` lines of the instance's output.
+	Logs(ctx context.Context, ref string, tail int) (string, error)
 
 	// Create provisions a brand-new instance: allocate compute, first boot,
 	// initialize the data dir, apply migrations, then leave it Running.

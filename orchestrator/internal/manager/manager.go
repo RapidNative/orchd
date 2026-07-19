@@ -260,6 +260,32 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 
 func (m *Manager) Touch(workloadID string) { m.touch(workloadID) }
 
+// Stats returns a live resource snapshot for a workload's instance.
+func (m *Manager) Stats(ctx context.Context, workloadID string) (runtime.Stats, error) {
+	if _, err := m.store.GetWorkload(workloadID); err != nil {
+		return runtime.Stats{}, err
+	}
+	return m.rt.Stats(ctx, workloadID)
+}
+
+// Logs returns the last `tail` lines of a workload's output.
+func (m *Manager) Logs(ctx context.Context, workloadID string, tail int) (string, error) {
+	if _, err := m.store.GetWorkload(workloadID); err != nil {
+		return "", err
+	}
+	return m.rt.Logs(ctx, workloadID, tail)
+}
+
+// LastSeen reports when a running workload last served a request ("last box hit").
+func (m *Manager) LastSeen(workloadID string) (time.Time, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if li, ok := m.live[workloadID]; ok {
+		return li.lastSeen, true
+	}
+	return time.Time{}, false
+}
+
 // DeleteProject stops every workload in a project, removes all its records, and
 // reclaims the project's on-disk data.
 func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {

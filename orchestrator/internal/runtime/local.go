@@ -161,6 +161,16 @@ func (d *LocalDriver) kill(ref string, target State) error {
 	return nil
 }
 
+// Stats is unsupported for the process driver (dev only); returns an empty snapshot.
+func (d *LocalDriver) Stats(ctx context.Context, ref string) (Stats, error) {
+	return Stats{}, nil
+}
+
+// Logs is unsupported for the process driver (output goes to orchd's stderr).
+func (d *LocalDriver) Logs(ctx context.Context, ref string, tail int) (string, error) {
+	return "", nil
+}
+
 func (d *LocalDriver) Status(ctx context.Context, ref string) (State, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

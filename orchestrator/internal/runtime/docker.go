@@ -199,6 +199,29 @@ func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 	}
 }
 
+func (d *DockerDriver) Stats(ctx context.Context, ref string) (Stats, error) {
+	out, err := d.docker(ctx, "stats", "--no-stream", "--format",
+		"{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}", containerName(ref)).Output()
+	if err != nil {
+		return Stats{}, err
+	}
+	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 3)
+	if len(parts) != 3 {
+		return Stats{}, fmt.Errorf("unexpected stats output: %q", string(out))
+	}
+	return Stats{MemUsage: parts[0], MemPerc: parts[1], CPUPerc: parts[2]}, nil
+}
+
+func (d *DockerDriver) Logs(ctx context.Context, ref string, tail int) (string, error) {
+	if tail <= 0 {
+		tail = 200
+	}
+	// CombinedOutput merges the container's stdout+stderr, which is what a log
+	// pane wants; on a missing container docker's error text is returned too.
+	out, _ := d.docker(ctx, "logs", "--tail", strconv.Itoa(tail), containerName(ref)).CombinedOutput()
+	return string(out), nil
+}
+
 func (d *DockerDriver) docker(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = os.Environ()
