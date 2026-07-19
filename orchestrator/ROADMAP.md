@@ -68,9 +68,15 @@ the same control plane / gateway / driver:
       drives it. Follow-ups: multiple keys / roles, rate limiting, audit log
 - [ ] **Connection pooling in tinbase** — the single-writer limit is the #1 production blocker; open N connections to the embedded PG (prerequisite for the Pro tier)
 - [ ] **Backups** — scheduled `pg_dump` + WAL archiving to S3-compatible storage (R2/Backblaze); restore-on-wake
-- [ ] Per-project resource limits + fair-use quotas (free tier)
+- [x] **Per-container resource limits (cgroups)** — memory / CPU / pids caps via the
+      DockerDriver, defaults by workload type (tinbase 384 MB·0.5 CPU, dev 512 MB·1.0
+      CPU, 512 pids), env-tunable and per-workload override-able. One tenant can no
+      longer starve the box. Applied at create; existing pre-limit containers keep
+      their old config until recreated. Follow-up: recreate-on-wake so limits apply
+      fleet-wide; fair-use quota accounting
+- [x] **Data-dir reclaim on delete** — deleting a project/workload now removes its
+      on-disk volume (guarded to stay within the data root), not just the record
 - [ ] Structured per-project logs/metrics (replace shared stderr)
-- [ ] Graceful data-dir reclaim on delete (currently record-only delete)
 
 ### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
 Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -82,6 +83,17 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	}
 	if d.Runtime != "" {
 		args = append(args, "--runtime", d.Runtime)
+	}
+	// Resource caps: one tenant cannot starve the host. --memory-swap == --memory
+	// disables swap so the cap is hard; exceeding it OOM-kills the container.
+	if m := spec.Limits.MemoryMB; m > 0 {
+		args = append(args, "--memory", fmt.Sprintf("%dm", m), "--memory-swap", fmt.Sprintf("%dm", m))
+	}
+	if c := spec.Limits.CPUs; c > 0 {
+		args = append(args, "--cpus", strconv.FormatFloat(c, 'f', -1, 64))
+	}
+	if p := spec.Limits.PidsLimit; p > 0 {
+		args = append(args, "--pids-limit", strconv.Itoa(p))
 	}
 	for k, v := range spec.Env {
 		args = append(args, "-e", k+"="+v)

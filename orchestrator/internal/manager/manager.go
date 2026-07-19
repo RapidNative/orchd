@@ -10,9 +10,12 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,11 +41,13 @@ type liveInstance struct {
 
 // WorkloadSpec describes a workload to create within a project.
 type WorkloadSpec struct {
-	Preset string // optional: resolves Type/Image/Port/Name from the catalog
-	Type   runtime.WorkloadType
-	Name   string // role within the project ("" = primary, else "api"/"web"/...)
-	Image  string // optional image override
-	Port   int    // optional container port override
+	Preset   string // optional: resolves Type/Image/Port/Name from the catalog
+	Type     runtime.WorkloadType
+	Name     string  // role within the project ("" = primary, else "api"/"web"/...)
+	Image    string  // optional image override
+	Port     int     // optional container port override
+	MemoryMB int     // optional memory cap override (0 = type default)
+	CPUs     float64 // optional CPU cap override (0 = type default)
 }
 
 // preset is a named workload template so the API/UI can ask for "expo"/"vite"/
@@ -144,6 +149,18 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		anon, svc = m.mintKeys(secret) // best-effort
 	}
 
+	// Resource caps: explicit override wins, else default by workload type.
+	mem, cpus := ws.MemoryMB, ws.CPUs
+	if mem == 0 || cpus == 0 {
+		dMem, dCPUs := m.defaultLimits(ws.Type)
+		if mem == 0 {
+			mem = dMem
+		}
+		if cpus == 0 {
+			cpus = dCPUs
+		}
+	}
+
 	w := &store.Workload{
 		ID:        wid,
 		ProjectID: proj.ID,
@@ -151,6 +168,8 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		Name:      ws.Name,
 		Image:     ws.Image,
 		Port:      ws.Port,
+		MemoryMB:  mem,
+		CPUs:      cpus,
 		State:     runtime.StateProvisioning,
 		DataDir:   filepath.Join(m.cfg.DataRoot, "projects", proj.ID, wid),
 		JWTSecret: secret,
@@ -241,7 +260,8 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 
 func (m *Manager) Touch(workloadID string) { m.touch(workloadID) }
 
-// DeleteProject stops every workload in a project and removes all its records.
+// DeleteProject stops every workload in a project, removes all its records, and
+// reclaims the project's on-disk data.
 func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
 	if _, err := m.store.GetProject(projectID); err != nil {
 		return err
@@ -250,17 +270,26 @@ func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
 		_ = m.rt.Stop(ctx, w.ID)
 		m.forget(w.ID)
 	}
-	return m.store.DeleteProject(projectID)
+	if err := m.store.DeleteProject(projectID); err != nil {
+		return err
+	}
+	m.reclaimPath(filepath.Join(m.cfg.DataRoot, "projects", projectID))
+	return nil
 }
 
-// DeleteWorkload stops and removes a single workload (and its routes).
+// DeleteWorkload stops and removes a single workload (routes + on-disk data).
 func (m *Manager) DeleteWorkload(ctx context.Context, workloadID string) error {
-	if _, err := m.store.GetWorkload(workloadID); err != nil {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
 		return err
 	}
 	_ = m.rt.Stop(ctx, workloadID)
 	m.forget(workloadID)
-	return m.store.DeleteWorkload(workloadID)
+	if err := m.store.DeleteWorkload(workloadID); err != nil {
+		return err
+	}
+	m.reclaimPath(w.DataDir)
+	return nil
 }
 
 // ReapIdle suspends workloads idle longer than the configured timeout.
@@ -320,6 +349,37 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		Env: map[string]string{
 			"TINBASE_JWT_SECRET": w.JWTSecret,
 		},
+		Limits: runtime.Limits{
+			MemoryMB:  w.MemoryMB,
+			CPUs:      w.CPUs,
+			PidsLimit: m.cfg.PidsLimit,
+		},
+	}
+}
+
+// defaultLimits returns the config default memory/CPU caps for a workload type.
+func (m *Manager) defaultLimits(t runtime.WorkloadType) (memMB int, cpus float64) {
+	if t == runtime.WorkloadRapidNativeDev {
+		return m.cfg.DevMemMB, m.cfg.DevCPUs
+	}
+	return m.cfg.TinbaseMemMB, m.cfg.TinbaseCPUs
+}
+
+// reclaimPath removes an on-disk data path (a workload volume or a project dir)
+// after its containers are gone. It refuses to delete anything outside the
+// configured data root, as a guard against a bad path wiping the wrong thing.
+func (m *Manager) reclaimPath(dir string) {
+	if dir == "" {
+		return
+	}
+	root := filepath.Clean(m.cfg.DataRoot)
+	d := filepath.Clean(dir)
+	if root == "" || d == root || !strings.HasPrefix(d, root+string(os.PathSeparator)) {
+		log.Printf("reclaim: refusing to remove %q (outside data root %q)", d, root)
+		return
+	}
+	if err := os.RemoveAll(d); err != nil {
+		log.Printf("reclaim: %s: %v", d, err)
 	}
 }
 

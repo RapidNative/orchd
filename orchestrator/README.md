@@ -105,6 +105,9 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_DOCKER_HOST` | (local daemon) | point the docker CLI at a remote daemon |
 | `ORCHD_IDLE_TIMEOUT` | `5m` | idle time before an instance scales to zero |
 | `ORCHD_REGION` | `local` | single region served for now |
+| `ORCHD_TINBASE_MEM_MB` / `ORCHD_TINBASE_CPUS` | `384` / `0.5` | default memory/CPU cap for tinbase workloads |
+| `ORCHD_DEV_MEM_MB` / `ORCHD_DEV_CPUS` | `512` / `1.0` | default memory/CPU cap for rapidnative-dev workloads |
+| `ORCHD_PIDS_LIMIT` | `512` | max processes per container (fork-bomb backstop) |
 
 ## Model: Project → Workload → Route
 

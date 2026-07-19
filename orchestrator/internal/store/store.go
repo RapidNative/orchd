@@ -43,6 +43,8 @@ type Workload struct {
 	Name      string               `json:"name"` // role within the project ("", "api", "web", ...)
 	Image     string               `json:"image,omitempty"`
 	Port      int                  `json:"port,omitempty"`
+	MemoryMB  int                  `json:"memory_mb,omitempty"`
+	CPUs      float64              `json:"cpus,omitempty"`
 	State     runtime.State        `json:"state"`
 	DataDir   string               `json:"data_dir"`
 	JWTSecret string               `json:"jwt_secret,omitempty"`

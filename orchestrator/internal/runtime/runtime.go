@@ -60,6 +60,17 @@ type Spec struct {
 
 	// Env is passed to the workload process/VM (JWT secret, engine, secrets).
 	Env map[string]string
+
+	// Limits caps the workload's resource use so no single tenant can starve the
+	// host. Enforced by the DockerDriver via cgroups; ignored by LocalDriver.
+	Limits Limits
+}
+
+// Limits are per-workload resource caps.
+type Limits struct {
+	MemoryMB  int     // hard memory cap (0 = unlimited); OOM-kills the container if exceeded
+	CPUs      float64 // fractional CPU cap, e.g. 0.5 (0 = unlimited)
+	PidsLimit int     // max processes/threads (0 = unlimited); fork-bomb backstop
 }
 
 // Instance is a live (or resumable) handle to a running workload.

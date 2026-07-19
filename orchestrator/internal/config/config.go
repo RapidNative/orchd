@@ -56,6 +56,16 @@ type Config struct {
 	// PublicScheme is the scheme for subdomain endpoints ("https" in prod behind
 	// Caddy, "http" locally). When "https", displayed endpoints omit the port.
 	PublicScheme string
+
+	// Per-workload resource caps (cgroups), applied by the DockerDriver. Defaults
+	// by workload type; the API/preset can override per workload.
+	TinbaseMemMB int
+	TinbaseCPUs  float64
+	DevMemMB     int
+	DevCPUs      float64
+	// PidsLimit is a global max-processes cap (fork-bomb backstop) on every
+	// container regardless of type.
+	PidsLimit int
 }
 
 func Load() Config {
@@ -76,7 +86,30 @@ func Load() Config {
 		APIKeyFile:    env("ORCHD_API_KEY_FILE", ""),
 		PublicURL:     env("ORCHD_PUBLIC_URL", ""),
 		PublicScheme:  env("ORCHD_PUBLIC_SCHEME", "http"),
+		TinbaseMemMB:  envInt("ORCHD_TINBASE_MEM_MB", 384),
+		TinbaseCPUs:   envFloat("ORCHD_TINBASE_CPUS", 0.5),
+		DevMemMB:      envInt("ORCHD_DEV_MEM_MB", 512),
+		DevCPUs:       envFloat("ORCHD_DEV_CPUS", 1.0),
+		PidsLimit:     envInt("ORCHD_PIDS_LIMIT", 512),
 	}
+}
+
+func envInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
+}
+
+func envFloat(key string, def float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
+		}
+	}
+	return def
 }
 
 func env(key, def string) string {

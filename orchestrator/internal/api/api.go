@@ -109,15 +109,20 @@ func (a *API) listPresets(w http.ResponseWriter, r *http.Request) {
 // ---- views ----
 
 type workloadSpecReq struct {
-	Preset string               `json:"preset"`
-	Type   runtime.WorkloadType `json:"type"`
-	Name   string               `json:"name"`
-	Image  string               `json:"image"`
-	Port   int                  `json:"port"`
+	Preset   string               `json:"preset"`
+	Type     runtime.WorkloadType `json:"type"`
+	Name     string               `json:"name"`
+	Image    string               `json:"image"`
+	Port     int                  `json:"port"`
+	MemoryMB int                  `json:"memory_mb"`
+	CPUs     float64              `json:"cpus"`
 }
 
 func (r workloadSpecReq) toSpec() manager.WorkloadSpec {
-	return manager.WorkloadSpec{Preset: r.Preset, Type: r.Type, Name: r.Name, Image: r.Image, Port: r.Port}
+	return manager.WorkloadSpec{
+		Preset: r.Preset, Type: r.Type, Name: r.Name, Image: r.Image, Port: r.Port,
+		MemoryMB: r.MemoryMB, CPUs: r.CPUs,
+	}
 }
 
 type workloadView struct {
