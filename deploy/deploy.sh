@@ -18,6 +18,9 @@ say(){ printf '\n==> %s\n' "$*"; }
 say "build orchd (linux/amd64)"
 ( cd orchestrator && GOOS=linux GOARCH=amd64 go build -o /tmp/orchd-linux ./cmd/orchd )
 
+say "build admin UI (vite)"
+( cd admin && npm run build )
+
 say "ensure dirs on $HOST"
 ssh "$HOST" 'mkdir -p /opt/tinbase-cloud/admin /opt/tinbase-cloud/site \
   /opt/tinbase-cloud/images/tinbase /opt/tinbase-cloud/images/rn-api \
@@ -25,7 +28,8 @@ ssh "$HOST" 'mkdir -p /opt/tinbase-cloud/admin /opt/tinbase-cloud/site \
 
 say "sync static + image sources"
 scp -q site/index.html  "$HOST:/opt/tinbase-cloud/site/index.html"
-scp -q admin/index.html "$HOST:/opt/tinbase-cloud/admin/index.html"
+ssh "$HOST" 'rm -rf /opt/tinbase-cloud/admin/*'
+scp -qr admin/dist/. "$HOST:/opt/tinbase-cloud/admin/"
 for i in tinbase rn-api rn-vite rn-expo; do
   scp -q "orchestrator/images/$i/Dockerfile" "$HOST:/opt/tinbase-cloud/images/$i/Dockerfile"
 done

@@ -19,10 +19,9 @@
 	handle /w/* {
 		reverse_proxy 127.0.0.1:8081
 	}
-	handle_path /admin* {
-		root * /opt/tinbase-cloud/admin
-		try_files {path} /index.html
-		file_server
+	# admin UI is a SPA with absolute asset paths, so it lives at its own root.
+	handle /admin* {
+		redir https://admin.tinbase.dev 302
 	}
 	handle {
 		root * /opt/tinbase-cloud/site

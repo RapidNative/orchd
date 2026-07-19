@@ -11,7 +11,7 @@ the source of truth; nothing on the server should diverge from what is here.
 | `/etc/systemd/system/orchd.service` | `orchd.service` | orchestrator service unit |
 | `/etc/systemd/system/caddy.service` | `caddy.service` | Caddy service unit |
 | `/opt/tinbase-cloud/images/*/Dockerfile` | `../orchestrator/images/*` | workload images |
-| `/opt/tinbase-cloud/admin/index.html` | `../admin/index.html` | admin UI |
+| `/opt/tinbase-cloud/admin/` | `../admin` (Vite app; `dist/` deployed) | admin UI SPA |
 | `/opt/tinbase-cloud/site/index.html` | `../site/index.html` | overview page |
 | `/opt/tinbase-cloud/orchd` | built from `../orchestrator` | orchd binary (artifact) |
 | `/opt/tinbase-cloud/secrets/admin.key` | **never tracked** | control-plane API key |

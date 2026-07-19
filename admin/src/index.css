@@ -1,0 +1,65 @@
+@import 'tailwindcss';
+
+/* Map shadcn-style tokens onto Tailwind v4 utilities (bg-card, text-muted-foreground, ...) */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+/* Dark-only theme (this is an internal console). */
+:root {
+  --background: #0b0e14;
+  --foreground: #e6ebf5;
+  --card: #111624;
+  --card-foreground: #e6ebf5;
+  --muted: #161d2e;
+  --muted-foreground: #9aa7c0;
+  --border: #232c42;
+  --input: #1a2133;
+  --primary: #5ec8a8;
+  --primary-foreground: #06231b;
+  --accent: #7aa2ff;
+  --accent-foreground: #071022;
+  --destructive: #e06a6a;
+  --destructive-foreground: #1a0808;
+  --success: #5ec8a8;
+  --warning: #e0a44a;
+  --ring: #5ec8a8;
+  --radius: 0.6rem;
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}
