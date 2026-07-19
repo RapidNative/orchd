@@ -30,6 +30,9 @@
   button:hover{filter:brightness(1.06)}
   button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
   button.danger{background:transparent;color:var(--bad);border:1px solid rgba(224,106,106,.4);padding:5px 10px;font-size:.8rem}
+  button.copy{background:rgba(94,200,168,.12);color:var(--accent);border:1px solid rgba(94,200,168,.35);
+    padding:4px 9px;font-size:.74rem;font-family:var(--mono);margin-right:6px}
+  button.copy.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
   button:disabled{opacity:.5;cursor:not-allowed}
   .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin:12px 0}
@@ -141,6 +144,20 @@ function workloadLink(wl){
        + (isTb ? ' <span class="dim">(Studio)</span>' : '');
 }
 
+function keysCell(wl){
+  if(wl.type !== 'tinbase-project') return '<span class="dim">—</span>';
+  const s = wl.service_role_key || '', a = wl.anon_key || '';
+  if(!s && !a) return '<span class="dim">—</span>';
+  return `<button class="copy" data-copy="${esc(s)}" title="service_role key — use this to sign in to Studio">service_role</button>`
+       + `<button class="copy ghost" data-copy="${esc(a)}" title="anon key (public/client)">anon</button>`;
+}
+
+async function copyText(t){
+  if(!t){ toast('no key'); return; }
+  try{ await navigator.clipboard.writeText(t); toast('copied to clipboard'); }
+  catch{ prompt('Copy this key:', t); }
+}
+
 async function render(){
   const projects = await api('/v1/projects');
   const box = $('#projects');
@@ -152,6 +169,7 @@ async function render(){
         <td class="dim">${esc(wl.type)}</td>
         <td><span class="pill ${esc(wl.state)}">${esc(wl.state)}</span></td>
         <td>${workloadLink(wl)}</td>
+        <td>${keysCell(wl)}</td>
       </tr>`).join('');
     return `<div class="card">
       <div class="proj-head">
@@ -159,10 +177,12 @@ async function render(){
           <span class="dim">· ${(p.workloads||[]).length} workload(s)</span></div>
         <button class="danger" data-del="${esc(p.id)}">Delete</button>
       </div>
-      <table><tr><th>Name</th><th>Type</th><th>State</th><th>Route</th></tr>${rows}</table>
+      <table><tr><th>Name</th><th>Type</th><th>State</th><th>Route</th><th>Keys</th></tr>${rows}</table>
+      <p class="dim" style="margin:8px 2px 0">Open the tinbase route to reach Studio; sign in with the <b>service_role</b> key (copy it above).</p>
     </div>`;
   }).join('');
   box.querySelectorAll('[data-del]').forEach(b => b.onclick = () => del(b.getAttribute('data-del')));
+  box.querySelectorAll('[data-copy]').forEach(b => b.onclick = () => copyText(b.getAttribute('data-copy')));
 }
 
 async function del(id){
