@@ -36,7 +36,7 @@ var ErrBackupsDisabled = errors.New("backups not configured")
 
 type Manager struct {
 	cfg     config.Config
-	store   *store.Store
+	store   store.Store
 	rt      runtime.Runtime
 	backups backup.Store // nil when backups are disabled
 
@@ -83,7 +83,7 @@ var Catalog = map[string]preset{
 	"api":     {Type: runtime.WorkloadRapidNativeDev, Name: "api", Image: "rn-api:dev", Port: 8080},
 }
 
-func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
+func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 	m := &Manager{
 		cfg:      cfg,
 		store:    st,
@@ -752,7 +752,7 @@ func (m *Manager) RunReaper(ctx context.Context) {
 	}
 }
 
-func (m *Manager) Store() *store.Store { return m.store }
+func (m *Manager) Store() store.Store { return m.store }
 
 // ---- backups ----
 

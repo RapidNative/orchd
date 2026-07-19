@@ -139,7 +139,12 @@ gVisor covers isolation until then.
 
 ### Phase 3 — Multi-node, one region
 - [ ] Scheduler / placement across nodes (custom now; evaluate Nomad vs k8s+Kata later)
-- [ ] Store → managed Postgres; control plane becomes HA itself
+- [x] **Store is now an interface** (`store.Store`) — `FileStore` (JSON file, or
+      in-memory when the path is empty) is the only impl today, but the manager and
+      API depend only on the interface, so a **SQLite/Postgres adaptor drops in**
+      without touching them. This is the seam for a distributed/HA control plane.
+- [ ] Store → managed Postgres adaptor (the drop-in behind `store.Store`)
+- [ ] control plane becomes HA itself
 - [ ] Warm-pool / keep-alive policy for hot projects
 
 ### Phase 4 — HA tier + multi-region
