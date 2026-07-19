@@ -1,9 +1,10 @@
-# tinbase cloud — documentation
+# ORCHD — documentation
 
-Hosted, multi-tenant orchestration for [tinbase](https://tinbase.dev): a cheaper, faster,
-high-availability alternative to Supabase Cloud. The same control plane also powers on-demand
-**RapidNative dev environments**, so a *workload* is either a tinbase backend or a running dev app
-(Expo, Vite, an API server).
+**ORCHD** is a generic control plane for hosted, multi-tenant orchestration. A single deployment is
+named by its operator in **Settings** — this one runs as **tinbase cloud** (hosted
+[tinbase](https://tinbase.dev), a cheaper, faster, high-availability alternative to Supabase Cloud);
+another instance might be **RapidNative Cloud** for on-demand dev environments. Either way a
+*workload* is a tinbase backend or a running dev app (Expo, Vite, an API server).
 
 - **API base URL:** `https://api.tinbase.dev`
 - **Admin panel:** `https://admin.tinbase.dev`
@@ -27,10 +28,12 @@ high-availability alternative to Supabase Cloud. The same control plane also pow
 ---
 
 <a id="about"></a>
-## 1. About tinbase cloud
+## 1. About ORCHD
 
-tinbase cloud is hosted, multi-tenant orchestration for tinbase — a cheaper, faster, HA alternative
-to Supabase Cloud. The same control plane also powers RapidNative dev environments.
+ORCHD is a generic control plane for hosted, multi-tenant orchestration. A deployment is named by
+its operator in **Settings** (`PUT /v1/settings/name`) — this one runs as **tinbase cloud** (hosted
+tinbase, a cheaper/faster/HA Supabase-Cloud alternative); another instance might be **RapidNative
+Cloud** for on-demand dev environments.
 
 ### Why it is built this way
 
@@ -185,7 +188,7 @@ switch live from the Settings page; the rest are chosen at deploy via env.
 | Adaptor        | Implementations                                       | Switch via        |
 |----------------|-------------------------------------------------------|-------------------|
 | Runtime driver | Local · Docker (gVisor runsc) · Firecracker (future)  | deploy env        |
-| State store    | File (JSON) · Postgres (pgx) · Mem                     | deploy env        |
+| State store    | JSON file · SQLite (WAL) · Postgres (pgx) · Mem        | deploy env        |
 | Backup target  | Local dir · S3 / R2 (SigV4)                            | Settings          |
 | Event sink     | Memory · Webhook · Multi                               | Settings (webhook)|
 | Metrics sink   | Nop · Log · HTTP collector                             | Settings          |
@@ -193,6 +196,21 @@ switch live from the Settings page; the rest are chosen at deploy via env.
 This is what keeps the platform portable: the FileStore can become Postgres, local backups can
 become R2, and the Docker driver can become Firecracker — each without touching the API surface
 below.
+
+### Control-plane state store
+
+The project/workload index has three durable backends, selected at deploy:
+
+- **JSON file** (default) — simple, single file.
+- **SQLite (WAL)** — set `ORCHD_STATE_SQLITE=/path/orchd.db`. Recommended for a single-box control
+  plane: atomic, crash-safe, incremental writes, and a real `.db` file. Switching auto-migrates an
+  existing `projects.json` sitting next to it on first boot.
+- **Postgres** — set `ORCHD_STATE_DSN`. For a distributed/HA control plane.
+
+The index is small but high-value, so it is backed up **off-box on the backup schedule** (and via
+`POST /v1/system/backup`), stored under the reserved key `_control-plane`; for SQLite the WAL is
+checkpointed first so the snapshot is consistent. Restoring it is a manual op (fetch + extract),
+since it re-seeds the whole control plane.
 
 ---
 
@@ -417,6 +435,13 @@ Restore a workload from a backup (replaces current data, then reboots it).
 #### `DELETE /v1/backups/{id}` — *admin key*
 Delete a backup. `204`.
 
+#### `POST /v1/system/backup` — *admin key*
+Snapshot the **control-plane state** (the project/workload index) off-box, under the reserved key
+`_control-plane`. Runs automatically on the backup schedule too; SQLite WAL is checkpointed first.
+```json
+{ "id": "_control-plane__20260719T...", "workload_id": "_control-plane", "size_bytes": 8123 }
+```
+
 ### Regions
 
 A region is a placement target; `docker_host` points it at a worker node's Docker daemon (empty =
@@ -475,14 +500,24 @@ Revoke a key. `204`.
 Runtime-configurable platform settings. Secrets are stored server-side and never returned.
 
 #### `GET /v1/settings` — *any key*
-Current backup target (secret masked), event webhook, and metrics sink.
+Instance name, current backup target (secret masked), event webhook, and metrics sink.
 ```json
 {
+  "instance_name": "tinbase cloud",
   "backup": { "type": "s3", "endpoint": "...", "bucket": "...", "region": "...", "access_key": "..." },
   "backup_secret_set": true,
   "webhook": { "url": "" },
   "metrics": { "type": "nop" }
 }
+```
+
+#### `PUT /v1/settings/name` — *admin key*
+Name this deployment (shown in the sidebar). ORCHD is the generic engine; the name is per-instance.
+```jsonc
+// request
+{ "instance_name": "tinbase cloud" }
+// response
+{ "instance_name": "tinbase cloud" }
 ```
 
 #### `PUT /v1/settings/backup` — *admin key*
@@ -535,6 +570,7 @@ System configuration: driver, region, base domain, idle timeout, default resourc
 limit, backups/metrics status, presets.
 ```json
 {
+  "instance_name": "tinbase cloud",
   "driver": "docker+runsc", "region": "local", "base_domain": "tinbase.dev",
   "idle_timeout": "2m0s", "image": "tinbase:0.10.0", "rate_limit_per_min": 600,
   "limits": { "tinbase_mem_mb": 384, "tinbase_cpus": 0.5, "dev_mem_mb": 512, "dev_cpus": 1, "pids_limit": 512 },

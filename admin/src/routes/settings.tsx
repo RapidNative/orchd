@@ -111,6 +111,51 @@ function RegionsCard() {
   )
 }
 
+function InstanceCard() {
+  const qc = useQueryClient()
+  const settings = useQuery({ queryKey: ['settings'], queryFn: API.settings })
+  const [name, setName] = useState<string | null>(null)
+  const current = settings.data?.instance_name ?? ''
+  const value = name ?? current
+  const save = useMutation({
+    mutationFn: () => API.setInstanceName(value.trim()),
+    onSuccess: () => {
+      setName(null)
+      qc.invalidateQueries({ queryKey: ['settings'] })
+      qc.invalidateQueries({ queryKey: ['info'] })
+    },
+  })
+
+  return (
+    <Card className="mb-6 max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">Instance</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Field
+          label="Instance name"
+          hint='ORCHD is the generic control plane. Name this deployment — e.g. "tinbase cloud" or "RapidNative Cloud". Shown in the sidebar.'
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              className="max-w-64"
+              placeholder="tinbase cloud"
+              value={value}
+              onChange={(e) => setName(e.target.value)}
+            />
+            <Button
+              onClick={() => save.mutate()}
+              disabled={save.isPending || value.trim() === current}
+            >
+              Save
+            </Button>
+          </div>
+        </Field>
+      </CardContent>
+    </Card>
+  )
+}
+
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="grid gap-1.5">
@@ -266,8 +311,9 @@ export function Settings() {
 
   return (
     <div>
-      <PageHeader title="Settings" subtitle="Regions, backups, notifications" />
+      <PageHeader title="Settings" subtitle="Instance, regions, backups, notifications" />
 
+      <InstanceCard />
       <RegionsCard />
       <KeysCard />
 

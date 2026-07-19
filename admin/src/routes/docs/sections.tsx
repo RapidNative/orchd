@@ -14,13 +14,14 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export function About() {
   return (
-    <Section title="About tinbase cloud">
+    <Section title="About ORCHD">
       <P>
-        <B>tinbase cloud</B> is hosted, multi-tenant orchestration for{' '}
-        <A href="https://tinbase.dev">tinbase</A> — a cheaper, faster, high-availability alternative
-        to Supabase Cloud. The same control plane also powers on-demand{' '}
-        <B>RapidNative dev environments</B>, so a "workload" here is either a tinbase backend or a
-        running dev app (Expo, Vite, an API server).
+        <B>ORCHD</B> is a generic control plane for hosted, multi-tenant orchestration. A single
+        deployment is named by its operator in <A href="/settings">Settings</A> — this one runs as{' '}
+        <B>tinbase cloud</B> (hosted <A href="https://tinbase.dev">tinbase</A>, a cheaper, faster,
+        high-availability alternative to Supabase Cloud); another instance might be{' '}
+        <B>RapidNative Cloud</B> for on-demand dev environments. Either way a "workload" is a tinbase
+        backend or a running dev app (Expo, Vite, an API server).
       </P>
       <H>Why it is built this way</H>
       <UL>
@@ -220,15 +221,29 @@ export function Adaptors() {
         <B>Settings</B> are switchable live from the <A href="/settings">Settings</A> page; the rest
         are chosen at deploy via env.
       </P>
-      <Code title="Adaptor · implementations · how to switch">{`Runtime driver   Local · Docker(gVisor runsc) · Firecracker(future)   deploy env
-State store      File(JSON) · Postgres(pgx) · Mem                     deploy env
-Backup target    Local dir · S3 / R2 (SigV4)                          Settings
-Event sink       Memory · Webhook · Multi                             Settings (webhook)
-Metrics sink     Nop · Log · HTTP collector                           Settings`}</Code>
+      <Code title="Adaptor · implementations · how to switch">{`Runtime driver   Local · Docker(gVisor runsc) · Mock · Firecracker(future)   deploy env
+State store      JSON file · SQLite(WAL) · Postgres(pgx) · Mem              deploy env
+Backup target    Local dir · S3 / R2 (SigV4)                               Settings
+Event sink       Memory · Webhook · Multi                                  Settings (webhook)
+Metrics sink     Nop · Log · HTTP collector                                Settings`}</Code>
       <P>
         This is what keeps the platform portable: the FileStore can become Postgres, local backups
         can become R2, and the Docker driver can become Firecracker — each without touching the API
         surface.
+      </P>
+      <H>Control-plane state store</H>
+      <P>
+        The project/workload index has three backends, selected at deploy:{' '}
+        <M>JSON file</M> (default, simple), <M>SQLite</M> in WAL mode (
+        <M>ORCHD_STATE_SQLITE</M> — recommended for a single-box control plane: atomic,
+        crash-safe, incremental writes, and a real <M>.db</M> file), and{' '}
+        <M>Postgres</M> (<M>ORCHD_STATE_DSN</M> — for a distributed/HA control plane). Switching to
+        SQLite auto-migrates an existing <M>projects.json</M> on first boot.
+      </P>
+      <P>
+        The index is small but high-value, so it is backed up <B>off-box on the backup schedule</B>{' '}
+        (and via <M>POST /v1/system/backup</M>), stored under the reserved key <M>_control-plane</M>.
+        For SQLite the WAL is checkpointed first so the snapshot is consistent.
       </P>
     </Section>
   )

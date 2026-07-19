@@ -32,11 +32,16 @@ func main() {
 
 	var st store.Store
 	var err error
-	if cfg.StateDSN != "" {
+	switch {
+	case cfg.StateDSN != "":
 		st, err = store.OpenPostgres(cfg.StateDSN)
 		log.Printf("state store: postgres")
-	} else {
+	case cfg.StateSQLite != "":
+		st, err = store.OpenSQLite(cfg.StateSQLite)
+		log.Printf("state store: sqlite (%s)", cfg.StateSQLite)
+	default:
 		st, err = store.Open(filepath.Join(cfg.DataRoot, "state", "projects.json"))
+		log.Printf("state store: json file")
 	}
 	if err != nil {
 		log.Fatalf("open store: %v", err)

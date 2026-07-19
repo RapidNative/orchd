@@ -68,6 +68,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/images/pull", a.pullImage)
 	mux.HandleFunc("DELETE /v1/images", a.removeImage)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
+	mux.HandleFunc("PUT /v1/settings/name", a.setInstanceName)
+	mux.HandleFunc("POST /v1/system/backup", a.backupState)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
 	mux.HandleFunc("PUT /v1/settings/metrics", a.setMetrics)
@@ -342,6 +344,7 @@ func (a *API) workloadLogs(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
+		"instance_name":      a.mgr.GetInstanceName(),
 		"region":             a.cfg.Region,
 		"driver":             a.cfg.Driver,
 		"base_domain":        a.cfg.BaseDomain,
@@ -567,11 +570,36 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 	secretSet := t.SecretKey != ""
 	t.SecretKey = "" // never return the secret
 	writeJSON(w, http.StatusOK, map[string]any{
+		"instance_name":     a.mgr.GetInstanceName(),
 		"backup":            t,
 		"backup_secret_set": secretSet,
 		"webhook":           map[string]string{"url": a.mgr.GetWebhook()},
 		"metrics":           a.mgr.GetMetricsTarget(),
 	})
+}
+
+func (a *API) setInstanceName(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		InstanceName string `json:"instance_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetInstanceName(body.InstanceName); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"instance_name": a.mgr.GetInstanceName()})
+}
+
+func (a *API) backupState(w http.ResponseWriter, r *http.Request) {
+	b, err := a.mgr.BackupState(r.Context())
+	if err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
 }
 
 func (a *API) setMetrics(w http.ResponseWriter, r *http.Request) {

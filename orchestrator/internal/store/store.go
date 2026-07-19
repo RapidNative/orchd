@@ -135,9 +135,13 @@ type MetricsTarget struct {
 
 // Settings is the mutable platform configuration set at runtime (via the admin).
 type Settings struct {
-	Backup  BackupTarget  `json:"backup"`
-	Webhook Webhook       `json:"webhook"`
-	Metrics MetricsTarget `json:"metrics"`
+	// InstanceName is the human name for this deployment (e.g. "tinbase cloud",
+	// "RapidNative Cloud"). The engine itself is generic (ORCHD); this is what an
+	// operator calls their instance. Empty until set.
+	InstanceName string        `json:"instance_name,omitempty"`
+	Backup       BackupTarget  `json:"backup"`
+	Webhook      Webhook       `json:"webhook"`
+	Metrics      MetricsTarget `json:"metrics"`
 }
 
 // Route maps a workload to a hostname and a stable key. Host drives subdomain
@@ -487,6 +491,18 @@ func (s *memStore) deleteRoutesForWorkloadLocked(workloadID string) {
 			delete(s.routes, host)
 		}
 	}
+}
+
+// Checkpoint asks the underlying persister to make its on-disk file a complete,
+// consistent snapshot (flushing a SQLite WAL, for example) so the state
+// directory can be copied off-box. A no-op for persisters that don't need it.
+func (s *memStore) Checkpoint() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if cp, ok := s.persister.(interface{ Checkpoint() error }); ok {
+		return cp.Checkpoint()
+	}
+	return nil
 }
 
 // flushLocked writes the whole store atomically. Caller must hold s.mu.

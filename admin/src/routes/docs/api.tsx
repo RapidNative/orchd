@@ -231,6 +231,13 @@ const GROUPS: Group[] = [
         res: `{ "status": "restored" }`,
       },
       { method: 'DELETE', path: '/v1/backups/{id}', role: 'admin', desc: 'Delete a backup. 204.' },
+      {
+        method: 'POST',
+        path: '/v1/system/backup',
+        role: 'admin',
+        desc: 'Snapshot the control-plane state (the project/workload index) off-box, under the reserved key "_control-plane". Runs automatically on the backup schedule too; SQLite WAL is checkpointed first.',
+        res: `{ "id": "_control-plane__20260719T...", "workload_id": "_control-plane", "size_bytes": 8123 }`,
+      },
     ],
   },
   {
@@ -302,13 +309,22 @@ const GROUPS: Group[] = [
         method: 'GET',
         path: '/v1/settings',
         role: 'readonly',
-        desc: 'Current backup target (secret masked), event webhook, and metrics sink.',
+        desc: 'Instance name, current backup target (secret masked), event webhook, and metrics sink.',
         res: `{
+  "instance_name": "tinbase cloud",
   "backup": { "type": "s3", "endpoint": "...", "bucket": "...", "region": "...", "access_key": "..." },
   "backup_secret_set": true,
   "webhook": { "url": "" },
   "metrics": { "type": "nop" }
 }`,
+      },
+      {
+        method: 'PUT',
+        path: '/v1/settings/name',
+        role: 'admin',
+        desc: 'Name this deployment (shown in the sidebar). ORCHD is the generic engine; the name is per-instance.',
+        req: `{ "instance_name": "tinbase cloud" }`,
+        res: `{ "instance_name": "tinbase cloud" }`,
       },
       {
         method: 'PUT',
@@ -376,6 +392,7 @@ const GROUPS: Group[] = [
         role: 'readonly',
         desc: 'System configuration: driver, region, base domain, idle timeout, default resource limits, rate limit, backups/metrics status, image support, presets.',
         res: `{
+  "instance_name": "tinbase cloud",
   "driver": "docker+runsc", "region": "local", "base_domain": "tinbase.dev",
   "idle_timeout": "2m0s", "image": "tinbase:0.10.0", "rate_limit_per_min": 600,
   "limits": { "tinbase_mem_mb": 384, "tinbase_cpus": 0.5, "dev_mem_mb": 512, "dev_cpus": 1, "pids_limit": 512 },

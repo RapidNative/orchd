@@ -82,6 +82,11 @@ type Config struct {
 	// local JSON file (e.g. postgres://user:pass@host/db).
 	StateDSN string
 
+	// StateSQLite, when set (and StateDSN is empty), stores control-plane state
+	// in a SQLite database at this path (WAL). Recommended over the JSON file for
+	// a single-box control plane.
+	StateSQLite string
+
 	// RateLimitPerMin caps control-API requests per API key per minute (0 = off).
 	RateLimitPerMin int
 }
@@ -114,6 +119,7 @@ func Load() Config {
 		BackupRetain:    envInt("ORCHD_BACKUP_RETAIN", 5),
 		MetricsInterval: envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		StateDSN:        env("ORCHD_STATE_DSN", ""),
+		StateSQLite:     env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin: envInt("ORCHD_RATE_LIMIT", 0),
 	}
 }

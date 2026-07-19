@@ -6,7 +6,7 @@ test('key gate rejects a bad key and accepts a good one', async ({ page }) => {
   await page.goto('/')
 
   // The gate is shown, not the app.
-  await expect(page.getByText('tinbase cloud · Admin')).toBeVisible()
+  await expect(page.getByText('ORCHD · Admin')).toBeVisible()
   const input = page.getByPlaceholder('API key')
   await expect(input).toBeVisible()
 

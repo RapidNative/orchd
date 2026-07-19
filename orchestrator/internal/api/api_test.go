@@ -187,6 +187,55 @@ func TestImagesUnsupportedReturns501(t *testing.T) {
 	}
 }
 
+func TestInstanceName(t *testing.T) {
+	srv := newTestServer(t)
+
+	// Unset by default.
+	_, body := do(t, srv, "GET", "/v1/settings", bootstrapKey, nil)
+	if got := gjson(body, "instance_name"); got != "" {
+		t.Fatalf("default instance_name = %q, want empty", got)
+	}
+
+	// Set it (admin), then both settings and info reflect it.
+	if code, _ := do(t, srv, "PUT", "/v1/settings/name", bootstrapKey,
+		map[string]any{"instance_name": "tinbase cloud"}); code != http.StatusOK {
+		t.Fatalf("set name: got %d", code)
+	}
+	_, body = do(t, srv, "GET", "/v1/settings", bootstrapKey, nil)
+	if got := gjson(body, "instance_name"); got != "tinbase cloud" {
+		t.Fatalf("settings instance_name = %q", got)
+	}
+	_, body = do(t, srv, "GET", "/v1/info", bootstrapKey, nil)
+	if got := gjson(body, "instance_name"); got != "tinbase cloud" {
+		t.Fatalf("info instance_name = %q", got)
+	}
+
+	// Readonly key may not change it.
+	code, kb := do(t, srv, "POST", "/v1/keys", bootstrapKey,
+		map[string]any{"name": "ro", "role": "readonly"})
+	if code != http.StatusCreated {
+		t.Fatalf("mint key: %d", code)
+	}
+	var k struct {
+		Key string `json:"key"`
+	}
+	json.Unmarshal(kb, &k)
+	if code, _ := do(t, srv, "PUT", "/v1/settings/name", k.Key,
+		map[string]any{"instance_name": "hacked"}); code != http.StatusForbidden {
+		t.Fatalf("readonly rename: got %d, want 403", code)
+	}
+}
+
+// gjson pulls a single top-level string field out of a JSON object body.
+func gjson(body []byte, key string) string {
+	var m map[string]any
+	if err := json.Unmarshal(body, &m); err != nil {
+		return ""
+	}
+	s, _ := m[key].(string)
+	return s
+}
+
 func TestDefaultRegionSeeded(t *testing.T) {
 	srv := newTestServer(t)
 	code, body := do(t, srv, "GET", "/v1/regions", bootstrapKey, nil)

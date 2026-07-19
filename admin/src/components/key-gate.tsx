@@ -45,7 +45,7 @@ export function KeyGate() {
         <CardHeader>
           <div className="mb-1 flex items-center gap-2">
             <TinbaseLogo className="text-2xl" />
-            <CardTitle>tinbase cloud · Admin</CardTitle>
+            <CardTitle>ORCHD · Admin</CardTitle>
           </div>
           <CardDescription>
             Paste the control-plane API key. It is stored only in this browser.

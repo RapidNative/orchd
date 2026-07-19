@@ -8,6 +8,7 @@ Requires=docker.service
 WorkingDirectory=/opt/tinbase-cloud
 Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/tinbase-cloud/data
+Environment=ORCHD_STATE_SQLITE=/opt/tinbase-cloud/data/state/orchd.db
 Environment=ORCHD_IMAGE=tinbase:0.10.0
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=120s

@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { Link, Outlet } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/lib/api'
 import { auth, useApiKey } from '@/lib/auth'
 import { KeyGate } from './key-gate'
 import {
@@ -28,10 +30,15 @@ const nav = [
 ]
 
 function Brand() {
+  const info = useQuery({ queryKey: ['info'], queryFn: api.info })
+  const name = info.data?.instance_name
   return (
     <div className="flex items-center gap-2 px-2">
       <TinbaseLogo className="text-2xl" />
-      <span className="text-sm font-semibold">tinbase cloud</span>
+      <div className="min-w-0 leading-tight">
+        <div className="text-sm font-semibold">ORCHD</div>
+        <div className="truncate text-xs text-muted-foreground">{name || 'unnamed instance'}</div>
+      </div>
     </div>
   )
 }
@@ -97,7 +104,7 @@ export function RootLayout() {
             <IconMenu />
           </button>
           <TinbaseLogo className="text-xl" />
-          <span className="text-sm font-semibold">tinbase cloud</span>
+          <span className="text-sm font-semibold">ORCHD</span>
         </header>
 
         <main className="min-w-0 flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">

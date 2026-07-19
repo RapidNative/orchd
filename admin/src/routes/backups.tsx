@@ -45,8 +45,12 @@ export function Backups() {
   // project they belong to — a backup is per-workload, but you think in projects.
   const rows = useMemo(() => {
     const list = (backups.data ?? []).map((b) => {
+      // The control-plane index is backed up off-box under a reserved key.
+      if (b.workload_id === '_control-plane') {
+        return { ...b, project: 'control plane', wname: 'state snapshot', isState: true }
+      }
       const w = wmap.get(b.workload_id)
-      return { ...b, project: w?.project ?? '', wname: w?.name ?? '' }
+      return { ...b, project: w?.project ?? '', wname: w?.name ?? '', isState: false }
     })
     list.sort(
       (a, b) =>
@@ -158,7 +162,8 @@ export function Backups() {
                           <Button
                             size="sm"
                             variant="secondary"
-                            disabled={!b.wname || restore.isPending}
+                            disabled={!b.wname || b.isState || restore.isPending}
+                            title={b.isState ? 'Restore the control-plane state manually (fetch + extract)' : undefined}
                             onClick={() => {
                               if (
                                 confirm(

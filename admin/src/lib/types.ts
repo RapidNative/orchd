@@ -55,6 +55,7 @@ export interface MetricsTarget {
 }
 
 export interface SettingsResp {
+  instance_name: string
   backup: BackupTarget
   backup_secret_set: boolean
   webhook: { url: string }
@@ -86,6 +87,7 @@ export interface ApiKeyMeta {
 }
 
 export interface Info {
+  instance_name: string
   region: string
   driver: string
   base_domain: string

@@ -369,6 +369,16 @@ func (m *Manager) applyWebhookSettings() {
 func (m *Manager) Events(n int) []events.Event { return m.mem.Recent(n) }
 
 // GetWebhook / SetWebhook manage the event webhook URL.
+// GetInstanceName returns this deployment's operator-chosen name (may be empty).
+func (m *Manager) GetInstanceName() string { return m.store.GetSettings().InstanceName }
+
+// SetInstanceName sets this deployment's display name (e.g. "tinbase cloud").
+func (m *Manager) SetInstanceName(name string) error {
+	s := m.store.GetSettings()
+	s.InstanceName = strings.TrimSpace(name)
+	return m.store.SetSettings(s)
+}
+
 func (m *Manager) GetWebhook() string { return m.store.GetSettings().Webhook.URL }
 
 func (m *Manager) SetWebhook(url string) error {
@@ -913,6 +923,35 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 	return b, nil
 }
 
+// StateBackupKey is the reserved "workload id" the control-plane state snapshot
+// is stored under, so it lives alongside tenant backups in the same store.
+const StateBackupKey = "_control-plane"
+
+// BackupState snapshots the control-plane state directory (the project/workload
+// index — JSON file or SQLite db) into the backup store, so the source of truth
+// survives box loss. For SQLite it checkpoints the WAL first so the copy is
+// consistent. Restoring is a manual op (fetch + extract) since it re-seeds the
+// whole control plane.
+func (m *Manager) BackupState(ctx context.Context) (backup.Backup, error) {
+	bk := m.backupStore()
+	if bk == nil {
+		return backup.Backup{}, ErrBackupsDisabled
+	}
+	if cp, ok := m.store.(interface{ Checkpoint() error }); ok {
+		if err := cp.Checkpoint(); err != nil {
+			log.Printf("state checkpoint: %v", err)
+		}
+	}
+	stateDir := filepath.Join(m.cfg.DataRoot, "state")
+	b, err := bk.Create(StateBackupKey, stateDir)
+	if err != nil {
+		return backup.Backup{}, err
+	}
+	_ = bk.Retain(StateBackupKey, m.cfg.BackupRetain)
+	m.emit("state.backed_up", "", "", b.ID)
+	return b, nil
+}
+
 // BackupProject snapshots every workload in a project (generic across workload
 // types — a RapidNative project's runners and its tinbase backend alike).
 func (m *Manager) BackupProject(ctx context.Context, projectID string) ([]backup.Backup, error) {
@@ -1018,6 +1057,12 @@ func (m *Manager) backupAll(ctx context.Context) {
 		} else {
 			log.Printf("backup %s -> %s (%d bytes)", w.ID, b.ID, b.SizeBytes)
 		}
+	}
+	// Also snapshot the control-plane index itself, off-box, on the same schedule.
+	if b, err := m.BackupState(ctx); err != nil {
+		log.Printf("backup state: %v", err)
+	} else {
+		log.Printf("backup state -> %s (%d bytes)", b.ID, b.SizeBytes)
 	}
 }
 

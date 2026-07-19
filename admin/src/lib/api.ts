@@ -95,6 +95,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(t),
     }),
+  setInstanceName: (instance_name: string) =>
+    req<{ instance_name: string }>('/v1/settings/name', {
+      method: 'PUT',
+      body: JSON.stringify({ instance_name }),
+    }),
+  backupState: () => req<Backup>('/v1/system/backup', { method: 'POST' }),
   setWebhook: (url: string) =>
     req<{ url: string }>('/v1/settings/webhook', { method: 'PUT', body: JSON.stringify({ url }) }),
   setMetrics: (t: MetricsTarget) =>
