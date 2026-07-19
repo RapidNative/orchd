@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconRefresh, IconTrash } from '@/components/icons'
+import { Pager, SearchBox, usePaged } from '@/components/paged'
 import { formatBytes, relativeTime } from '@/lib/utils'
 
 export function Backups() {
@@ -37,6 +38,28 @@ export function Backups() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ['backups'] }),
   })
 
+  // Enrich each backup with its project + workload, then group by project
+  // (project asc, newest first within a project) so restores line up with the
+  // project they belong to — a backup is per-workload, but you think in projects.
+  const rows = useMemo(() => {
+    const list = (backups.data ?? []).map((b) => {
+      const w = wmap.get(b.workload_id)
+      return { ...b, project: w?.project ?? '', wname: w?.name ?? '' }
+    })
+    list.sort(
+      (a, b) =>
+        a.project.localeCompare(b.project) ||
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+    )
+    return list
+  }, [backups.data, wmap])
+
+  const paged = usePaged(
+    rows,
+    (b, q) => b.project.toLowerCase().includes(q) || b.wname.toLowerCase().includes(q),
+    12,
+  )
+
   const enabled = info.data?.backups.enabled
 
   return (
@@ -49,9 +72,18 @@ export function Backups() {
             : 'durability for project data'
         }
         actions={
-          <Button variant="secondary" onClick={() => backups.refetch()} title="Refresh">
-            <IconRefresh />
-          </Button>
+          <>
+            {enabled && (
+              <SearchBox
+                value={paged.q}
+                onChange={paged.setQ}
+                placeholder="Search project / workload…"
+              />
+            )}
+            <Button variant="secondary" onClick={() => backups.refetch()} title="Refresh">
+              <IconRefresh />
+            </Button>
+          </>
         }
       />
 
@@ -90,13 +122,15 @@ export function Backups() {
                 </TR>
               </THead>
               <TBody>
-                {(backups.data ?? []).map((b) => {
-                  const w = wmap.get(b.workload_id)
+                {paged.pageItems.map((b, i) => {
+                  const firstOfGroup = i === 0 || paged.pageItems[i - 1].project !== b.project
                   return (
                     <TR key={b.id}>
-                      <TD className="font-mono">{w?.project ?? '—'}</TD>
+                      <TD className="font-mono">
+                        {firstOfGroup ? b.project || '—' : <span className="opacity-0">{b.project}</span>}
+                      </TD>
                       <TD className="font-mono text-muted-foreground">
-                        {w?.name ?? <span className="italic">deleted</span>}
+                        {b.wname || <span className="italic">deleted</span>}
                       </TD>
                       <TD className="text-xs text-muted-foreground">
                         {new Date(b.created_at).toLocaleString()} ({relativeTime(b.created_at)})
@@ -107,11 +141,11 @@ export function Backups() {
                           <Button
                             size="sm"
                             variant="secondary"
-                            disabled={!w || restore.isPending}
+                            disabled={!b.wname || restore.isPending}
                             onClick={() => {
                               if (
                                 confirm(
-                                  `Restore ${w?.project}/${w?.name} from ${new Date(
+                                  `Restore ${b.project}/${b.wname} from ${new Date(
                                     b.created_at,
                                   ).toLocaleString()}? This REPLACES the current data.`,
                                 )
@@ -144,6 +178,12 @@ export function Backups() {
               </p>
             )}
           </Card>
+          <Pager
+            page={paged.page}
+            pageCount={paged.pageCount}
+            total={paged.total}
+            onPage={paged.setPage}
+          />
         </>
       )}
     </div>

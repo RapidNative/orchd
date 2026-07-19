@@ -3,6 +3,7 @@ import { auth } from '@/lib/auth'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
+import { TinbaseLogo } from './icons'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -43,8 +44,8 @@ export function KeyGate() {
       <Card className="w-full max-w-md">
         <CardHeader>
           <div className="mb-1 flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-primary" />
-            <CardTitle>RapidNative Cloud · Admin</CardTitle>
+            <TinbaseLogo className="text-2xl" />
+            <CardTitle>tinbase cloud · Admin</CardTitle>
           </div>
           <CardDescription>
             Paste the control-plane API key. It is stored only in this browser.

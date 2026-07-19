@@ -1,3 +1,4 @@
+import * as React from 'react'
 import { PageHeader } from '@/components/bits'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -72,6 +73,256 @@ function Endpoint({ e }: { e: Ep }) {
     </div>
   )
 }
+
+// Prose helpers for the narrative guide sections.
+const H = ({ children }: { children: React.ReactNode }) => (
+  <h3 className="mb-1.5 mt-5 text-sm font-semibold text-foreground first:mt-0">{children}</h3>
+)
+const P = ({ children }: { children: React.ReactNode }) => (
+  <p className="mb-2.5 text-sm leading-relaxed text-muted-foreground">{children}</p>
+)
+const UL = ({ children }: { children: React.ReactNode }) => (
+  <ul className="mb-2.5 list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground">
+    {children}
+  </ul>
+)
+const M = ({ children }: { children: React.ReactNode }) => (
+  <code className="font-mono text-[0.8em] text-foreground">{children}</code>
+)
+const B = ({ children }: { children: React.ReactNode }) => (
+  <b className="font-semibold text-foreground">{children}</b>
+)
+
+type Guide = { id: string; title: string; body: React.ReactNode }
+
+const GUIDES: Guide[] = [
+  {
+    id: 'about',
+    title: 'About tinbase cloud',
+    body: (
+      <>
+        <P>
+          <B>tinbase cloud</B> is hosted, multi-tenant orchestration for{' '}
+          <a className="text-primary hover:underline" href="https://tinbase.dev" target="_blank" rel="noreferrer">
+            tinbase
+          </a>{' '}
+          — a cheaper, faster, high-availability alternative to Supabase Cloud. The same control
+          plane also powers on-demand <B>RapidNative dev environments</B>, so a "workload" here is
+          either a tinbase backend or a running dev app (Expo, Vite, an API server).
+        </P>
+        <H>Why it is built this way</H>
+        <UL>
+          <li>
+            <B>Coupled model</B> — one tinbase per project. Isolation and per-tenant backups are
+            simple, and a noisy tenant can never touch another's data. This is how Supabase Cloud
+            provisions too (a dedicated Postgres per project).
+          </li>
+          <li>
+            <B>Docker + gVisor (<M>runsc</M>)</B> — VM-grade syscall isolation without needing KVM,
+            so it runs on plain cloud VMs. Every workload gets cgroup caps (memory, CPU, PID count).
+          </li>
+          <li>
+            <B>Scale-to-zero</B> — 90% of dev/preview workloads sit idle. Idle containers are
+            reaped after a timeout and cold-booted on the next request; <M>keep_warm</M> pins the
+            hot ones.
+          </li>
+          <li>
+            <B>Adaptor pattern everywhere</B> — the runtime driver, state store, backup target,
+            event sink and metrics sink are all swappable interfaces. Most are switchable from the{' '}
+            <B>Settings</B> page without a redeploy. See <a className="text-primary hover:underline" href="#adaptors">Adaptors</a>.
+          </li>
+        </UL>
+        <H>The object model</H>
+        <P>
+          <B>Project → Workload → Route.</B> A <B>project</B> groups workloads. A <B>workload</B> is
+          one routable, scale-to-zero container instance (built from a <a className="text-primary hover:underline" href="#images">preset or image</a>).
+          A <B>route</B> maps a hostname to a workload; every workload gets a default subdomain and
+          can attach custom domains. Workloads are placed in a <a className="text-primary hover:underline" href="#regions">region</a>.
+        </P>
+      </>
+    ),
+  },
+  {
+    id: 'repo',
+    title: 'Repository & layout',
+    body: (
+      <>
+        <P>
+          Source lives at{' '}
+          <a className="text-primary hover:underline" href="https://github.com/RapidNative/cloud" target="_blank" rel="noreferrer">
+            github.com/RapidNative/cloud
+          </a>
+          . Everything that runs on the box is tracked — including the Caddy config and deploy
+          scripts — so the server holds no untracked code.
+        </P>
+        <Code title="Layout">{`cloud/
+├── orchestrator/        Go control plane (stdlib + pgx only)
+│   ├── cmd/orchd/       daemon: control API :8080, gateway :8081
+│   └── internal/
+│       ├── api/         HTTP routes + auth middleware
+│       ├── runtime/     Runtime drivers: Local / Docker(gVisor) / (Firecracker)
+│       ├── store/       Store + Persister: File(JSON) / Mem / Postgres(pgx)
+│       ├── backup/      backup Store adaptor: Local / S3-SigV4
+│       ├── events/      event Sink adaptor: Memory / Webhook / Multi
+│       └── metrics/     metrics Sink adaptor: Nop / Log / HTTP
+├── admin/               this panel — Vite + React + TanStack + Tailwind
+└── deploy/              Caddyfile, systemd units, deploy.sh`}</Code>
+        <H>Build & deploy</H>
+        <UL>
+          <li>
+            Control plane: <M>go build ./cmd/orchd</M> (single static binary, run under systemd).
+          </li>
+          <li>
+            Admin panel: <M>cd admin && npm run build</M> → static files served by Caddy at{' '}
+            <M>admin.tinbase.dev</M>.
+          </li>
+          <li>
+            One-shot: <M>./deploy/deploy.sh</M> builds both, ships them to the box, and reloads
+            <M>orchd</M> + Caddy.
+          </li>
+        </UL>
+        <H>Routing on the box</H>
+        <UL>
+          <li>
+            <M>admin.tinbase.dev</M> — this panel (static) + <M>/api/*</M> reverse-proxied to the
+            control API.
+          </li>
+          <li>
+            <M>api.tinbase.dev</M> — the control API directly.
+          </li>
+          <li>
+            <M>*.tinbase.dev</M> — the gateway; each host is resolved against the route table to a
+            workload. On-demand TLS is gated by <M>/internal/tls-allow</M> so certs are only issued
+            for real hosts.
+          </li>
+        </UL>
+      </>
+    ),
+  },
+  {
+    id: 'images',
+    title: 'Images & presets',
+    body: (
+      <>
+        <P>
+          <B>Yes — an "image" is a Docker image tag</B> on the orchestrator's Docker daemon (for
+          example <M>tinbase:0.10.0</M> or <M>rn-vite:dev</M>). A workload is just a container
+          started from that image with a port and resource caps. There is no separate custom image
+          format.
+        </P>
+        <H>Presets vs. raw images</H>
+        <P>
+          A <B>preset</B> is a friendly name that expands to an image + port + default limits, so
+          you don't have to remember them. <M>GET /v1/presets</M> lists the built-ins:{' '}
+          <M>tinbase</M>, <M>expo</M>, <M>vite</M>, <M>api</M>. You can always bypass presets and
+          pass <M>image</M> / <M>port</M> / <M>memory_mb</M> / <M>cpus</M> explicitly on the
+          workload spec.
+        </P>
+        <Code title="Same workload, two ways">{`// via preset
+{ "preset": "vite" }
+
+// explicit image (equivalent, minus the preset defaults)
+{ "type": "rapidnative-dev", "image": "rn-vite:dev", "port": 8080,
+  "memory_mb": 512, "cpus": 1.0 }`}</Code>
+        <H>How do I add a new type of image?</H>
+        <P>
+          The image has to exist on the box's Docker daemon first. There is{' '}
+          <B>no upload button in this panel yet</B> — you add images the standard Docker way:
+        </P>
+        <Code title="On the box (or any configured region's Docker host)">{`# option A — pull a published image
+docker pull ghcr.io/acme/my-runtime:1.2.0
+
+# option B — build one from a Dockerfile
+docker build -t my-runtime:dev .
+
+# then reference it when creating a workload — no redeploy needed
+curl -X POST https://api.tinbase.dev/v1/projects/<id>/workloads \\
+  -H "Authorization: Bearer $TINBASE_KEY" \\
+  -H "Content-Type: application/json" \\
+  -d '{"type":"custom","image":"my-runtime:dev","port":3000,"memory_mb":512}'`}</Code>
+        <P>
+          Requirements for a custom image: it must <B>listen on <M>0.0.0.0</M></B> at the{' '}
+          <M>port</M> you declare (not <M>127.0.0.1</M>), and start in the foreground. To make it a
+          first-class named preset (so it shows in <M>/v1/presets</M> and the create dropdown), add
+          it to the preset catalog in <M>orchestrator/internal/runtime</M> and redeploy.
+        </P>
+        <P>
+          <B>Roadmap:</B> a registry/build integration + an "add image" screen in this panel so new
+          runtimes can be pushed without shell access. Until then, images are added on the host.
+        </P>
+      </>
+    ),
+  },
+  {
+    id: 'regions',
+    title: 'Adding regions',
+    body: (
+      <>
+        <P>
+          <B>What.</B> A region is a <B>placement target</B> for workloads. It carries a{' '}
+          <M>docker_host</M> that points the runtime driver at a Docker daemon — empty means the
+          local daemon on the control-plane box; a <M>tcp://…</M> value points at a separate worker
+          node. New projects land in the <B>default</B> region unless one is chosen at create time.
+        </P>
+        <P>
+          <B>Why.</B> It's the seam for going multi-node and multi-geo: put workers near users to
+          cut latency, keep tenant data in a required jurisdiction, and spread load past a single
+          box's memory/disk ceiling. The control plane stays central; only where containers <i>run</i>{' '}
+          moves.
+        </P>
+        <H>How to add one</H>
+        <UL>
+          <li>
+            <B>1. Expose the worker's Docker daemon</B> to the control-plane box over a{' '}
+            <B>private network</B> (never the public internet) — a TLS socket or an SSH tunnel to{' '}
+            <M>tcp://node2:2375</M>.
+          </li>
+          <li>
+            <B>2. Create the region</B> — in this panel under <B>System → Regions</B>, or{' '}
+            <M>POST /v1/regions</M> with <M>{`{ "name": "EU West", "docker_host": "tcp://node2:2375" }`}</M>.
+            The id is a slug of the name (<M>eu-west</M>).
+          </li>
+          <li>
+            <B>3. Make sure the images exist there</B> — each region's Docker host needs the image
+            tags you'll run (see <a className="text-primary hover:underline" href="#images">Images & presets</a>).
+          </li>
+          <li>
+            <B>4. Place work</B> — pass <M>region</M> when creating a project, or{' '}
+            <M>POST /v1/regions/{`{id}`}/default</M> to make it the new default.
+          </li>
+        </UL>
+        <P>
+          You can't delete the default region — set another default first, then delete. Full
+          data-locality (per-region backup targets, private networking, an HA data tier) is the next
+          hardware milestone; the API and model are already region-aware.
+        </P>
+      </>
+    ),
+  },
+  {
+    id: 'adaptors',
+    title: 'Adaptors (replaceable parts)',
+    body: (
+      <>
+        <P>
+          Every pluggable subsystem is an interface with multiple implementations. The ones marked{' '}
+          <B>Settings</B> are switchable live from the <a className="text-primary hover:underline" href="/settings">Settings</a> page;
+          the rest are chosen at deploy via env.
+        </P>
+        <Code title="Adaptor · implementations · how to switch">{`Runtime driver   Local · Docker(gVisor runsc) · Firecracker(future)   deploy env
+State store      File(JSON) · Postgres(pgx) · Mem                     deploy env
+Backup target    Local dir · S3 / R2 (SigV4)                          Settings
+Event sink       Memory · Webhook · Multi                             Settings (webhook)
+Metrics sink     Nop · Log · HTTP collector                           Settings`}</Code>
+        <P>
+          This is what keeps the platform portable: the FileStore can become Postgres, local
+          backups can become R2, and the Docker driver can become Firecracker — each without
+          touching the API surface documented below.
+        </P>
+      </>
+    ),
+  },
+]
 
 const GROUPS: Group[] = [
   {
@@ -320,12 +571,40 @@ const GROUPS: Group[] = [
 export function Docs() {
   return (
     <div>
-      <PageHeader title="API Documentation" subtitle={`Base URL: ${API_BASE}`} />
+      <PageHeader
+        title="Documentation"
+        subtitle="What tinbase cloud is, how it fits together, and every API"
+        actions={
+          <a
+            href="/docs.md"
+            target="_blank"
+            rel="noreferrer"
+            className="rounded-md border border-border px-3 py-1.5 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            Raw markdown ↗
+          </a>
+        }
+      />
 
       <div className="grid gap-6 lg:grid-cols-[200px_1fr]">
         {/* TOC */}
         <nav className="hidden lg:block">
           <div className="sticky top-6 flex flex-col gap-1 text-sm">
+            <div className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+              Guide
+            </div>
+            {GUIDES.map((g) => (
+              <a
+                key={g.id}
+                href={`#${g.id}`}
+                className="rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                {g.title}
+              </a>
+            ))}
+            <div className="px-2 pb-1 pt-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+              API reference
+            </div>
             <a href="#auth" className="rounded px-2 py-1 text-muted-foreground hover:bg-muted hover:text-foreground">
               Authentication
             </a>
@@ -342,6 +621,23 @@ export function Docs() {
         </nav>
 
         <div className="min-w-0">
+          {/* Guide sections */}
+          {GUIDES.map((g) => (
+            <Card key={g.id} id={g.id} className="mb-6 scroll-mt-6">
+              <CardHeader>
+                <CardTitle className="text-base">{g.title}</CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">{g.body}</CardContent>
+            </Card>
+          ))}
+
+          <div className="mb-4 mt-2 border-t border-border pt-6">
+            <h2 className="text-lg font-semibold text-foreground">API reference</h2>
+            <p className="text-sm text-muted-foreground">
+              Base URL: <code className="font-mono">{API_BASE}</code>
+            </p>
+          </div>
+
           {/* Auth */}
           <Card id="auth" className="mb-6 scroll-mt-6">
             <CardHeader>

@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge'
 import { Card } from '@/components/ui/card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconPlus, IconRefresh } from '@/components/icons'
+import { Pager, SearchBox, usePaged } from '@/components/paged'
 import { relativeTime } from '@/lib/utils'
 
 export function Projects() {
@@ -26,6 +27,15 @@ export function Projects() {
     },
   })
 
+  const paged = usePaged(
+    projects.data ?? [],
+    (p, q) =>
+      p.id.toLowerCase().includes(q) ||
+      (p.name ?? '').toLowerCase().includes(q) ||
+      (p.region ?? '').toLowerCase().includes(q),
+    10,
+  )
+
   return (
     <div>
       <PageHeader
@@ -33,6 +43,7 @@ export function Projects() {
         subtitle="Each project is one or more scale-to-zero workloads"
         actions={
           <>
+            <SearchBox value={paged.q} onChange={paged.setQ} placeholder="Search projects…" />
             <select
               value={region}
               onChange={(e) => setRegion(e.target.value)}
@@ -96,7 +107,7 @@ export function Projects() {
             </TR>
           </THead>
           <TBody>
-            {(projects.data ?? []).map((p) => {
+            {paged.pageItems.map((p) => {
               const run = p.workloads.filter((w) => w.state === 'running').length
               return (
                 <TR
@@ -129,6 +140,7 @@ export function Projects() {
           </p>
         )}
       </Card>
+      <Pager page={paged.page} pageCount={paged.pageCount} total={paged.total} onPage={paged.setPage} />
     </div>
   )
 }

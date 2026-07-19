@@ -83,6 +83,25 @@ export const IconActivity = (p: P) => (
     <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
   </S>
 )
+export const TinbaseLogo = (p: P) => (
+  <svg viewBox="0 0 120 120" fill="none" width="1em" height="1em" {...p}>
+    <defs>
+      <linearGradient id="tinBody" x1="30" y1="30" x2="92" y2="102" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#10b981" />
+        <stop offset="1" stopColor="#047857" />
+      </linearGradient>
+      <linearGradient id="tinLid" x1="26" y1="19" x2="94" y2="49" gradientUnits="userSpaceOnUse">
+        <stop stopColor="#6ee7b7" />
+        <stop offset="1" stopColor="#34d399" />
+      </linearGradient>
+    </defs>
+    <path d="M26 34v52c0 8.4 15.2 15.2 34 15.2s34-6.8 34-15.2V34Z" fill="url(#tinBody)" />
+    <path d="M26 60c0 8.4 15.2 15.2 34 15.2S94 68.4 94 60" stroke="#6ee7b7" strokeWidth="3" fill="none" />
+    <ellipse cx="60" cy="34" rx="34" ry="15" fill="url(#tinLid)" />
+    <ellipse cx="60" cy="34" rx="25" ry="10" fill="none" stroke="#059669" strokeOpacity="0.5" strokeWidth="2.5" />
+  </svg>
+)
+
 export const IconDocs = (p: P) => (
   <S {...p}>
     <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />

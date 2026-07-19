@@ -10,6 +10,7 @@ import {
   IconLogout,
   IconProjects,
   IconSettings,
+  TinbaseLogo,
 } from './icons'
 
 const nav = [
@@ -29,8 +30,8 @@ export function RootLayout() {
     <div className="flex min-h-screen">
       <aside className="flex w-56 shrink-0 flex-col border-r border-border p-4">
         <div className="flex items-center gap-2 px-2 pb-6 pt-1">
-          <span className="h-2.5 w-2.5 rounded-full bg-primary" />
-          <span className="text-sm font-semibold">RapidNative Cloud</span>
+          <TinbaseLogo className="text-2xl" />
+          <span className="text-sm font-semibold">tinbase cloud</span>
         </div>
         <nav className="flex flex-col gap-1">
           {nav.map(({ to, label, Icon, exact }) => (
