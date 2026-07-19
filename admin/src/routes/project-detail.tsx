@@ -6,6 +6,7 @@ import type { Workload } from '@/lib/types'
 import { CopyButton, PageHeader } from '@/components/bits'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -18,6 +19,81 @@ function primaryUrl(w: Workload) {
 function openUrl(w: Workload) {
   const u = primaryUrl(w)
   return w.type === 'tinbase-project' && u ? u + '/_/' : u
+}
+
+function DomainsCard({ workloads, onChange }: { workloads: Workload[]; onChange: () => void }) {
+  const [host, setHost] = useState('')
+  const [wid, setWid] = useState('')
+  const target = wid || workloads[0]?.id || ''
+  const add = useMutation({
+    mutationFn: () => api.addRoute(target, host),
+    onSuccess: () => {
+      setHost('')
+      onChange()
+    },
+  })
+  const remove = useMutation({ mutationFn: (h: string) => api.removeRoute(h), onSuccess: onChange })
+
+  return (
+    <Card className="mt-6">
+      <CardHeader>
+        <CardTitle className="text-base">Domains</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <div className="flex flex-col divide-y divide-border/60">
+          {workloads.flatMap((w) =>
+            (w.routes ?? []).map((h, i) => (
+              <div key={h} className="flex items-center justify-between py-2">
+                <div className="flex items-center gap-2">
+                  <span className="font-mono text-sm">{h}</span>
+                  <span className="text-xs text-muted-foreground">→ {w.name || 'primary'}</span>
+                  {i === 0 && <Badge>default</Badge>}
+                </div>
+                {i !== 0 && (
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    onClick={() => confirm(`Remove ${h}?`) && remove.mutate(h)}
+                  >
+                    <IconTrash />
+                  </Button>
+                )}
+              </div>
+            )),
+          )}
+        </div>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Input
+            className="max-w-72"
+            placeholder="custom domain (e.g. app.customer.com)"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+          />
+          <select
+            value={target}
+            onChange={(e) => setWid(e.target.value)}
+            className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+          >
+            {workloads.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name || 'primary'}
+              </option>
+            ))}
+          </select>
+          <Button onClick={() => add.mutate()} disabled={add.isPending || !host.trim() || !target}>
+            Add domain
+          </Button>
+          {add.isError && (
+            <span className="text-sm text-destructive">{(add.error as Error).message}</span>
+          )}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          Point your domain (CNAME/A) at the gateway; a Let's Encrypt cert is issued on the first
+          HTTPS request.
+        </p>
+      </CardContent>
+    </Card>
+  )
 }
 
 function WorkloadStats({ w }: { w: Workload }) {
@@ -241,6 +317,8 @@ export function ProjectDetail() {
           )}
         </CardContent>
       </Card>
+
+      {workloads.length > 0 && <DomainsCard workloads={workloads} onChange={invalidate} />}
 
       {workloads.length > 0 && (
         <Card className="mt-6">

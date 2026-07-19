@@ -58,7 +58,11 @@ the same control plane / gateway / driver:
 - [x] **wildcard subdomains + TLS** on tinbase.dev: `admin`/`api`/`<ref>` hosts via
       Caddy with real Let's Encrypt certs; project subdomains use on-demand TLS gated
       by orchd's `/internal/tls-allow` (certs only for real workload hosts)
-- [ ] custom-domain routes (tenant-supplied domains) + on-demand TLS
+- [x] **custom-domain routes** (tenant-supplied domains) — attach/detach a hostname
+      to a workload (`POST /v1/workloads/{id}/routes`, `DELETE /v1/routes?host=`),
+      managed from a Domains card on the project page. The gateway resolves it via
+      the route table and Caddy issues a Let's Encrypt cert on demand (gated by
+      `/internal/tls-allow`). Verified: add → routes + tls-allow 200; remove → 404/403
 - [ ] full Metro expo dev server (heavier) as a bare-metal-tier variant
 
 ### Phase 1 — Make it real, safely

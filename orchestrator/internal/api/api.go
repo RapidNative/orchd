@@ -44,6 +44,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/workloads/{id}", a.getWorkload)
 	mux.HandleFunc("DELETE /v1/workloads/{id}", a.deleteWorkload)
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
+	mux.HandleFunc("DELETE /v1/routes", a.removeRoute)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
@@ -536,6 +537,19 @@ func (a *API) writeBackupErr(w http.ResponseWriter, err error) {
 	default:
 		writeErr(w, http.StatusInternalServerError, err)
 	}
+}
+
+func (a *API) removeRoute(w http.ResponseWriter, r *http.Request) {
+	host := r.URL.Query().Get("host")
+	if host == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("host query param required"))
+		return
+	}
+	if err := a.mgr.RemoveRoute(host); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) getWorkload(w http.ResponseWriter, r *http.Request) {

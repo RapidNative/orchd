@@ -412,6 +412,18 @@ func (s *Store) GetRouteByKey(key string) (*Route, error) {
 	return nil, ErrNotFound
 }
 
+// DeleteRoute removes a single route by host.
+func (s *Store) DeleteRoute(host string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	host = strings.ToLower(host)
+	if _, ok := s.routes[host]; !ok {
+		return ErrNotFound
+	}
+	delete(s.routes, host)
+	return s.flushLocked()
+}
+
 func (s *Store) ListRoutesForWorkload(workloadID string) []*Route {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

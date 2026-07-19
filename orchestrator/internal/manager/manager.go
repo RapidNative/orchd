@@ -486,10 +486,44 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 
 // AddRoute attaches an additional hostname to a workload (e.g. a custom domain).
 func (m *Manager) AddRoute(host, workloadID string) error {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return fmt.Errorf("host required")
+	}
 	if _, err := m.store.GetWorkload(workloadID); err != nil {
 		return err
 	}
-	return m.store.PutRoute(&store.Route{Host: host, Key: host, WorkloadID: workloadID, CreatedAt: time.Now()})
+	if r, err := m.store.GetRouteByHost(host); err == nil && r.WorkloadID != workloadID {
+		return fmt.Errorf("host %q already routes to another workload", host)
+	}
+	if err := m.store.PutRoute(&store.Route{Host: host, Key: host, WorkloadID: workloadID, CreatedAt: time.Now()}); err != nil {
+		return err
+	}
+	w, _ := m.store.GetWorkload(workloadID)
+	m.emit("route.added", projectOf(w), workloadID, host)
+	return nil
+}
+
+// RemoveRoute detaches a hostname.
+func (m *Manager) RemoveRoute(host string) error {
+	host = strings.ToLower(strings.TrimSpace(host))
+	r, err := m.store.GetRouteByHost(host)
+	if err != nil {
+		return err
+	}
+	if err := m.store.DeleteRoute(host); err != nil {
+		return err
+	}
+	w, _ := m.store.GetWorkload(r.WorkloadID)
+	m.emit("route.removed", projectOf(w), r.WorkloadID, host)
+	return nil
+}
+
+func projectOf(w *store.Workload) string {
+	if w == nil {
+		return ""
+	}
+	return w.ProjectID
 }
 
 // ResolveHost maps a request hostname to its workload via the route table.

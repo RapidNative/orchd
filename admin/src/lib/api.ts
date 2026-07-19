@@ -63,6 +63,10 @@ export const api = {
       body: JSON.stringify({ name, role }),
     }),
   deleteKey: (id: string) => req<null>('/v1/keys/' + id, { method: 'DELETE' }),
+  addRoute: (workloadId: string, host: string) =>
+    req('/v1/workloads/' + workloadId + '/routes', { method: 'POST', body: JSON.stringify({ host }) }),
+  removeRoute: (host: string) =>
+    req<null>('/v1/routes?host=' + encodeURIComponent(host), { method: 'DELETE' }),
   deleteProject: (id: string) => req<null>('/v1/projects/' + id, { method: 'DELETE' }),
   addWorkload: (id: string, body: WorkloadSpecReq) =>
     req('/v1/projects/' + id + '/workloads', { method: 'POST', body: JSON.stringify(body) }),
