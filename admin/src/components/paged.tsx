@@ -39,7 +39,7 @@ export function SearchBox({
       value={value}
       onChange={(e) => onChange(e.target.value)}
       placeholder={placeholder}
-      className="h-8 max-w-56"
+      className="h-8 w-full min-w-28 max-w-56 shrink"
     />
   )
 }

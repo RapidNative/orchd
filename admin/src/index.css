@@ -22,34 +22,41 @@
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --font-mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-/* Dark-only theme (this is an internal console). */
+/* Dark-only theme, aligned to the tinbase design system (neutral #1c1c1c +
+   emerald brand). This is an internal console. */
 :root {
-  --background: #0b0e14;
-  --foreground: #e6ebf5;
-  --card: #111624;
-  --card-foreground: #e6ebf5;
-  --muted: #161d2e;
-  --muted-foreground: #9aa7c0;
-  --border: #232c42;
-  --input: #1a2133;
-  --primary: #5ec8a8;
-  --primary-foreground: #06231b;
-  --accent: #7aa2ff;
-  --accent-foreground: #071022;
-  --destructive: #e06a6a;
+  color-scheme: dark;
+  --background: #1c1c1c;
+  --foreground: #ededed;
+  --card: #212121;
+  --card-foreground: #ededed;
+  --muted: #2b2b2b;
+  --muted-foreground: #a3a3a3;
+  --border: #333333;
+  --input: #181818;
+  --primary: #10b981;
+  --primary-foreground: #ffffff;
+  --accent: #38bdf8;
+  --accent-foreground: #06212e;
+  --destructive: #f87171;
   --destructive-foreground: #1a0808;
-  --success: #5ec8a8;
-  --warning: #e0a44a;
-  --ring: #5ec8a8;
-  --radius: 0.6rem;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --ring: #3ecf8e;
+  --radius: 0.5rem;
 }
 
 @layer base {
   * {
     border-color: var(--border);
+  }
+  html {
+    /* Reserve the scrollbar track so pages that grow past the viewport don't
+       shift horizontally when the scrollbar appears/disappears. */
+    scrollbar-gutter: stable;
   }
   html,
   body,
@@ -59,7 +66,22 @@
   body {
     background: var(--background);
     color: var(--foreground);
-    font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-family: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+    font-size: 13px;
     -webkit-font-smoothing: antialiased;
+  }
+
+  /* Dense studio scrollbars. */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #3a3a3a;
+    border-radius: 6px;
+    border: 2px solid var(--background);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #4a4a4a;
   }
 }

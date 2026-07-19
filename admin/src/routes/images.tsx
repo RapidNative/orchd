@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconRefresh, IconTrash } from '@/components/icons'
 import { Pager, SearchBox, usePaged } from '@/components/paged'
+import { Select } from '@/components/ui/select'
 
 // shortDigest renders "sha256:1a2b3c4d5e6f…" from a full digest for the table,
 // while the full value stays available via the cell's title (for pinning/copy).
@@ -56,11 +57,11 @@ export function Images() {
   )
 
   const regionSelect = (
-    <select
+    <Select
       value={region}
       onChange={(e) => setRegion(e.target.value)}
       title="Region (Docker host)"
-      className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+      className="h-9 font-mono"
     >
       <option value="">default region</option>
       {(regions.data ?? []).map((rg) => (
@@ -69,7 +70,7 @@ export function Images() {
           {rg.is_default ? ' (default)' : ''}
         </option>
       ))}
-    </select>
+    </Select>
   )
 
   return (

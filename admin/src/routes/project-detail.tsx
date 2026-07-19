@@ -7,6 +7,7 @@ import { CopyButton, PageHeader } from '@/components/bits'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -69,17 +70,17 @@ function DomainsCard({ workloads, onChange }: { workloads: Workload[]; onChange:
             value={host}
             onChange={(e) => setHost(e.target.value)}
           />
-          <select
+          <Select
             value={target}
             onChange={(e) => setWid(e.target.value)}
-            className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+            className="h-9 font-mono"
           >
             {workloads.map((w) => (
               <option key={w.id} value={w.id}>
                 {w.name || 'primary'}
               </option>
             ))}
-          </select>
+          </Select>
           <Button onClick={() => add.mutate()} disabled={add.isPending || !host.trim() || !target}>
             Add domain
           </Button>
@@ -218,17 +219,17 @@ export function ProjectDetail() {
         <CardHeader className="flex-row items-center justify-between">
           <CardTitle className="text-base">Workloads</CardTitle>
           <div className="flex items-center gap-2">
-            <select
+            <Select
               value={preset}
               onChange={(e) => setPreset(e.target.value)}
-              className="h-8 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+              className="font-mono"
             >
               {(info.data?.presets ?? ['tinbase', 'expo', 'vite', 'api']).map((x) => (
                 <option key={x} value={x}>
                   {x}
                 </option>
               ))}
-            </select>
+            </Select>
             <Button size="sm" disabled={addWorkload.isPending} onClick={() => addWorkload.mutate()}>
               <IconPlus /> Add
             </Button>

@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconPlus, IconRefresh } from '@/components/icons'
 import { Pager, SearchBox, usePaged } from '@/components/paged'
+import { Select } from '@/components/ui/select'
 import { relativeTime } from '@/lib/utils'
 
 export function Projects() {
@@ -44,11 +45,11 @@ export function Projects() {
         actions={
           <>
             <SearchBox value={paged.q} onChange={paged.setQ} placeholder="Search projects…" />
-            <select
+            <Select
               value={region}
               onChange={(e) => setRegion(e.target.value)}
               title="Region for new projects"
-              className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+              className="h-9 font-mono"
             >
               <option value="">default region</option>
               {(regions.data ?? []).map((rg) => (
@@ -57,7 +58,7 @@ export function Projects() {
                   {rg.is_default ? ' (default)' : ''}
                 </option>
               ))}
-            </select>
+            </Select>
             <Button
               variant="secondary"
               onClick={() => projects.refetch()}

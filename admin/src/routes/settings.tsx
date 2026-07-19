@@ -7,6 +7,7 @@ import { PageHeader } from '@/components/bits'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
+import { Select } from '@/components/ui/select'
 import { Badge } from '@/components/ui/badge'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconTrash } from '@/components/icons'
@@ -200,14 +201,14 @@ function KeysCard() {
             value={name}
             onChange={(e) => setName(e.target.value)}
           />
-          <select
+          <Select
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+            className="h-9 font-mono"
           >
             <option value="readonly">readonly</option>
             <option value="admin">admin</option>
-          </select>
+          </Select>
           <Button onClick={() => add.mutate()} disabled={add.isPending || !name.trim()}>
             Create key
           </Button>
@@ -277,14 +278,14 @@ export function Settings() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="Destination">
-            <select
+            <Select
               value={t.type}
               onChange={(e) => set('type', e.target.value)}
-              className="h-9 rounded-md border border-border bg-input px-2 font-mono text-sm text-foreground"
+              className="h-9 font-mono"
             >
               <option value="local">local (on the box)</option>
               <option value="s3">s3 / R2 / B2 / MinIO</option>
-            </select>
+            </Select>
           </Field>
 
           {t.type === 's3' && (
@@ -374,15 +375,15 @@ export function Settings() {
         </CardHeader>
         <CardContent className="grid gap-4">
           <Field label="Sink" hint="periodic fleet snapshot (projects, running, memory)">
-            <select
+            <Select
               value={mType}
               onChange={(e) => setMType(e.target.value)}
-              className="h-9 rounded-md border border-border bg-input px-2 font-mono text-sm text-foreground"
+              className="h-9 font-mono"
             >
               <option value="nop">off</option>
               <option value="log">log (server journal)</option>
               <option value="http">http (POST to a collector)</option>
-            </select>
+            </Select>
           </Field>
           {mType === 'http' && (
             <Field label="Collector URL">

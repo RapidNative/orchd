@@ -13,12 +13,16 @@ export function PageHeader({
   actions?: React.ReactNode
 }) {
   return (
-    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
-      <div>
+    <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+      <div className="min-w-0">
         <h1 className="text-xl font-semibold tracking-tight">{title}</h1>
         {subtitle && <p className="mt-0.5 text-sm text-muted-foreground">{subtitle}</p>}
       </div>
-      {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+      {actions && (
+        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
+          {actions}
+        </div>
+      )}
     </div>
   )
 }
@@ -35,7 +39,7 @@ export function StatCard({
   className?: string
 }) {
   return (
-    <div className={cn('rounded-xl border border-border bg-card p-4', className)}>
+    <div className={cn('rounded-lg border border-border bg-card p-4', className)}>
       <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
       <div className="mt-1 font-mono text-2xl font-semibold text-foreground">{value}</div>
       {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}

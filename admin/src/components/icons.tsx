@@ -109,6 +109,11 @@ export const IconDocs = (p: P) => (
     <path d="M9 7h7M9 11h7" />
   </S>
 )
+export const IconMenu = (p: P) => (
+  <S {...p}>
+    <path d="M3 12h18M3 6h18M3 18h18" />
+  </S>
+)
 export const IconImage = (p: P) => (
   <S {...p}>
     <rect x="3" y="3" width="18" height="18" rx="2" />
