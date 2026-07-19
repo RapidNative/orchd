@@ -64,6 +64,20 @@ docker run --rm --network host --entrypoint sh minio/mc -c \
 Then point the backup target at `http://127.0.0.1:9000`, bucket `tbc-backups`,
 region `us-east-1`. Swap in real R2 credentials for genuine off-box durability.
 
+## State store (file or Postgres)
+
+Control-plane state (projects, workloads, routes, regions, keys, settings) lives
+behind a `store.Store` interface. By default it is a JSON file
+(`/opt/tinbase-cloud/data/state/projects.json`). Set `ORCHD_STATE_DSN` to store it
+in Postgres instead (`postgres://user:pass@host/db?sslmode=disable`) — the seam for
+a distributed control plane. An on-box Postgres for testing:
+
+```bash
+docker run -d --name pg -p 127.0.0.1:5432:5432 \
+  -e POSTGRES_PASSWORD=pgpass -e POSTGRES_DB=orchd postgres:17-alpine
+# then set ORCHD_STATE_DSN=postgres://postgres:pgpass@127.0.0.1:5432/orchd?sslmode=disable
+```
+
 ## Routing (Caddyfile)
 
 - `admin.tinbase.dev` → admin UI (+ same-origin `/api` proxy to the control API)

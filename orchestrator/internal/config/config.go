@@ -77,6 +77,10 @@ type Config struct {
 
 	// MetricsInterval is how often the platform metrics snapshot is published.
 	MetricsInterval time.Duration
+
+	// StateDSN, when set, stores control-plane state in Postgres instead of the
+	// local JSON file (e.g. postgres://user:pass@host/db).
+	StateDSN string
 }
 
 func Load() Config {
@@ -106,6 +110,7 @@ func Load() Config {
 		BackupInterval:  envDuration("ORCHD_BACKUP_INTERVAL", 0),
 		BackupRetain:    envInt("ORCHD_BACKUP_RETAIN", 5),
 		MetricsInterval: envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
+		StateDSN:        env("ORCHD_STATE_DSN", ""),
 	}
 }
 

@@ -143,8 +143,12 @@ gVisor covers isolation until then.
       in-memory when the path is empty) is the only impl today, but the manager and
       API depend only on the interface, so a **SQLite/Postgres adaptor drops in**
       without touching them. This is the seam for a distributed/HA control plane.
-- [ ] Store → managed Postgres adaptor (the drop-in behind `store.Store`)
-- [ ] control plane becomes HA itself
+- [x] **Store → Postgres adaptor** — a `Persister` seam (file / in-memory / Postgres)
+      behind `store.Store`; `ORCHD_STATE_DSN` puts control-plane state in Postgres
+      (pgx, snapshot row). Verified end-to-end: state persists to Postgres and is
+      loaded back on restart. Next step to a fully relational, multi-writer store
+      is more tables behind the same interface.
+- [ ] control plane becomes HA itself (multi-writer relational store + leader/replicas)
 - [ ] Warm-pool / keep-alive policy for hot projects
 
 ### Phase 4 — HA tier + multi-region

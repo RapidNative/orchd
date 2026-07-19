@@ -30,7 +30,14 @@ func main() {
 	log.SetFlags(log.Ltime)
 	cfg := config.Load()
 
-	st, err := store.Open(filepath.Join(cfg.DataRoot, "state", "projects.json"))
+	var st store.Store
+	var err error
+	if cfg.StateDSN != "" {
+		st, err = store.OpenPostgres(cfg.StateDSN)
+		log.Printf("state store: postgres")
+	} else {
+		st, err = store.Open(filepath.Join(cfg.DataRoot, "state", "projects.json"))
+	}
 	if err != nil {
 		log.Fatalf("open store: %v", err)
 	}

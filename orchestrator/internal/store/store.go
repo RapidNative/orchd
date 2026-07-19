@@ -13,8 +13,6 @@ package store
 import (
 	"encoding/json"
 	"errors"
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -25,7 +23,7 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-// Store is the control-plane state backend. FileStore (JSON file, or in-memory
+// Store is the control-plane state backend. memStore (JSON file, or in-memory
 // when the path is empty) is the only implementation today; a SQLite/Postgres
 // adaptor drops in behind this interface without touching the manager or API —
 // the seam for moving state off a single box for a distributed control plane.
@@ -151,8 +149,8 @@ type Route struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
-type FileStore struct {
-	path      string
+type memStore struct {
+	persister Persister
 	mu        sync.RWMutex
 	projects  map[string]*Project
 	workloads map[string]*Workload
@@ -171,28 +169,25 @@ type snapshot struct {
 	Settings  Settings    `json:"settings"`
 }
 
-// Open loads the store from path, creating an empty one if it does not exist.
-// An empty path means in-memory only (no persistence) — useful for tests and
-// ephemeral/preview control planes.
-func Open(path string) (*FileStore, error) {
-	s := &FileStore{
-		path:      path,
+// Open returns a file-backed store (JSON at path), or an in-memory store when
+// path is empty. OpenPostgres (pg.go) returns a Postgres-backed one.
+func Open(path string) (Store, error) {
+	if path == "" {
+		return openWith(MemPersister{})
+	}
+	return openWith(FilePersister{Path: path})
+}
+
+func openWith(p Persister) (*memStore, error) {
+	s := &memStore{
+		persister: p,
 		projects:  make(map[string]*Project),
 		workloads: make(map[string]*Workload),
 		routes:    make(map[string]*Route),
 		regions:   make(map[string]*Region),
 		apikeys:   make(map[string]*APIKey),
 	}
-	if path == "" {
-		return s, nil // in-memory
-	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
-	b, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
+	b, err := p.Load()
 	if err != nil {
 		return nil, err
 	}
@@ -223,7 +218,7 @@ func Open(path string) (*FileStore, error) {
 
 // ---- API keys ----
 
-func (s *FileStore) PutAPIKey(ak *APIKey) error {
+func (s *memStore) PutAPIKey(ak *APIKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *ak
@@ -231,7 +226,7 @@ func (s *FileStore) PutAPIKey(ak *APIKey) error {
 	return s.flushLocked()
 }
 
-func (s *FileStore) ListAPIKeys() []*APIKey {
+func (s *memStore) ListAPIKeys() []*APIKey {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*APIKey, 0, len(s.apikeys))
@@ -243,7 +238,7 @@ func (s *FileStore) ListAPIKeys() []*APIKey {
 	return out
 }
 
-func (s *FileStore) DeleteAPIKey(id string) error {
+func (s *memStore) DeleteAPIKey(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.apikeys[id]; !ok {
@@ -255,7 +250,7 @@ func (s *FileStore) DeleteAPIKey(id string) error {
 
 // ---- Regions ----
 
-func (s *FileStore) PutRegion(rg *Region) error {
+func (s *memStore) PutRegion(rg *Region) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *rg
@@ -263,7 +258,7 @@ func (s *FileStore) PutRegion(rg *Region) error {
 	return s.flushLocked()
 }
 
-func (s *FileStore) GetRegion(id string) (*Region, error) {
+func (s *memStore) GetRegion(id string) (*Region, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	rg, ok := s.regions[id]
@@ -274,7 +269,7 @@ func (s *FileStore) GetRegion(id string) (*Region, error) {
 	return &cp, nil
 }
 
-func (s *FileStore) ListRegions() []*Region {
+func (s *memStore) ListRegions() []*Region {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Region, 0, len(s.regions))
@@ -286,7 +281,7 @@ func (s *FileStore) ListRegions() []*Region {
 	return out
 }
 
-func (s *FileStore) DeleteRegion(id string) error {
+func (s *memStore) DeleteRegion(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.regions[id]; !ok {
@@ -297,14 +292,14 @@ func (s *FileStore) DeleteRegion(id string) error {
 }
 
 // GetSettings returns a copy of the current platform settings.
-func (s *FileStore) GetSettings() Settings {
+func (s *memStore) GetSettings() Settings {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.settings
 }
 
 // SetSettings replaces the platform settings and flushes to disk.
-func (s *FileStore) SetSettings(st Settings) error {
+func (s *memStore) SetSettings(st Settings) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.settings = st
@@ -313,7 +308,7 @@ func (s *FileStore) SetSettings(st Settings) error {
 
 // ---- Projects ----
 
-func (s *FileStore) PutProject(p *Project) error {
+func (s *memStore) PutProject(p *Project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *p
@@ -321,7 +316,7 @@ func (s *FileStore) PutProject(p *Project) error {
 	return s.flushLocked()
 }
 
-func (s *FileStore) GetProject(id string) (*Project, error) {
+func (s *memStore) GetProject(id string) (*Project, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	p, ok := s.projects[id]
@@ -332,7 +327,7 @@ func (s *FileStore) GetProject(id string) (*Project, error) {
 	return &cp, nil
 }
 
-func (s *FileStore) ListProjects() []*Project {
+func (s *memStore) ListProjects() []*Project {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Project, 0, len(s.projects))
@@ -346,7 +341,7 @@ func (s *FileStore) ListProjects() []*Project {
 
 // DeleteProject removes a project and cascades to its workloads and their
 // routes. Callers must stop the running instances first.
-func (s *FileStore) DeleteProject(id string) error {
+func (s *memStore) DeleteProject(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.projects[id]; !ok {
@@ -364,7 +359,7 @@ func (s *FileStore) DeleteProject(id string) error {
 
 // ---- Workloads ----
 
-func (s *FileStore) PutWorkload(w *Workload) error {
+func (s *memStore) PutWorkload(w *Workload) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *w
@@ -372,7 +367,7 @@ func (s *FileStore) PutWorkload(w *Workload) error {
 	return s.flushLocked()
 }
 
-func (s *FileStore) GetWorkload(id string) (*Workload, error) {
+func (s *memStore) GetWorkload(id string) (*Workload, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	w, ok := s.workloads[id]
@@ -385,7 +380,7 @@ func (s *FileStore) GetWorkload(id string) (*Workload, error) {
 
 // ListWorkloads returns the workloads for a project (all workloads if projectID
 // is empty).
-func (s *FileStore) ListWorkloads(projectID string) []*Workload {
+func (s *memStore) ListWorkloads(projectID string) []*Workload {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Workload, 0)
@@ -399,7 +394,7 @@ func (s *FileStore) ListWorkloads(projectID string) []*Workload {
 	return out
 }
 
-func (s *FileStore) SetWorkloadState(id string, state runtime.State) error {
+func (s *memStore) SetWorkloadState(id string, state runtime.State) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	w, ok := s.workloads[id]
@@ -411,7 +406,7 @@ func (s *FileStore) SetWorkloadState(id string, state runtime.State) error {
 }
 
 // DeleteWorkload removes a workload and its routes. Caller stops the instance.
-func (s *FileStore) DeleteWorkload(id string) error {
+func (s *memStore) DeleteWorkload(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if _, ok := s.workloads[id]; !ok {
@@ -424,7 +419,7 @@ func (s *FileStore) DeleteWorkload(id string) error {
 
 // ---- Routes ----
 
-func (s *FileStore) PutRoute(r *Route) error {
+func (s *memStore) PutRoute(r *Route) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	cp := *r
@@ -434,7 +429,7 @@ func (s *FileStore) PutRoute(r *Route) error {
 }
 
 // GetRouteByHost resolves a hostname (case-insensitive) to its route.
-func (s *FileStore) GetRouteByHost(host string) (*Route, error) {
+func (s *memStore) GetRouteByHost(host string) (*Route, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	r, ok := s.routes[strings.ToLower(host)]
@@ -446,7 +441,7 @@ func (s *FileStore) GetRouteByHost(host string) (*Route, error) {
 }
 
 // GetRouteByKey resolves a subroute key to its route.
-func (s *FileStore) GetRouteByKey(key string) (*Route, error) {
+func (s *memStore) GetRouteByKey(key string) (*Route, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	key = strings.ToLower(key)
@@ -460,7 +455,7 @@ func (s *FileStore) GetRouteByKey(key string) (*Route, error) {
 }
 
 // DeleteRoute removes a single route by host.
-func (s *FileStore) DeleteRoute(host string) error {
+func (s *memStore) DeleteRoute(host string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	host = strings.ToLower(host)
@@ -471,7 +466,7 @@ func (s *FileStore) DeleteRoute(host string) error {
 	return s.flushLocked()
 }
 
-func (s *FileStore) ListRoutesForWorkload(workloadID string) []*Route {
+func (s *memStore) ListRoutesForWorkload(workloadID string) []*Route {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	out := make([]*Route, 0)
@@ -485,7 +480,7 @@ func (s *FileStore) ListRoutesForWorkload(workloadID string) []*Route {
 	return out
 }
 
-func (s *FileStore) deleteRoutesForWorkloadLocked(workloadID string) {
+func (s *memStore) deleteRoutesForWorkloadLocked(workloadID string) {
 	for host, r := range s.routes {
 		if r.WorkloadID == workloadID {
 			delete(s.routes, host)
@@ -495,14 +490,7 @@ func (s *FileStore) deleteRoutesForWorkloadLocked(workloadID string) {
 
 // flushLocked writes the whole store atomically. Caller must hold s.mu.
 // No-op in in-memory mode (empty path).
-func (s *FileStore) flushLocked() error {
-	if s.path == "" {
-		return nil
-	}
-	return s.flushToFile()
-}
-
-func (s *FileStore) flushToFile() error {
+func (s *memStore) flushLocked() error {
 	snap := snapshot{}
 	for _, p := range s.projects {
 		snap.Projects = append(snap.Projects, p)
@@ -528,9 +516,5 @@ func (s *FileStore) flushToFile() error {
 	if err != nil {
 		return err
 	}
-	tmp := s.path + ".tmp"
-	if err := os.WriteFile(tmp, b, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, s.path)
+	return s.persister.Save(b)
 }
