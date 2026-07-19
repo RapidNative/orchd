@@ -81,6 +81,9 @@ type Config struct {
 	// StateDSN, when set, stores control-plane state in Postgres instead of the
 	// local JSON file (e.g. postgres://user:pass@host/db).
 	StateDSN string
+
+	// RateLimitPerMin caps control-API requests per API key per minute (0 = off).
+	RateLimitPerMin int
 }
 
 func Load() Config {
@@ -111,6 +114,7 @@ func Load() Config {
 		BackupRetain:    envInt("ORCHD_BACKUP_RETAIN", 5),
 		MetricsInterval: envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		StateDSN:        env("ORCHD_STATE_DSN", ""),
+		RateLimitPerMin: envInt("ORCHD_RATE_LIMIT", 0),
 	}
 }
 

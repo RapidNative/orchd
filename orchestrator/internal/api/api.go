@@ -22,13 +22,14 @@ import (
 )
 
 type API struct {
-	mgr    *manager.Manager
-	cfg    config.Config
-	apiKey string // when non-empty, /v1/* requires it
+	mgr     *manager.Manager
+	cfg     config.Config
+	apiKey  string // when non-empty, /v1/* requires it
+	limiter *rateLimiter
 }
 
 func New(mgr *manager.Manager, cfg config.Config, apiKey string) *API {
-	return &API{mgr: mgr, cfg: cfg, apiKey: apiKey}
+	return &API{mgr: mgr, cfg: cfg, apiKey: apiKey, limiter: newRateLimiter(cfg.RateLimitPerMin)}
 }
 
 func (a *API) Handler() http.Handler {
@@ -107,9 +108,15 @@ func (a *API) auth(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		role, ok := a.resolveKey(presentedKey(r))
+		presented := presentedKey(r)
+		role, ok := a.resolveKey(presented)
 		if !ok {
 			writeErr(w, http.StatusUnauthorized, errors.New("missing or invalid API key"))
+			return
+		}
+		if a.limiter != nil && !a.limiter.allow(presented) {
+			w.Header().Set("Retry-After", "1")
+			writeErr(w, http.StatusTooManyRequests, errors.New("rate limit exceeded"))
 			return
 		}
 		if role == "readonly" && !isReadMethod(r.Method) {
@@ -332,12 +339,13 @@ func (a *API) workloadLogs(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
-		"region":       a.cfg.Region,
-		"driver":       a.cfg.Driver,
-		"base_domain":  a.cfg.BaseDomain,
-		"public_url":   a.cfg.PublicURL,
-		"idle_timeout": a.cfg.IdleTimeout.String(),
-		"image":        a.cfg.Image,
+		"region":             a.cfg.Region,
+		"driver":             a.cfg.Driver,
+		"base_domain":        a.cfg.BaseDomain,
+		"public_url":         a.cfg.PublicURL,
+		"idle_timeout":       a.cfg.IdleTimeout.String(),
+		"image":              a.cfg.Image,
+		"rate_limit_per_min": a.cfg.RateLimitPerMin,
 		"limits": map[string]any{
 			"tinbase_mem_mb": a.cfg.TinbaseMemMB,
 			"tinbase_cpus":   a.cfg.TinbaseCPUs,

@@ -114,7 +114,11 @@ from the admin **Settings**. Done: backup store (local/S3), events sink (memory/
       (admin/readonly), stored hashed (sha256; plaintext shown once), managed in the
       admin panel. The bootstrap file key stays the always-admin root; readonly keys
       are blocked from mutating calls (403). Verified: readonly GET 200 / POST 403,
-      admin POST 201, bogus 401. Follow-ups: rate limiting, audit already via events
+      admin POST 201, bogus 401.
+- [x] **Rate limiting** — per-API-key token bucket (`ORCHD_RATE_LIMIT` req/min) on
+      the control API; over-limit returns 429 with Retry-After. Buckets are per key,
+      so one client can't starve another. Verified: a 250-burst gave ~100 × 200 then
+      429s while another key stayed unaffected.
 
 ### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
 Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`
