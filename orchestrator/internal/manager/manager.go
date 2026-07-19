@@ -956,12 +956,20 @@ func (m *Manager) keyFor(ref, name string) string {
 }
 
 func (m *Manager) specFor(w *store.Workload) runtime.Spec {
+	// Place the workload on its region's Docker host (a worker node); empty = local.
+	dockerHost := ""
+	if p, err := m.store.GetProject(w.ProjectID); err == nil {
+		if rg, err := m.store.GetRegion(p.Region); err == nil {
+			dockerHost = rg.DockerHost
+		}
+	}
 	return runtime.Spec{
-		Type:    w.Type,
-		Ref:     w.ID, // runtime key = workload id
-		DataDir: w.DataDir,
-		Image:   w.Image,
-		Port:    w.Port,
+		Type:       w.Type,
+		Ref:        w.ID, // runtime key = workload id
+		DataDir:    w.DataDir,
+		Image:      w.Image,
+		Port:       w.Port,
+		DockerHost: dockerHost,
 		Env: map[string]string{
 			"TINBASE_JWT_SECRET": w.JWTSecret,
 		},

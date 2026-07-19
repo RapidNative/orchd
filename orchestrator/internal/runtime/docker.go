@@ -8,39 +8,34 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // DockerDriver runs each workload as a Docker container, optionally under the
-// gVisor (runsc) runtime for VM-grade isolation without KVM. This is the Linux
-// substrate for the shared box: it isolates untrusted workloads (RapidNative
-// runners, tinbase edge functions) with a userspace kernel, which — unlike
-// Firecracker/Kata — does not require nested virtualization.
+// gVisor (runsc) runtime for VM-grade isolation without KVM.
 //
-// Suspend/Start map to `docker stop`/`docker start`, so an idle project frees its
-// memory while its data (a bind-mounted volume) stays at rest and its published
-// port is preserved for a fast wake. The same Runtime interface as LocalDriver,
-// so the control plane is unchanged.
+// Suspend/Start map to `docker stop`/`docker start`. A workload may be placed on
+// a specific Docker daemon (a region's worker node) via Spec.DockerHost; the
+// driver remembers each ref's host so later ops (stop/status/logs) target the
+// right daemon, publishes remotely-placed containers on 0.0.0.0, and addresses
+// them by the node host so the gateway can reach them across nodes.
 type DockerDriver struct {
-	// Image is the container image to run (e.g. "tinbase:0.10.0").
-	Image string
-	// Runtime is the Docker runtime name. "runsc" selects gVisor; empty uses the
-	// default (runc, shared kernel).
-	Runtime string
-	// ContainerPort is the port the workload listens on inside the container.
-	ContainerPort int
-	// DockerHost, if set, points the docker CLI at a remote daemon
-	// (e.g. "ssh://root@host" or "tcp://host:2375"). Empty uses the local daemon.
-	DockerHost string
+	Image         string // container image (e.g. "tinbase:0.10.0")
+	Runtime       string // "runsc" = gVisor; empty = runc
+	ContainerPort int    // port the workload listens on inside the container
+	DockerHost    string // default daemon; empty = local
+
+	mu    sync.Mutex
+	hosts map[string]string // ref -> DockerHost it was placed on
 }
 
-// NewDockerDriver builds a DockerDriver. Empty runtime uses runc; pass "runsc"
-// for gVisor isolation.
 func NewDockerDriver(image, dockerRuntime string) *DockerDriver {
 	return &DockerDriver{
 		Image:         image,
 		Runtime:       dockerRuntime,
 		ContainerPort: 54321,
+		hosts:         make(map[string]string),
 	}
 }
 
@@ -53,9 +48,65 @@ func (d *DockerDriver) Name() string {
 
 func containerName(ref string) string { return "tb-" + ref }
 
+func (d *DockerDriver) setHost(ref, host string) {
+	d.mu.Lock()
+	d.hosts[ref] = host
+	d.mu.Unlock()
+}
+
+func (d *DockerDriver) hostFor(ref string) string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.hosts[ref]
+}
+
+// effHost resolves the daemon for an op: the per-workload host, else the default.
+func (d *DockerDriver) effHost(host string) string {
+	if host != "" {
+		return host
+	}
+	return d.DockerHost
+}
+
+func isRemote(h string) bool { return h != "" && !strings.HasPrefix(h, "unix://") }
+
+// nodeHost extracts the reachable hostname from a Docker host URL
+// (tcp://host:2375, ssh://root@host) — the address the gateway proxies to.
+func nodeHost(h string) string {
+	s := h
+	for _, p := range []string{"tcp://", "ssh://", "http://", "https://"} {
+		s = strings.TrimPrefix(s, p)
+	}
+	if i := strings.LastIndex(s, "@"); i >= 0 {
+		s = s[i+1:]
+	}
+	if i := strings.IndexByte(s, ':'); i >= 0 {
+		s = s[:i]
+	}
+	if i := strings.IndexByte(s, '/'); i >= 0 {
+		s = s[:i]
+	}
+	if s == "" {
+		return "127.0.0.1"
+	}
+	return s
+}
+
+// placement returns the port-publish bind address and the address host to use in
+// Instance.Addr for a given daemon.
+func placement(eff string) (bind, addrHost string) {
+	if isRemote(eff) {
+		return "0.0.0.0", nodeHost(eff)
+	}
+	return "127.0.0.1", "127.0.0.1"
+}
+
 func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error) {
-	// A fresh provision: remove any stale container with this name, then run.
-	_ = d.docker(ctx, "rm", "-f", containerName(spec.Ref)).Run()
+	host := spec.DockerHost
+	d.setHost(spec.Ref, host)
+	bind, addrHost := placement(d.effHost(host))
+
+	_ = d.docker(ctx, host, "rm", "-f", containerName(spec.Ref)).Run()
 
 	if err := os.MkdirAll(spec.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("data dir: %w", err)
@@ -78,14 +129,12 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 		"run", "-d",
 		"--name", containerName(spec.Ref),
 		"--restart", "no",
-		"-p", fmt.Sprintf("127.0.0.1:%d:%d", hostPort, cport),
+		"-p", fmt.Sprintf("%s:%d:%d", bind, hostPort, cport),
 		"-v", spec.DataDir + ":/data",
 	}
 	if d.Runtime != "" {
 		args = append(args, "--runtime", d.Runtime)
 	}
-	// Resource caps: one tenant cannot starve the host. --memory-swap == --memory
-	// disables swap so the cap is hard; exceeding it OOM-kills the container.
 	if m := spec.Limits.MemoryMB; m > 0 {
 		args = append(args, "--memory", fmt.Sprintf("%dm", m), "--memory-swap", fmt.Sprintf("%dm", m))
 	}
@@ -100,11 +149,11 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	}
 	args = append(args, image)
 
-	if out, err := d.docker(ctx, args...).CombinedOutput(); err != nil {
+	if out, err := d.docker(ctx, host, args...).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker run: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 
-	addr := fmt.Sprintf("127.0.0.1:%d", hostPort)
+	addr := fmt.Sprintf("%s:%d", addrHost, hostPort)
 	if err := waitHTTP(ctx, addr, 90*time.Second); err != nil {
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
@@ -112,24 +161,26 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 }
 
 func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) {
-	state, port := d.inspect(ctx, spec.Ref)
+	host := spec.DockerHost
+	d.setHost(spec.Ref, host)
+	_, addrHost := placement(d.effHost(host))
+
+	state, port := d.inspect(ctx, host, spec.Ref)
 	switch state {
 	case StateRunning:
-		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: "127.0.0.1:" + port, StartedAt: time.Now()}, nil
+		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addrHost + ":" + port, StartedAt: time.Now()}, nil
 	case StateStopped:
-		// No container exists yet — provision one.
-		return d.Create(ctx, spec)
+		return d.Create(ctx, spec) // no container yet
 	}
 
-	// Exists but stopped/suspended: start it. Docker preserves the port mapping.
-	if out, err := d.docker(ctx, "start", containerName(spec.Ref)).CombinedOutput(); err != nil {
+	if out, err := d.docker(ctx, host, "start", containerName(spec.Ref)).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker start: %w: %s", err, strings.TrimSpace(string(out)))
 	}
-	_, port = d.inspect(ctx, spec.Ref)
+	_, port = d.inspect(ctx, host, spec.Ref)
 	if port == "" {
 		return nil, fmt.Errorf("no published port after start for %s", spec.Ref)
 	}
-	addr := "127.0.0.1:" + port
+	addr := addrHost + ":" + port
 	if err := waitHTTP(ctx, addr, 90*time.Second); err != nil {
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
@@ -137,32 +188,29 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 }
 
 func (d *DockerDriver) Suspend(ctx context.Context, ref string) error {
-	// Stop frees memory but keeps the container + volume for a fast resume.
-	return d.docker(ctx, "stop", containerName(ref)).Run()
+	return d.docker(ctx, d.hostFor(ref), "stop", containerName(ref)).Run()
 }
 
 func (d *DockerDriver) Stop(ctx context.Context, ref string) error {
-	return d.docker(ctx, "rm", "-f", containerName(ref)).Run()
+	return d.docker(ctx, d.hostFor(ref), "rm", "-f", containerName(ref)).Run()
 }
 
 func (d *DockerDriver) Status(ctx context.Context, ref string) (State, error) {
-	state, _ := d.inspect(ctx, ref)
+	state, _ := d.inspect(ctx, d.hostFor(ref), ref)
 	return state, nil
 }
 
-// inspect returns the lifecycle state and published host port for a ref. A
-// missing container reports StateStopped with an empty port.
-func (d *DockerDriver) inspect(ctx context.Context, ref string) (State, string) {
+// inspect returns the lifecycle state and published host port for a ref on the
+// given daemon. A missing container reports StateStopped with an empty port.
+func (d *DockerDriver) inspect(ctx context.Context, host, ref string) (State, string) {
 	name := containerName(ref)
-	out, err := d.docker(ctx, "inspect", "-f", "{{.State.Running}}", name).Output()
+	out, err := d.docker(ctx, host, "inspect", "-f", "{{.State.Running}}", name).Output()
 	if err != nil {
-		return StateStopped, "" // no such container
+		return StateStopped, ""
 	}
 	running := strings.TrimSpace(string(out)) == "true"
 
-	// Read the published host port generically (each container publishes exactly
-	// one port), so inspect need not know the container's internal port.
-	portOut, _ := d.docker(ctx, "inspect", "-f",
+	portOut, _ := d.docker(ctx, host, "inspect", "-f",
 		`{{range $p, $conf := .NetworkSettings.Ports}}{{if $conf}}{{(index $conf 0).HostPort}}{{end}}{{end}}`,
 		name).Output()
 	port := strings.TrimSpace(string(portOut))
@@ -173,13 +221,10 @@ func (d *DockerDriver) inspect(ctx context.Context, ref string) (State, string) 
 	return StateSuspended, port
 }
 
-// waitHTTP blocks until addr returns any HTTP response. Unlike a raw TCP dial it
-// is not fooled by Docker's port-proxy, which accepts connections on the
-// published port before the container's process is actually serving.
+// waitHTTP blocks until addr returns any HTTP response (not fooled by Docker's
+// port-proxy accepting before the app serves).
 func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
-	// Any HTTP reply (even 404) means the server is up; probe root so this stays
-	// workload-agnostic rather than tinbase-specific.
 	url := "http://" + addr + "/"
 	deadline := time.Now().Add(timeout)
 	for {
@@ -190,7 +235,7 @@ func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
-			return nil // a real HTTP reply means the app is up
+			return nil
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("timed out waiting for %s: %w", addr, err)
@@ -200,7 +245,7 @@ func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 }
 
 func (d *DockerDriver) Stats(ctx context.Context, ref string) (Stats, error) {
-	out, err := d.docker(ctx, "stats", "--no-stream", "--format",
+	out, err := d.docker(ctx, d.hostFor(ref), "stats", "--no-stream", "--format",
 		"{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}", containerName(ref)).Output()
 	if err != nil {
 		return Stats{}, err
@@ -216,17 +261,17 @@ func (d *DockerDriver) Logs(ctx context.Context, ref string, tail int) (string, 
 	if tail <= 0 {
 		tail = 200
 	}
-	// CombinedOutput merges the container's stdout+stderr, which is what a log
-	// pane wants; on a missing container docker's error text is returned too.
-	out, _ := d.docker(ctx, "logs", "--tail", strconv.Itoa(tail), containerName(ref)).CombinedOutput()
+	out, _ := d.docker(ctx, d.hostFor(ref), "logs", "--tail", strconv.Itoa(tail), containerName(ref)).CombinedOutput()
 	return string(out), nil
 }
 
-func (d *DockerDriver) docker(ctx context.Context, args ...string) *exec.Cmd {
+// docker builds a docker CLI command targeting the given daemon (host), falling
+// back to the driver default.
+func (d *DockerDriver) docker(ctx context.Context, host string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Env = os.Environ()
-	if d.DockerHost != "" {
-		cmd.Env = append(cmd.Env, "DOCKER_HOST="+d.DockerHost)
+	if eff := d.effHost(host); eff != "" {
+		cmd.Env = append(cmd.Env, "DOCKER_HOST="+eff)
 	}
 	return cmd
 }

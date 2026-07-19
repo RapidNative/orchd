@@ -58,6 +58,12 @@ type Spec struct {
 	// default (54321 for tinbase).
 	Port int
 
+	// DockerHost places this workload on a specific Docker daemon (a region's
+	// worker node), e.g. tcp://node2:2375 or ssh://root@node2. Empty = the driver
+	// default (local). The DockerDriver publishes remotely-placed containers on
+	// 0.0.0.0 and addresses them by the node host.
+	DockerHost string
+
 	// Env is passed to the workload process/VM (JWT secret, engine, secrets).
 	Env map[string]string
 

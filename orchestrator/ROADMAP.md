@@ -138,7 +138,15 @@ gVisor covers isolation until then.
 - [ ] data on a per-project virtio-block device, decoupled from instance lifecycle
 
 ### Phase 3 — Multi-node, one region
-- [ ] Scheduler / placement across nodes (custom now; evaluate Nomad vs k8s+Kata later)
+- [x] **Per-region placement** — a workload runs on its region's `docker_host`
+      (a worker node's Docker daemon); the driver remembers each ref's host for
+      later ops, publishes remotely-placed containers on 0.0.0.0, and addresses
+      them by the node host so the gateway reaches them across nodes. Verified on
+      one box via a TCP-exposed daemon (a stand-in node): container placed via the
+      remote daemon, gateway served it (200). Still needed for real multi-node:
+      **data locality** (the bind-mounted volume + backups live on the worker) and
+      a **private network / firewall** between control and worker nodes.
+- [ ] Scheduler / bin-packing across many nodes (placement exists; needs a policy)
 - [x] **Store is now an interface** (`store.Store`) — `FileStore` (JSON file, or
       in-memory when the path is empty) is the only impl today, but the manager and
       API depend only on the interface, so a **SQLite/Postgres adaptor drops in**
