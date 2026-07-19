@@ -8,6 +8,107 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
+import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
+import { IconTrash } from '@/components/icons'
+import { api as API } from '@/lib/api'
+
+function RegionsCard() {
+  const qc = useQueryClient()
+  const regions = useQuery({ queryKey: ['regions'], queryFn: API.regions })
+  const [name, setName] = useState('')
+  const [host, setHost] = useState('')
+  const inval = () => qc.invalidateQueries({ queryKey: ['regions'] })
+  const add = useMutation({
+    mutationFn: () => API.createRegion(name, host || undefined),
+    onSuccess: () => {
+      setName('')
+      setHost('')
+      inval()
+    },
+  })
+  const del = useMutation({ mutationFn: (id: string) => API.deleteRegion(id), onSuccess: inval })
+  const setDefault = useMutation({
+    mutationFn: (id: string) => API.setDefaultRegion(id),
+    onSuccess: inval,
+  })
+
+  return (
+    <Card className="mb-6 max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">Regions</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <THead>
+            <TR>
+              <TH>Region</TH>
+              <TH>Docker host</TH>
+              <TH></TH>
+              <TH></TH>
+            </TR>
+          </THead>
+          <TBody>
+            {(regions.data ?? []).map((rg) => (
+              <TR key={rg.id}>
+                <TD>
+                  <span className="font-mono">{rg.id}</span>
+                  {rg.is_default && (
+                    <Badge variant="running" className="ml-2">
+                      default
+                    </Badge>
+                  )}
+                </TD>
+                <TD className="font-mono text-xs text-muted-foreground">
+                  {rg.docker_host || 'local'}
+                </TD>
+                <TD className="text-right">
+                  {!rg.is_default && (
+                    <Button size="sm" variant="ghost" onClick={() => setDefault.mutate(rg.id)}>
+                      Set default
+                    </Button>
+                  )}
+                </TD>
+                <TD className="text-right">
+                  <Button
+                    size="sm"
+                    variant="destructive"
+                    disabled={rg.is_default}
+                    title={rg.is_default ? 'set another default first' : 'delete region'}
+                    onClick={() => del.mutate(rg.id)}
+                  >
+                    <IconTrash />
+                  </Button>
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Input
+            className="max-w-40"
+            placeholder="name (e.g. eu-west)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <Input
+            className="max-w-64"
+            placeholder="docker host (optional, e.g. ssh://root@node2)"
+            value={host}
+            onChange={(e) => setHost(e.target.value)}
+          />
+          <Button onClick={() => add.mutate()} disabled={add.isPending || !name.trim()}>
+            Add region
+          </Button>
+          {add.isError && <span className="text-sm text-destructive">{(add.error as Error).message}</span>}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          A region maps to a data plane. Today all run on this box; a docker host points a region at
+          a remote worker node (the seam for multi-node).
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
 
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
@@ -54,7 +155,9 @@ export function Settings() {
 
   return (
     <div>
-      <PageHeader title="Settings" subtitle="Backup destination" />
+      <PageHeader title="Settings" subtitle="Regions, backups, notifications" />
+
+      <RegionsCard />
 
       <Card className="max-w-2xl">
         <CardHeader className="flex-row items-center justify-between">

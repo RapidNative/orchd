@@ -63,6 +63,14 @@ export interface Event {
   message?: string
 }
 
+export interface Region {
+  id: string
+  name: string
+  docker_host?: string
+  is_default: boolean
+  created_at: string
+}
+
 export interface Info {
   region: string
   driver: string

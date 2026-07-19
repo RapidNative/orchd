@@ -25,6 +25,17 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
+// Region is a placement target. Today all regions run on the local box; the
+// DockerHost field is the seam for pointing a region at a remote worker node
+// (the DockerDriver already accepts a remote daemon), enabling multi-node later.
+type Region struct {
+	ID         string    `json:"id"`
+	Name       string    `json:"name"`
+	DockerHost string    `json:"docker_host,omitempty"`
+	IsDefault  bool      `json:"is_default"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
 // Project is a logical grouping of workloads under one tenant. Its ID is a
 // DNS-label-safe short ref used as the subdomain prefix for its workloads.
 type Project struct {
@@ -94,6 +105,7 @@ type Store struct {
 	projects  map[string]*Project
 	workloads map[string]*Workload
 	routes    map[string]*Route // key: lowercased host
+	regions   map[string]*Region
 	settings  Settings
 }
 
@@ -101,6 +113,7 @@ type snapshot struct {
 	Projects  []*Project  `json:"projects"`
 	Workloads []*Workload `json:"workloads"`
 	Routes    []*Route    `json:"routes"`
+	Regions   []*Region   `json:"regions"`
 	Settings  Settings    `json:"settings"`
 }
 
@@ -111,6 +124,7 @@ func Open(path string) (*Store, error) {
 		projects:  make(map[string]*Project),
 		workloads: make(map[string]*Workload),
 		routes:    make(map[string]*Route),
+		regions:   make(map[string]*Region),
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -136,9 +150,55 @@ func Open(path string) (*Store, error) {
 		for _, r := range snap.Routes {
 			s.routes[strings.ToLower(r.Host)] = r
 		}
+		for _, rg := range snap.Regions {
+			s.regions[rg.ID] = rg
+		}
 		s.settings = snap.Settings
 	}
 	return s, nil
+}
+
+// ---- Regions ----
+
+func (s *Store) PutRegion(rg *Region) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *rg
+	s.regions[rg.ID] = &cp
+	return s.flushLocked()
+}
+
+func (s *Store) GetRegion(id string) (*Region, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	rg, ok := s.regions[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *rg
+	return &cp, nil
+}
+
+func (s *Store) ListRegions() []*Region {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Region, 0, len(s.regions))
+	for _, rg := range s.regions {
+		cp := *rg
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out
+}
+
+func (s *Store) DeleteRegion(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.regions[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.regions, id)
+	return s.flushLocked()
 }
 
 // GetSettings returns a copy of the current platform settings.
@@ -337,6 +397,9 @@ func (s *Store) flushLocked() error {
 	}
 	for _, r := range s.routes {
 		snap.Routes = append(snap.Routes, r)
+	}
+	for _, rg := range s.regions {
+		snap.Regions = append(snap.Regions, rg)
 	}
 	snap.Settings = s.settings
 	sort.Slice(snap.Projects, func(i, j int) bool { return snap.Projects[i].CreatedAt.Before(snap.Projects[j].CreatedAt) })

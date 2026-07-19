@@ -54,6 +54,10 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/backups/{id}", a.deleteBackup)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
 	mux.HandleFunc("GET /v1/info", a.info)
+	mux.HandleFunc("GET /v1/regions", a.listRegions)
+	mux.HandleFunc("POST /v1/regions", a.createRegion)
+	mux.HandleFunc("DELETE /v1/regions/{id}", a.deleteRegion)
+	mux.HandleFunc("POST /v1/regions/{id}/default", a.setDefaultRegion)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
@@ -196,6 +200,7 @@ func (a *API) projectView(p *store.Project) projectView {
 func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string            `json:"name"`
+		Region    string            `json:"region"`
 		Workloads []workloadSpecReq `json:"workloads"`
 	}
 	if r.ContentLength > 0 {
@@ -205,7 +210,7 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	for _, ws := range body.Workloads {
 		specs = append(specs, ws.toSpec())
 	}
-	proj, _, err := a.mgr.CreateProject(r.Context(), body.Name, specs)
+	proj, _, err := a.mgr.CreateProject(r.Context(), body.Name, body.Region, specs)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -372,6 +377,47 @@ func (a *API) deleteBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) listRegions(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, a.mgr.ListRegions())
+}
+
+func (a *API) createRegion(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name       string `json:"name"`
+		DockerHost string `json:"docker_host"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	rg, err := a.mgr.CreateRegion(body.Name, body.DockerHost)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, rg)
+}
+
+func (a *API) deleteRegion(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.DeleteRegion(r.PathValue("id")); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (a *API) setDefaultRegion(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.SetDefaultRegion(r.PathValue("id")); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"default": r.PathValue("id")})
 }
 
 func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {

@@ -94,9 +94,11 @@ the same control plane / gateway / driver:
 ### Adaptors & admin settings (make replaceable components pluggable + configurable)
 Everything replaceable should be an adaptor behind an interface, selectable/config
 from the admin **Settings**. Done: backup store (local/S3), events sink (memory/webhook).
-- [ ] **Regions CRUD in the admin panel** — currently a single hardcoded `local`
-      region; make regions first-class (create/list/delete), each mapping to a
-      node/data plane, so projects can be placed per region (prereq for multi-region)
+- [x] **Regions CRUD in the admin panel** — regions are first-class entities
+      (create/list/delete/set-default), seeded with `local`, each carrying a
+      `docker_host` seam for a remote worker node. Projects are placed in a region
+      (default or chosen at create). All run on this box until multi-node placement
+      + cross-node routing land (Phase 3)
 - [ ] DNS provider adaptor (manual / Cloudflare / Vercel) for custom domains
 - [ ] Mailer adaptor surfaced per project (console / SMTP / webhook)
 - [ ] Metrics sink adaptor (none / log / statsd / prometheus)

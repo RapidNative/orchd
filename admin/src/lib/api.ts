@@ -5,6 +5,7 @@ import type {
   Event,
   Info,
   Project,
+  Region,
   SettingsResp,
   Stats,
   WorkloadSpecReq,
@@ -47,8 +48,13 @@ export const api = {
   info: () => req<Info>('/v1/info'),
   projects: () => req<Project[]>('/v1/projects'),
   project: (id: string) => req<Project>('/v1/projects/' + id),
-  createProject: (body: { name?: string; workloads?: WorkloadSpecReq[] }) =>
+  createProject: (body: { name?: string; region?: string; workloads?: WorkloadSpecReq[] }) =>
     req<Project>('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+  regions: () => req<Region[]>('/v1/regions'),
+  createRegion: (name: string, docker_host?: string) =>
+    req<Region>('/v1/regions', { method: 'POST', body: JSON.stringify({ name, docker_host }) }),
+  deleteRegion: (id: string) => req<null>('/v1/regions/' + id, { method: 'DELETE' }),
+  setDefaultRegion: (id: string) => req('/v1/regions/' + id + '/default', { method: 'POST' }),
   deleteProject: (id: string) => req<null>('/v1/projects/' + id, { method: 'DELETE' }),
   addWorkload: (id: string, body: WorkloadSpecReq) =>
     req('/v1/projects/' + id + '/workloads', { method: 'POST', body: JSON.stringify(body) }),

@@ -90,7 +90,103 @@ func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
 	m.applyWebhookSettings()
+	m.seedRegions()
 	return m
+}
+
+// ---- regions ----
+
+func (m *Manager) seedRegions() {
+	if len(m.store.ListRegions()) > 0 {
+		return
+	}
+	id := slug(m.cfg.Region)
+	if id == "" {
+		id = "local"
+	}
+	_ = m.store.PutRegion(&store.Region{ID: id, Name: m.cfg.Region, IsDefault: true, CreatedAt: time.Now()})
+}
+
+func (m *Manager) ListRegions() []*store.Region { return m.store.ListRegions() }
+
+func (m *Manager) defaultRegionID() string {
+	regions := m.store.ListRegions()
+	for _, rg := range regions {
+		if rg.IsDefault {
+			return rg.ID
+		}
+	}
+	if len(regions) > 0 {
+		return regions[0].ID
+	}
+	return slug(m.cfg.Region)
+}
+
+func (m *Manager) CreateRegion(name, dockerHost string) (*store.Region, error) {
+	name = strings.TrimSpace(name)
+	id := slug(name)
+	if id == "" {
+		return nil, fmt.Errorf("valid region name required")
+	}
+	if _, err := m.store.GetRegion(id); err == nil {
+		return nil, fmt.Errorf("region %q already exists", id)
+	}
+	rg := &store.Region{
+		ID: id, Name: name, DockerHost: dockerHost,
+		IsDefault: len(m.store.ListRegions()) == 0, CreatedAt: time.Now(),
+	}
+	if err := m.store.PutRegion(rg); err != nil {
+		return nil, err
+	}
+	m.emit("region.created", "", "", id)
+	return rg, nil
+}
+
+func (m *Manager) DeleteRegion(id string) error {
+	rg, err := m.store.GetRegion(id)
+	if err != nil {
+		return err
+	}
+	if rg.IsDefault {
+		return fmt.Errorf("cannot delete the default region; set another default first")
+	}
+	if err := m.store.DeleteRegion(id); err != nil {
+		return err
+	}
+	m.emit("region.deleted", "", "", id)
+	return nil
+}
+
+func (m *Manager) SetDefaultRegion(id string) error {
+	if _, err := m.store.GetRegion(id); err != nil {
+		return err
+	}
+	for _, rg := range m.store.ListRegions() {
+		want := rg.ID == id
+		if rg.IsDefault != want {
+			rg.IsDefault = want
+			_ = m.store.PutRegion(rg)
+		}
+	}
+	return nil
+}
+
+// slug lowercases a name and turns runs of non-alphanumerics into single dashes.
+func slug(s string) string {
+	s = strings.ToLower(strings.TrimSpace(s))
+	var b strings.Builder
+	prevDash := false
+	for _, r := range s {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		case b.Len() > 0 && !prevDash:
+			b.WriteByte('-')
+			prevDash = true
+		}
+	}
+	return strings.TrimRight(b.String(), "-")
 }
 
 // ---- events / activity ----
@@ -191,12 +287,17 @@ func (m *Manager) SetBackupTarget(t store.BackupTarget) error {
 // CreateProject creates a project grouping and provisions its workloads. With no
 // specs it defaults to a single primary tinbase workload, preserving the simple
 // "one project, one backend" case.
-func (m *Manager) CreateProject(ctx context.Context, name string, specs []WorkloadSpec) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateProject(ctx context.Context, name, regionID string, specs []WorkloadSpec) (*store.Project, []*store.Workload, error) {
+	if regionID == "" {
+		regionID = m.defaultRegionID()
+	} else if _, err := m.store.GetRegion(regionID); err != nil {
+		return nil, nil, fmt.Errorf("region %q: %w", regionID, err)
+	}
 	ref, err := newRef()
 	if err != nil {
 		return nil, nil, err
 	}
-	proj := &store.Project{ID: ref, Name: name, Region: m.cfg.Region, CreatedAt: time.Now()}
+	proj := &store.Project{ID: ref, Name: name, Region: regionID, CreatedAt: time.Now()}
 	if err := m.store.PutProject(proj); err != nil {
 		return nil, nil, err
 	}

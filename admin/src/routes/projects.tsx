@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { api } from '@/lib/api'
@@ -13,9 +14,12 @@ export function Projects() {
   const qc = useQueryClient()
   const navigate = useNavigate()
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 5000 })
+  const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions })
+  const [region, setRegion] = useState('')
 
   const create = useMutation({
-    mutationFn: (body: Parameters<typeof api.createProject>[0]) => api.createProject(body),
+    mutationFn: (body: Parameters<typeof api.createProject>[0]) =>
+      api.createProject({ ...body, region: region || undefined }),
     onSuccess: (p) => {
       qc.invalidateQueries({ queryKey: ['projects'] })
       navigate({ to: '/projects/$id', params: { id: p.id } })
@@ -29,6 +33,20 @@ export function Projects() {
         subtitle="Each project is one or more scale-to-zero workloads"
         actions={
           <>
+            <select
+              value={region}
+              onChange={(e) => setRegion(e.target.value)}
+              title="Region for new projects"
+              className="h-9 rounded-md border border-border bg-input px-2 font-mono text-xs text-foreground"
+            >
+              <option value="">default region</option>
+              {(regions.data ?? []).map((rg) => (
+                <option key={rg.id} value={rg.id}>
+                  {rg.id}
+                  {rg.is_default ? ' (default)' : ''}
+                </option>
+              ))}
+            </select>
             <Button
               variant="secondary"
               onClick={() => projects.refetch()}
