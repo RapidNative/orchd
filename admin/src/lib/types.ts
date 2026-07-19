@@ -51,6 +51,16 @@ export interface BackupTarget {
 export interface SettingsResp {
   backup: BackupTarget
   backup_secret_set: boolean
+  webhook: { url: string }
+}
+
+export interface Event {
+  id: string
+  time: string
+  type: string
+  project_id?: string
+  workload_id?: string
+  message?: string
 }
 
 export interface Info {

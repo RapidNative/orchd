@@ -78,6 +78,11 @@ export const IconCopy = (p: P) => (
     <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
   </S>
 )
+export const IconActivity = (p: P) => (
+  <S {...p}>
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </S>
+)
 export const IconLogout = (p: P) => (
   <S {...p}>
     <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />

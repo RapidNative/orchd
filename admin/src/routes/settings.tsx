@@ -25,11 +25,20 @@ export function Settings() {
 
   const [t, setT] = useState<BackupTarget>({ type: 'local' })
   const [secret, setSecret] = useState('')
+  const [webhook, setWebhook] = useState('')
   const secretSet = settings.data?.backup_secret_set
 
   useEffect(() => {
-    if (settings.data) setT({ ...settings.data.backup, type: settings.data.backup.type || 'local' })
+    if (settings.data) {
+      setT({ ...settings.data.backup, type: settings.data.backup.type || 'local' })
+      setWebhook(settings.data.webhook?.url ?? '')
+    }
   }, [settings.data])
+
+  const saveWebhook = useMutation({
+    mutationFn: () => api.setWebhook(webhook),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+  })
 
   const save = useMutation({
     mutationFn: () => api.setBackupTarget({ ...t, secret_key: secret || undefined }),
@@ -119,6 +128,28 @@ export function Settings() {
             Saving validates the target and switches the live backup store — new backups go here
             immediately. The secret is stored on the orchestrator and never returned by the API.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6 max-w-2xl">
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle className="text-base">Event webhook</CardTitle>
+          <Badge variant={webhook ? 'running' : 'neutral'}>{webhook ? 'on' : 'off'}</Badge>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Field label="Webhook URL" hint="control-plane events (project/backup/restore …) are POSTed here as JSON. Blank = off.">
+            <Input
+              value={webhook}
+              onChange={(e) => setWebhook(e.target.value)}
+              placeholder="https://example.com/hooks/tinbase"
+            />
+          </Field>
+          <div className="flex items-center gap-3">
+            <Button onClick={() => saveWebhook.mutate()} disabled={saveWebhook.isPending}>
+              {saveWebhook.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            {saveWebhook.isSuccess && <span className="text-sm text-primary">Saved.</span>}
+          </div>
         </CardContent>
       </Card>
     </div>

@@ -22,6 +22,7 @@ import (
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/events"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
@@ -35,6 +36,9 @@ type Manager struct {
 	store   *store.Store
 	rt      runtime.Runtime
 	backups backup.Store // nil when backups are disabled
+
+	mem  *events.MemorySink // activity feed (always on)
+	sink events.Sink        // fan-out sink (mem + optional webhook)
 
 	mu       sync.Mutex
 	live     map[string]*liveInstance // workloadID -> running instance
@@ -80,11 +84,55 @@ func New(cfg config.Config, st *store.Store, rt runtime.Runtime) *Manager {
 		cfg:      cfg,
 		store:    st,
 		rt:       rt,
+		mem:      events.NewMemorySink(500),
 		live:     make(map[string]*liveInstance),
 		refLocks: make(map[string]*sync.Mutex),
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
+	m.applyWebhookSettings()
 	return m
+}
+
+// ---- events / activity ----
+
+func (m *Manager) emit(evType, projectID, workloadID, msg string) {
+	m.mu.Lock()
+	sink := m.sink
+	m.mu.Unlock()
+	if sink == nil {
+		return
+	}
+	sink.Emit(events.Event{
+		ID: events.NewID(), Time: time.Now().UTC(), Type: evType,
+		ProjectID: projectID, WorkloadID: workloadID, Message: msg,
+	})
+}
+
+func (m *Manager) applyWebhookSettings() {
+	url := m.store.GetSettings().Webhook.URL
+	m.mu.Lock()
+	if url != "" {
+		m.sink = events.NewMultiSink(m.mem, events.NewWebhookSink(url))
+	} else {
+		m.sink = m.mem
+	}
+	m.mu.Unlock()
+}
+
+// Events returns up to n recent activity events, newest first.
+func (m *Manager) Events(n int) []events.Event { return m.mem.Recent(n) }
+
+// GetWebhook / SetWebhook manage the event webhook URL.
+func (m *Manager) GetWebhook() string { return m.store.GetSettings().Webhook.URL }
+
+func (m *Manager) SetWebhook(url string) error {
+	s := m.store.GetSettings()
+	s.Webhook.URL = url
+	if err := m.store.SetSettings(s); err != nil {
+		return err
+	}
+	m.applyWebhookSettings()
+	return nil
 }
 
 // backupStore returns the current backup store (nil = disabled), guarded so it
@@ -164,6 +212,7 @@ func (m *Manager) CreateProject(ctx context.Context, name string, specs []Worklo
 		}
 		created = append(created, w)
 	}
+	m.emit("project.created", proj.ID, "", name)
 	return proj, created, nil
 }
 
@@ -260,6 +309,7 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 	_ = m.store.SetWorkloadState(wid, runtime.StateRunning)
 	m.markLive(wid, inst.Addr)
 
+	m.emit("workload.created", proj.ID, wid, ws.Name)
 	return m.store.GetWorkload(wid)
 }
 
@@ -362,6 +412,7 @@ func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
 		return err
 	}
 	m.reclaimPath(filepath.Join(m.cfg.DataRoot, "projects", projectID))
+	m.emit("project.deleted", projectID, "", "")
 	return nil
 }
 
@@ -377,6 +428,7 @@ func (m *Manager) DeleteWorkload(ctx context.Context, workloadID string) error {
 		return err
 	}
 	m.reclaimPath(w.DataDir)
+	m.emit("workload.deleted", w.ProjectID, workloadID, w.Name)
 	return nil
 }
 
@@ -459,6 +511,7 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 		return backup.Backup{}, err
 	}
 	_ = bk.Retain(workloadID, m.cfg.BackupRetain)
+	m.emit("backup.created", w.ProjectID, workloadID, b.ID)
 	return b, nil
 }
 
@@ -528,6 +581,7 @@ func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID stri
 	}
 	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
 	m.markLive(workloadID, inst.Addr)
+	m.emit("backup.restored", w.ProjectID, workloadID, backupID)
 	return nil
 }
 

@@ -2,6 +2,7 @@ import { Link, Outlet } from '@tanstack/react-router'
 import { auth, useApiKey } from '@/lib/auth'
 import { KeyGate } from './key-gate'
 import {
+  IconActivity,
   IconBackups,
   IconDashboard,
   IconDatabase,
@@ -14,6 +15,7 @@ const nav = [
   { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true },
   { to: '/projects', label: 'Projects', Icon: IconProjects, exact: false },
   { to: '/backups', label: 'Backups', Icon: IconBackups, exact: false },
+  { to: '/activity', label: 'Activity', Icon: IconActivity, exact: false },
   { to: '/system', label: 'System', Icon: IconDatabase, exact: false },
   { to: '/settings', label: 'Settings', Icon: IconSettings, exact: false },
 ]

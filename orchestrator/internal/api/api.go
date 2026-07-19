@@ -56,6 +56,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/info", a.info)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
+	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
+	mux.HandleFunc("GET /v1/events", a.events)
 	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
 	mux.HandleFunc("GET /internal/tls-allow", a.tlsAllow)
 	return a.auth(mux)
@@ -376,7 +378,36 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 	t := a.mgr.GetBackupTarget()
 	secretSet := t.SecretKey != ""
 	t.SecretKey = "" // never return the secret
-	writeJSON(w, http.StatusOK, map[string]any{"backup": t, "backup_secret_set": secretSet})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"backup":            t,
+		"backup_secret_set": secretSet,
+		"webhook":           map[string]string{"url": a.mgr.GetWebhook()},
+	})
+}
+
+func (a *API) setWebhook(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		URL string `json:"url"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetWebhook(body.URL); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"url": body.URL})
+}
+
+func (a *API) events(w http.ResponseWriter, r *http.Request) {
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	writeJSON(w, http.StatusOK, a.mgr.Events(limit))
 }
 
 func (a *API) setBackupTarget(w http.ResponseWriter, r *http.Request) {

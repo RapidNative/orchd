@@ -67,9 +67,15 @@ type BackupTarget struct {
 	SecretKey string `json:"secret_key,omitempty"`
 }
 
+// Webhook forwards platform events to an external URL (empty = off).
+type Webhook struct {
+	URL string `json:"url,omitempty"`
+}
+
 // Settings is the mutable platform configuration set at runtime (via the admin).
 type Settings struct {
-	Backup BackupTarget `json:"backup"`
+	Backup  BackupTarget `json:"backup"`
+	Webhook Webhook      `json:"webhook"`
 }
 
 // Route maps a workload to a hostname and a stable key. Host drives subdomain

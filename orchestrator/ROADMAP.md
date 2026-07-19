@@ -86,7 +86,21 @@ the same control plane / gateway / driver:
       fleet-wide; fair-use quota accounting
 - [x] **Data-dir reclaim on delete** — deleting a project/workload now removes its
       on-disk volume (guarded to stay within the data root), not just the record
+- [x] **Events / audit + webhook adaptor** — control-plane actions emit events to a
+      pluggable `Sink` (MemorySink activity feed + optional WebhookSink, fan-out via
+      MultiSink). Admin: Activity page + webhook URL setting. Adaptor pattern, admin-configurable
 - [ ] Structured per-project logs/metrics (replace shared stderr)
+
+### Adaptors & admin settings (make replaceable components pluggable + configurable)
+Everything replaceable should be an adaptor behind an interface, selectable/config
+from the admin **Settings**. Done: backup store (local/S3), events sink (memory/webhook).
+- [ ] **Regions CRUD in the admin panel** — currently a single hardcoded `local`
+      region; make regions first-class (create/list/delete), each mapping to a
+      node/data plane, so projects can be placed per region (prereq for multi-region)
+- [ ] DNS provider adaptor (manual / Cloudflare / Vercel) for custom domains
+- [ ] Mailer adaptor surfaced per project (console / SMTP / webhook)
+- [ ] Metrics sink adaptor (none / log / statsd / prometheus)
+- [ ] Control-plane auth adaptor (single key today → multiple keys + roles)
 
 ### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
 Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`

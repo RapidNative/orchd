@@ -2,6 +2,7 @@ import { auth } from './auth'
 import type {
   Backup,
   BackupTarget,
+  Event,
   Info,
   Project,
   SettingsResp,
@@ -72,4 +73,7 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(t),
     }),
+  setWebhook: (url: string) =>
+    req<{ url: string }>('/v1/settings/webhook', { method: 'PUT', body: JSON.stringify({ url }) }),
+  events: (limit = 100) => req<Event[]>('/v1/events?limit=' + limit),
 }
