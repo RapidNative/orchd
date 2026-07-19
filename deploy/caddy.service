@@ -1,0 +1,16 @@
+# /etc/systemd/system/caddy.service
+# TimeoutStopSec bounds Caddy's "eternal" shutdown grace so restarts do not hang.
+# HOME gives it a stable cert/ACME storage dir (/root/.local/share/caddy).
+[Unit]
+Description=Caddy (tinbase-cloud front door)
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+Restart=on-failure
+TimeoutStopSec=20
+Environment=HOME=/root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target

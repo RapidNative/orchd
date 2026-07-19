@@ -1,12 +1,10 @@
 # Caddy front door.
 #
 # cloud.rapidnative.com — behind Cloudflare, self-signed origin cert (tls internal).
-# tinbase.dev subdomains — direct A record, real Let's Encrypt certs:
-#   admin.tinbase.dev -> admin UI (+ same-origin /api proxy)
-#   api.tinbase.dev   -> control-plane API (key-protected)
-#   *.tinbase.dev     -> gateway (host-based workload routing), cert issued on
-#                        demand, gated by orchd's /internal/tls-allow so only real
-#                        project hosts (and admin/api) can trigger issuance.
+# *.tinbase.dev — direct A record; a single on-demand-TLS block issues real
+#   Let's Encrypt certs per hostname on the TLS handshake, gated by orchd's
+#   /internal/tls-allow (so only admin/api/real workload hosts get a cert).
+#   Host matchers dispatch admin/api; everything else is a workload on the gateway.
 {
 	auto_https disable_redirects
 	on_demand_tls {
@@ -14,7 +12,7 @@
 	}
 }
 
-(site) {
+(cloudsite) {
 	handle_path /api/* {
 		reverse_proxy 127.0.0.1:8080
 	}
@@ -34,32 +32,37 @@
 }
 
 http://cloud.rapidnative.com {
-	import site
+	import cloudsite
 }
 
 https://cloud.rapidnative.com {
 	tls internal
-	import site
-}
-
-admin.tinbase.dev {
-	handle_path /api/* {
-		reverse_proxy 127.0.0.1:8080
-	}
-	handle {
-		root * /opt/tinbase-cloud/admin
-		try_files {path} /index.html
-		file_server
-	}
-}
-
-api.tinbase.dev {
-	reverse_proxy 127.0.0.1:8080
+	import cloudsite
 }
 
 *.tinbase.dev {
 	tls {
 		on_demand
 	}
-	reverse_proxy 127.0.0.1:8081
+
+	@admin host admin.tinbase.dev
+	@api host api.tinbase.dev
+
+	handle @admin {
+		handle_path /api/* {
+			reverse_proxy 127.0.0.1:8080
+		}
+		handle {
+			root * /opt/tinbase-cloud/admin
+			try_files {path} /index.html
+			file_server
+		}
+	}
+	handle @api {
+		reverse_proxy 127.0.0.1:8080
+	}
+	# every other subdomain -> gateway (host-based workload routing)
+	handle {
+		reverse_proxy 127.0.0.1:8081
+	}
 }

@@ -1,0 +1,22 @@
+# /etc/systemd/system/orchd.service
+[Unit]
+Description=tinbase-cloud orchestrator
+After=docker.service
+Requires=docker.service
+
+[Service]
+WorkingDirectory=/opt/tinbase-cloud
+Environment=ORCHD_DRIVER=docker
+Environment=ORCHD_DATA_ROOT=/opt/tinbase-cloud/data
+Environment=ORCHD_IMAGE=tinbase:0.10.0
+Environment=ORCHD_DOCKER_RUNTIME=runsc
+Environment=ORCHD_IDLE_TIMEOUT=120s
+Environment=ORCHD_API_KEY_FILE=/opt/tinbase-cloud/secrets/admin.key
+Environment=ORCHD_BASE_DOMAIN=tinbase.dev
+Environment=ORCHD_PUBLIC_SCHEME=https
+Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
+ExecStart=/opt/tinbase-cloud/orchd
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
