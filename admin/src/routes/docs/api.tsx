@@ -166,10 +166,11 @@ const GROUPS: Group[] = [
         method: 'GET',
         path: '/v1/images',
         role: 'readonly',
-        desc: 'List images on a region’s Docker host (excludes dangling layers).',
+        desc: 'List images on a region’s Docker host (excludes dangling layers). `digest` is the stable content identity to pin against (registry manifest digest, or the config digest for locally built images); `ref`/`id` are the mutable, human-readable pointers.',
         params: 'region=<id> (optional)',
         res: `[ { "repository": "rn-vite", "tag": "dev", "ref": "rn-vite:dev",
-    "id": "a1b2c3d4e5f6", "size": "412MB", "created_at": "2 days ago" } ]`,
+    "id": "a1b2c3d4e5f6", "digest": "sha256:9f86d081…", "size": "412MB",
+    "created_at": "2 days ago" } ]`,
       },
       {
         method: 'POST',

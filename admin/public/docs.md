@@ -357,9 +357,15 @@ default region).
 
 #### `GET /v1/images` — *any key*
 List images on a region's Docker host (excludes dangling layers). Params: `region=<id>` (optional).
+
+`digest` is the **stable content identity** to pin against — the registry manifest digest, or the
+config digest for locally built/loaded images. It is driver-neutral: any registry-backed runtime
+(Docker today, firecracker-containerd later) can report it. `ref` / `id` are the mutable,
+human-readable pointers.
 ```json
 [ { "repository": "rn-vite", "tag": "dev", "ref": "rn-vite:dev",
-    "id": "a1b2c3d4e5f6", "size": "412MB", "created_at": "2 days ago" } ]
+    "id": "a1b2c3d4e5f6", "digest": "sha256:9f86d081…", "size": "412MB",
+    "created_at": "2 days ago" } ]
 ```
 
 #### `POST /v1/images/pull` — *admin key*

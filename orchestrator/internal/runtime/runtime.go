@@ -96,13 +96,18 @@ type Stats struct {
 	CPUPerc  string `json:"cpu_perc"`  // e.g. "2.00%"
 }
 
-// ImageInfo describes one container image available on a daemon. Fields are
-// human-readable strings straight from the driver so the UI needs no unit math.
+// ImageInfo describes one artifact available on a daemon. Digest is the stable
+// content identity (the value to pin against) and is driver-neutral: any
+// registry-backed runtime (Docker today, firecracker-containerd later) can
+// report it. Repository/Tag/Ref are presentation — a mutable, human-readable
+// pointer at that content. Remaining fields are human-readable strings straight
+// from the driver so the UI needs no unit math.
 type ImageInfo struct {
 	Repository string `json:"repository"` // e.g. "rn-vite"
 	Tag        string `json:"tag"`        // e.g. "dev"
 	Ref        string `json:"ref"`        // "repository:tag", the value used as a workload image
-	ID         string `json:"id"`         // short image id
+	ID         string `json:"id"`         // short image id (driver-local)
+	Digest     string `json:"digest"`     // stable content id, e.g. "sha256:1a2b…" ("" if not yet known)
 	Size       string `json:"size"`       // e.g. "412MB"
 	CreatedAt  string `json:"created_at"` // e.g. "2 days ago"
 }

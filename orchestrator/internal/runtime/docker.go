@@ -270,8 +270,10 @@ func (d *DockerDriver) Logs(ctx context.Context, ref string, tail int) (string, 
 // ListImages returns the non-dangling images on the given daemon.
 func (d *DockerDriver) ListImages(ctx context.Context, host string) ([]ImageInfo, error) {
 	// Tab-separated so repositories/tags with spaces are impossible to confuse.
-	out, err := d.docker(ctx, host, "images", "--no-trunc=false", "--filter", "dangling=false",
-		"--format", "{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}\t{{.CreatedSince}}").Output()
+	// --no-trunc gives the full config digest as .ID (sha256:<64>); .Digest is the
+	// registry manifest digest, present only for images pulled from a registry.
+	out, err := d.docker(ctx, host, "images", "--no-trunc", "--filter", "dangling=false",
+		"--format", "{{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Digest}}\t{{.Size}}\t{{.CreatedSince}}").Output()
 	if err != nil {
 		return nil, dockerErr(err)
 	}
@@ -281,19 +283,31 @@ func (d *DockerDriver) ListImages(ctx context.Context, host string) ([]ImageInfo
 			continue
 		}
 		f := strings.Split(line, "\t")
-		if len(f) < 5 || f[0] == "<none>" {
+		if len(f) < 6 || f[0] == "<none>" {
 			continue // skip untagged/dangling
 		}
-		id := f[2]
-		if i := strings.IndexByte(id, ':'); i >= 0 && len(id) > i+13 {
-			id = id[i+1 : i+13] // sha256:<12 hex>
+		fullID := f[2] // "sha256:<64 hex>"
+		// Prefer the registry manifest digest as the stable identity; fall back to
+		// the config digest (image id) for locally built/loaded images.
+		digest := f[3]
+		if !strings.HasPrefix(digest, "sha256:") {
+			digest = fullID
 		}
 		imgs = append(imgs, ImageInfo{
 			Repository: f[0], Tag: f[1], Ref: f[0] + ":" + f[1],
-			ID: id, Size: f[3], CreatedAt: f[4],
+			ID: shortDigest(fullID), Digest: digest, Size: f[4], CreatedAt: f[5],
 		})
 	}
 	return imgs, nil
+}
+
+// shortDigest returns the 12-hex-char short form of a "sha256:<hex>" digest for
+// display, leaving anything else untouched.
+func shortDigest(d string) string {
+	if i := strings.IndexByte(d, ':'); i >= 0 && len(d) >= i+13 {
+		return d[i+1 : i+13]
+	}
+	return d
 }
 
 // PullImage pulls ref on the given daemon and returns the combined CLI output.

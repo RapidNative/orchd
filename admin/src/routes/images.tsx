@@ -9,6 +9,15 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconRefresh, IconTrash } from '@/components/icons'
 import { Pager, SearchBox, usePaged } from '@/components/paged'
 
+// shortDigest renders "sha256:1a2b3c4d5e6f…" from a full digest for the table,
+// while the full value stays available via the cell's title (for pinning/copy).
+function shortDigest(d: string): string {
+  const i = d.indexOf(':')
+  const hex = i >= 0 ? d.slice(i + 1) : d
+  const prefix = i >= 0 ? d.slice(0, i + 1) : ''
+  return hex.length > 12 ? `${prefix}${hex.slice(0, 12)}…` : d
+}
+
 export function Images() {
   const qc = useQueryClient()
   const info = useQuery({ queryKey: ['info'], queryFn: api.info })
@@ -39,7 +48,10 @@ export function Images() {
 
   const paged = usePaged(
     images.data ?? [],
-    (im, q) => im.ref.toLowerCase().includes(q) || im.id.toLowerCase().includes(q),
+    (im, q) =>
+      im.ref.toLowerCase().includes(q) ||
+      im.id.toLowerCase().includes(q) ||
+      im.digest.toLowerCase().includes(q),
     12,
   )
 
@@ -134,7 +146,7 @@ export function Images() {
                 <TR>
                   <TH>Repository</TH>
                   <TH>Tag</TH>
-                  <TH>Image ID</TH>
+                  <TH>Digest</TH>
                   <TH>Size</TH>
                   <TH>Created</TH>
                   <TH className="text-right">Actions</TH>
@@ -145,7 +157,12 @@ export function Images() {
                   <TR key={im.id + im.ref}>
                     <TD className="font-mono">{im.repository}</TD>
                     <TD className="font-mono text-muted-foreground">{im.tag}</TD>
-                    <TD className="font-mono text-xs text-muted-foreground">{im.id}</TD>
+                    <TD
+                      className="cursor-default font-mono text-xs text-muted-foreground"
+                      title={`${im.digest}\n(click-drag to copy the pinnable digest)`}
+                    >
+                      {shortDigest(im.digest)}
+                    </TD>
                     <TD className="font-mono text-xs">{im.size}</TD>
                     <TD className="text-xs text-muted-foreground">{im.created_at}</TD>
                     <TD className="text-right">

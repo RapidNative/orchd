@@ -113,6 +113,7 @@ export interface Image {
   tag: string
   ref: string
   id: string
+  digest: string
   size: string
   created_at: string
 }
