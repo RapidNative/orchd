@@ -13,3 +13,6 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Local dev harness (dev/local.sh)
+.localdev/

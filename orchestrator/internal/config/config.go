@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -93,10 +94,22 @@ type Config struct {
 
 func Load() Config {
 	home, _ := os.UserHomeDir()
+	gatewayAddr := env("ORCHD_GATEWAY_ADDR", "127.0.0.1:8081")
+
+	// Local mode (ORCHD_LOCAL=1): turnkey, port-based defaults for running the
+	// whole stack on localhost with no domain, TLS, or Caddy. Workloads are
+	// reached by port through the gateway — http://localhost:<gw>/w/<key> and
+	// http://<key>.localhost:<gw>. Explicit ORCHD_* vars still override these.
+	baseDefault, schemeDefault, publicURLDefault := "lvh.me", "http", ""
+	if envBool("ORCHD_LOCAL") {
+		baseDefault = "localhost"
+		publicURLDefault = "http://localhost" + portSuffix(gatewayAddr)
+	}
+
 	return Config{
 		APIAddr:         env("ORCHD_API_ADDR", "127.0.0.1:8080"),
-		GatewayAddr:     env("ORCHD_GATEWAY_ADDR", "127.0.0.1:8081"),
-		BaseDomain:      env("ORCHD_BASE_DOMAIN", "lvh.me"),
+		GatewayAddr:     gatewayAddr,
+		BaseDomain:      env("ORCHD_BASE_DOMAIN", baseDefault),
 		DataRoot:        env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
 		Driver:          env("ORCHD_DRIVER", "local"),
 		TinbaseBin:      env("ORCHD_TINBASE_BIN", "tinbase"),
@@ -107,8 +120,8 @@ func Load() Config {
 		IdleTimeout:     envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
 		Region:          env("ORCHD_REGION", "local"),
 		APIKeyFile:      env("ORCHD_API_KEY_FILE", ""),
-		PublicURL:       env("ORCHD_PUBLIC_URL", ""),
-		PublicScheme:    env("ORCHD_PUBLIC_SCHEME", "http"),
+		PublicURL:       env("ORCHD_PUBLIC_URL", publicURLDefault),
+		PublicScheme:    env("ORCHD_PUBLIC_SCHEME", schemeDefault),
 		TinbaseMemMB:    envInt("ORCHD_TINBASE_MEM_MB", 384),
 		TinbaseCPUs:     envFloat("ORCHD_TINBASE_CPUS", 0.5),
 		DevMemMB:        envInt("ORCHD_DEV_MEM_MB", 512),
@@ -122,6 +135,22 @@ func Load() Config {
 		StateSQLite:     env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin: envInt("ORCHD_RATE_LIMIT", 0),
 	}
+}
+
+func envBool(key string) bool {
+	switch strings.ToLower(os.Getenv(key)) {
+	case "1", "true", "yes", "on":
+		return true
+	}
+	return false
+}
+
+// portSuffix returns the ":port" suffix of a host:port address (or "" if none).
+func portSuffix(addr string) string {
+	if i := strings.LastIndexByte(addr, ':'); i >= 0 {
+		return addr[i:]
+	}
+	return ""
 }
 
 func envInt(key string, def int) int {

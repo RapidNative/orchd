@@ -108,6 +108,26 @@ export function Repo() {
           for real hosts.
         </li>
       </UL>
+      <H>Run locally (ports, no domain)</H>
+      <P>
+        For local testing there is <B>no domain, TLS, or Caddy</B> — everything runs on localhost
+        ports. <M>dev/local.sh [docker|mock|local]</M> starts orchd (control API + gateway) and the
+        admin, and prints the URLs and a dev API key. Under the hood it sets <M>ORCHD_LOCAL=1</M>,
+        which switches the base domain to <M>localhost</M> and points endpoints at the gateway port.
+      </P>
+      <Code title="Local URLs">{`Admin     http://localhost:5173
+API       http://localhost:8080
+Gateway   http://localhost:8081
+
+# reach a workload by port — two equivalent ways:
+http://localhost:8081/w/<key>       # subroute (pure ports, no DNS)
+http://<key>.localhost:8081         # subdomain (browsers resolve to loopback)`}</Code>
+      <P>
+        <M>docker</M> runs real containers (runc, no gVisor needed); <M>mock</M> boots the whole
+        control plane and admin with no Docker (workloads don't serve real traffic); <M>local</M>{' '}
+        runs the tinbase binary directly. Any explicit <M>ORCHD_*</M> var still overrides the local
+        defaults.
+      </P>
     </Section>
   )
 }

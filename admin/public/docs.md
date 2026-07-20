@@ -95,6 +95,27 @@ cloud/
 - `*.tinbase.dev` — the gateway; each host is resolved against the route table to a workload.
   On-demand TLS is gated by `/internal/tls-allow`, so certificates are only issued for real hosts.
 
+### Run locally (ports, no domain)
+
+For local testing there is **no domain, TLS, or Caddy** — everything runs on localhost ports.
+`dev/local.sh [docker|mock|local]` starts orchd (control API + gateway) and the admin, and prints the
+URLs and a dev API key. It sets `ORCHD_LOCAL=1`, which switches the base domain to `localhost` and
+points endpoints at the gateway port.
+
+```
+Admin     http://localhost:5173
+API       http://localhost:8080
+Gateway   http://localhost:8081
+
+# reach a workload by port — two equivalent ways:
+http://localhost:8081/w/<key>       # subroute (pure ports, no DNS)
+http://<key>.localhost:8081         # subdomain (browsers resolve to loopback)
+```
+
+Drivers: `docker` runs real containers (runc, no gVisor needed); `mock` boots the whole control
+plane + admin with no Docker (workloads don't serve real traffic); `local` runs the tinbase binary
+directly. Any explicit `ORCHD_*` var still overrides the local defaults.
+
 ---
 
 <a id="images"></a>
