@@ -1,10 +1,11 @@
 # Caddy front door.
 #
 # cloud.rapidnative.com — behind Cloudflare, self-signed origin cert (tls internal).
-# *.tinbase.dev — direct A record; a single on-demand-TLS block issues real
-#   Let's Encrypt certs per hostname on the TLS handshake, gated by orchd's
-#   /internal/tls-allow (so only admin/api/real workload hosts get a cert).
-#   Host matchers dispatch admin/api; everything else is a workload on the gateway.
+# *.rnproject.dev / *.tinbase.dev — direct A records; a single on-demand-TLS
+#   block per domain issues real Let's Encrypt certs per hostname on the TLS
+#   handshake, gated by orchd's /internal/tls-allow (so only admin/api/real
+#   workload hosts get a cert). Host matchers dispatch admin/api; everything else
+#   is a workload on the gateway.
 {
 	auto_https disable_redirects
 	on_demand_tls {
@@ -21,7 +22,7 @@
 	}
 	# admin UI is a SPA with absolute asset paths, so it lives at its own root.
 	handle /admin* {
-		redir https://admin.tinbase.dev 302
+		redir https://admin.rnproject.dev 302
 	}
 	handle {
 		root * /opt/tinbase-cloud/site
@@ -39,13 +40,16 @@ https://cloud.rapidnative.com {
 	import cloudsite
 }
 
-*.tinbase.dev {
+# Wildcard front for a base domain. {args[0]} = the base domain (e.g. rnproject.dev).
+# admin.<base> serves the panel, api.<base> the control API; every other subdomain
+# is a workload host proxied to the gateway.
+(wildcard) {
 	tls {
 		on_demand
 	}
 
-	@admin host admin.tinbase.dev
-	@api host api.tinbase.dev
+	@admin host admin.{args[0]}
+	@api host api.{args[0]}
 
 	handle @admin {
 		handle_path /api/* {
@@ -64,4 +68,12 @@ https://cloud.rapidnative.com {
 	handle {
 		reverse_proxy 127.0.0.1:8081
 	}
+}
+
+*.rnproject.dev {
+	import wildcard rnproject.dev
+}
+
+*.tinbase.dev {
+	import wildcard tinbase.dev
 }

@@ -6,8 +6,8 @@ named by its operator in **Settings** — this one runs as **tinbase cloud** (ho
 another instance might be **RapidNative Cloud** for on-demand dev environments. Either way a
 *workload* is a tinbase backend or a running dev app (Expo, Vite, an API server).
 
-- **API base URL:** `https://api.tinbase.dev`
-- **Admin panel:** `https://admin.tinbase.dev`
+- **API base URL:** `https://api.rnproject.dev`
+- **Admin panel:** `https://admin.rnproject.dev`
 - **Source:** https://github.com/RapidNative/cloud
 
 ---
@@ -85,15 +85,17 @@ cloud/
 ### Build & deploy
 
 - Control plane: `go build ./cmd/orchd` (single static binary, run under systemd).
-- Admin panel: `cd admin && npm run build` → static files served by Caddy at `admin.tinbase.dev`.
+- Admin panel: `cd admin && npm run build` → static files served by Caddy at `admin.rnproject.dev`.
 - One-shot: `./deploy/deploy.sh` builds both, ships them to the box, and reloads `orchd` + Caddy.
 
 ### Routing on the box
 
-- `admin.tinbase.dev` — the panel (static) + `/api/*` reverse-proxied to the control API.
-- `api.tinbase.dev` — the control API directly.
-- `*.tinbase.dev` — the gateway; each host is resolved against the route table to a workload.
+- `admin.rnproject.dev` — the panel (static) + `/api/*` reverse-proxied to the control API.
+- `api.rnproject.dev` — the control API directly.
+- `*.rnproject.dev` — the gateway; each host is resolved against the route table to a workload.
   On-demand TLS is gated by `/internal/tls-allow`, so certificates are only issued for real hosts.
+- `*.tinbase.dev` — also served (a Caddy wildcard block + `ORCHD_ALT_DOMAINS`), so existing
+  workloads and admin/api on the old domain keep working.
 
 ### Run locally (ports, no domain)
 
@@ -157,7 +159,7 @@ the roadmap). Until then, build on the box the standard way and reference it —
 docker build -t my-runtime:dev .
 
 # then reference it when creating a workload
-curl -X POST https://api.tinbase.dev/v1/projects/<id>/workloads \
+curl -X POST https://api.rnproject.dev/v1/projects/<id>/workloads \
   -H "Authorization: Bearer $TINBASE_KEY" \
   -H "Content-Type: application/json" \
   -d '{"type":"custom","image":"my-runtime:dev","port":3000,"memory_mb":512}'
@@ -248,10 +250,10 @@ Every `/v1/*` endpoint requires an API key. `/healthz` is the only open endpoint
 - Missing/invalid key → `401`. Over the per-key rate limit → `429` (with `Retry-After`).
 
 ```bash
-curl https://api.tinbase.dev/v1/projects \
+curl https://api.rnproject.dev/v1/projects \
   -H "Authorization: Bearer $TINBASE_KEY"
 
-curl -X POST https://api.tinbase.dev/v1/projects \
+curl -X POST https://api.rnproject.dev/v1/projects \
   -H "Authorization: Bearer $TINBASE_KEY" \
   -H "Content-Type: application/json" \
   -d '{"workloads":[{"preset":"tinbase"}]}'

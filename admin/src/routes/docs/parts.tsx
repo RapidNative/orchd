@@ -1,7 +1,7 @@
 import * as React from 'react'
 import { cn } from '@/lib/utils'
 
-export const API_BASE = 'https://api.tinbase.dev'
+export const API_BASE = 'https://api.rnproject.dev'
 
 // Sections drive both the docs layout TOC and the router. `path` is relative to
 // /docs ('' = the index/About page).

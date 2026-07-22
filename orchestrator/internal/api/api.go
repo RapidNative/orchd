@@ -81,14 +81,17 @@ func (a *API) Handler() http.Handler {
 }
 
 // tlsAllow answers Caddy's on-demand-TLS "ask": 200 => issue a cert for this
-// host, anything else => refuse. We allow admin/api and any host in the route
-// table, so random subdomains cannot trigger certificate issuance.
+// host, anything else => refuse. We allow admin/api on the base domain and every
+// alt domain, plus any host in the route table, so random subdomains cannot
+// trigger certificate issuance.
 func (a *API) tlsAllow(w http.ResponseWriter, r *http.Request) {
 	domain := strings.ToLower(r.URL.Query().Get("domain"))
-	base := strings.ToLower(a.cfg.BaseDomain)
-	if domain == "admin."+base || domain == "api."+base {
-		w.WriteHeader(http.StatusOK)
-		return
+	for _, base := range append([]string{a.cfg.BaseDomain}, a.cfg.AltDomains...) {
+		base = strings.ToLower(base)
+		if domain == "admin."+base || domain == "api."+base {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 	}
 	if _, err := a.mgr.ResolveHost(domain); err == nil {
 		w.WriteHeader(http.StatusOK)

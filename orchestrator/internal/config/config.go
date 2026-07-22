@@ -17,8 +17,15 @@ type Config struct {
 	// <ref>.<BaseDomain> and are proxied to the project's instance.
 	GatewayAddr string
 	// BaseDomain is the suffix stripped to extract a project ref from the Host
-	// header. lvh.me resolves *.lvh.me to 127.0.0.1, ideal for local dev.
+	// header, and the domain new workloads get their default subdomain under.
+	// lvh.me resolves *.lvh.me to 127.0.0.1, ideal for local dev.
 	BaseDomain string
+
+	// AltDomains are additional base domains this server also fronts (e.g. a
+	// legacy domain kept alive alongside a new primary). admin.<d>/api.<d> for
+	// each are permitted through the on-demand-TLS gate; workload hostnames are
+	// permitted via the route table regardless. Comma-separated in ORCHD_ALT_DOMAINS.
+	AltDomains []string
 
 	// DataRoot is where per-project data dirs and the control plane state file
 	// live.
@@ -110,6 +117,7 @@ func Load() Config {
 		APIAddr:         env("ORCHD_API_ADDR", "127.0.0.1:8080"),
 		GatewayAddr:     gatewayAddr,
 		BaseDomain:      env("ORCHD_BASE_DOMAIN", baseDefault),
+		AltDomains:      splitCSV(env("ORCHD_ALT_DOMAINS", "")),
 		DataRoot:        env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
 		Driver:          env("ORCHD_DRIVER", "local"),
 		TinbaseBin:      env("ORCHD_TINBASE_BIN", "tinbase"),
@@ -135,6 +143,20 @@ func Load() Config {
 		StateSQLite:     env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin: envInt("ORCHD_RATE_LIMIT", 0),
 	}
+}
+
+// splitCSV parses a comma-separated env value into a trimmed, non-empty list.
+func splitCSV(v string) []string {
+	if strings.TrimSpace(v) == "" {
+		return nil
+	}
+	var out []string
+	for _, p := range strings.Split(v, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func envBool(key string) bool {

@@ -13,7 +13,8 @@ Environment=ORCHD_IMAGE=tinbase:0.10.0
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=120s
 Environment=ORCHD_API_KEY_FILE=/opt/tinbase-cloud/secrets/admin.key
-Environment=ORCHD_BASE_DOMAIN=tinbase.dev
+Environment=ORCHD_BASE_DOMAIN=rnproject.dev
+Environment=ORCHD_ALT_DOMAINS=tinbase.dev
 Environment=ORCHD_PUBLIC_SCHEME=https
 Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
 Environment=ORCHD_BACKUP_DIR=/opt/tinbase-cloud/backups

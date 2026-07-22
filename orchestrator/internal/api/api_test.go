@@ -236,6 +236,32 @@ func gjson(body []byte, key string) string {
 	return s
 }
 
+func TestTLSAllowAcrossDomains(t *testing.T) {
+	t.Setenv("ORCHD_ALT_DOMAINS", "tinbase.dev")
+	srv := newTestServer(t) // base domain defaults to lvh.me
+
+	cases := []struct {
+		domain string
+		want   int
+	}{
+		{"admin.test.local", http.StatusOK},  // base (newTestServer sets test.local)
+		{"api.test.local", http.StatusOK},    // base
+		{"admin.tinbase.dev", http.StatusOK}, // alt
+		{"api.tinbase.dev", http.StatusOK},   // alt
+		{"evil.example.com", http.StatusForbidden},
+		{"random.test.local", http.StatusForbidden}, // not admin/api, not in route table
+	}
+	for _, c := range cases {
+		t.Run(c.domain, func(t *testing.T) {
+			// tls-allow is internal/open — no key.
+			code, _ := do(t, srv, "GET", "/internal/tls-allow?domain="+c.domain, "", nil)
+			if code != c.want {
+				t.Fatalf("tls-allow %s: got %d, want %d", c.domain, code, c.want)
+			}
+		})
+	}
+}
+
 func TestDefaultRegionSeeded(t *testing.T) {
 	srv := newTestServer(t)
 	code, body := do(t, srv, "GET", "/v1/regions", bootstrapKey, nil)

@@ -86,7 +86,7 @@ export function Repo() {
         </li>
         <li>
           Admin panel: <M>cd admin && npm run build</M> → static files served by Caddy at{' '}
-          <M>admin.tinbase.dev</M>.
+          <M>admin.rnproject.dev</M>.
         </li>
         <li>
           One-shot: <M>./deploy/deploy.sh</M> builds both, ships them to the box, and reloads{' '}
@@ -96,16 +96,20 @@ export function Repo() {
       <H>Routing on the box</H>
       <UL>
         <li>
-          <M>admin.tinbase.dev</M> — this panel (static) + <M>/api/*</M> reverse-proxied to the
+          <M>admin.rnproject.dev</M> — this panel (static) + <M>/api/*</M> reverse-proxied to the
           control API.
         </li>
         <li>
-          <M>api.tinbase.dev</M> — the control API directly.
+          <M>api.rnproject.dev</M> — the control API directly.
         </li>
         <li>
-          <M>*.tinbase.dev</M> — the gateway; each host is resolved against the route table to a
+          <M>*.rnproject.dev</M> — the gateway; each host is resolved against the route table to a
           workload. On-demand TLS is gated by <M>/internal/tls-allow</M> so certs are only issued
           for real hosts.
+        </li>
+        <li>
+          <M>*.tinbase.dev</M> — also served (a Caddy wildcard block + <M>ORCHD_ALT_DOMAINS</M>), so
+          existing workloads and admin/api on the old domain keep working.
         </li>
       </UL>
       <H>Run locally (ports, no domain)</H>
