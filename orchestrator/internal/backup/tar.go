@@ -13,13 +13,22 @@ import (
 // writeTarGz archives srcDir (recursively) as tar+gzip into w. Only directories,
 // regular files, and symlinks are included; sockets/pipes/devices are skipped so
 // a stray unix socket can never break the archive.
-func writeTarGz(w io.Writer, srcDir string) error {
+func writeTarGz(w io.Writer, srcDir string, exclude []string) error {
+	skip := map[string]bool{}
+	for _, e := range exclude {
+		skip[e] = true
+	}
 	gz := gzip.NewWriter(w)
 	tw := tar.NewWriter(gz)
 
 	err := filepath.WalkDir(srcDir, func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		// Skip derived/excluded directories (e.g. node_modules) so a backup is
+		// just the user's files — the delta.
+		if d.IsDir() && path != srcDir && skip[d.Name()] {
+			return filepath.SkipDir
 		}
 		info, err := d.Info()
 		if err != nil {

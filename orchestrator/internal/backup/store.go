@@ -27,7 +27,7 @@ type Backup struct {
 
 // Store is the backup backend contract.
 type Store interface {
-	Create(workloadID, dataDir string) (Backup, error)
+	Create(workloadID, dataDir string, exclude []string) (Backup, error)
 	List(workloadID string) ([]Backup, error) // "" lists every workload's backups
 	Restore(id, destDir string) error         // extract into destDir (caller has cleared it)
 	Delete(id string) error
@@ -68,7 +68,7 @@ func (s *LocalStore) path(id string) (string, error) {
 	return filepath.Join(s.root, wid, ts.UTC().Format(tsLayout)+".tar.gz"), nil
 }
 
-func (s *LocalStore) Create(workloadID, dataDir string) (Backup, error) {
+func (s *LocalStore) Create(workloadID, dataDir string, exclude []string) (Backup, error) {
 	now := time.Now().UTC()
 	id := backupID(workloadID, now)
 	dir := filepath.Join(s.root, workloadID)
@@ -84,7 +84,7 @@ func (s *LocalStore) Create(workloadID, dataDir string) (Backup, error) {
 	if err != nil {
 		return Backup{}, err
 	}
-	if err := writeTarGz(f, dataDir); err != nil {
+	if err := writeTarGz(f, dataDir, exclude); err != nil {
 		f.Close()
 		os.Remove(tmp)
 		return Backup{}, err

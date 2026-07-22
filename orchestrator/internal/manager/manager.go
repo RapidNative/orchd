@@ -29,11 +29,19 @@ import (
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/metrics"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/template"
 )
 
 // ErrBackupsDisabled is returned when a backup operation is requested but no
 // backup store is configured.
 var ErrBackupsDisabled = errors.New("backups not configured")
+
+// deltaBackupExclude are derived/regenerable directories left out of workload
+// backups, so a backup captures only the user's files (and tinbase data) — the
+// delta. Deps come from npm install (local) or the image (prod), never a backup.
+var deltaBackupExclude = []string{
+	"node_modules", ".git", "dist", "build", ".next", ".expo", ".cache", ".turbo",
+}
 var ErrImagesUnsupported = errors.New("image management not supported by this runtime")
 
 type Manager struct {
@@ -60,13 +68,15 @@ type liveInstance struct {
 
 // WorkloadSpec describes a workload to create within a project.
 type WorkloadSpec struct {
-	Preset   string // optional: resolves Type/Image/Port/Name from the catalog
-	Type     runtime.WorkloadType
-	Name     string  // role within the project ("" = primary, else "api"/"web"/...)
-	Image    string  // optional image override
-	Port     int     // optional container port override
-	MemoryMB int     // optional memory cap override (0 = type default)
-	CPUs     float64 // optional CPU cap override (0 = type default)
+	Preset    string // optional: resolves Type/Image/Port/Name from the catalog
+	Type      runtime.WorkloadType
+	Name      string  // role within the project ("" = primary, else "api"/"web"/...)
+	Image     string  // optional image override
+	Port      int     // optional container port override
+	MemoryMB  int     // optional memory cap override (0 = type default)
+	CPUs      float64 // optional CPU cap override (0 = type default)
+	Template  string  // template name (local template mode)
+	Workspace string  // orchd.json workspace name within the template
 }
 
 // preset is a named workload template so the API/UI can ask for "expo"/"vite"/
@@ -447,6 +457,66 @@ func (m *Manager) SetBackupTarget(t store.BackupTarget) error {
 	return nil
 }
 
+// templatePath resolves a template name to its local folder: Settings first,
+// then ORCHD_TEMPLATE_<NAME>. Empty if unknown.
+func (m *Manager) templatePath(name string) string {
+	if name == "" {
+		return ""
+	}
+	if t := m.store.GetSettings().Templates; t != nil {
+		if p := t[name]; p != "" {
+			return p
+		}
+	}
+	return os.Getenv("ORCHD_TEMPLATE_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")))
+}
+
+// GetTemplates returns the configured template name->path map.
+func (m *Manager) GetTemplates() map[string]string { return m.store.GetSettings().Templates }
+
+// SetTemplate registers (or, with an empty path, removes) a template path.
+func (m *Manager) SetTemplate(name, path string) error {
+	s := m.store.GetSettings()
+	if s.Templates == nil {
+		s.Templates = map[string]string{}
+	}
+	if strings.TrimSpace(path) == "" {
+		delete(s.Templates, name)
+	} else {
+		s.Templates[name] = path
+	}
+	return m.store.SetSettings(s)
+}
+
+// CreateFromTemplate provisions a project whose workloads come from a template's
+// orchd.json: one workload per manifest entry, each running its workspace on its
+// own port (local) or from its image (prod).
+func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string) (*store.Project, []*store.Workload, error) {
+	path := m.templatePath(tmplName)
+	if path == "" {
+		return nil, nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmplName)
+	}
+	man, err := template.Load(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("template %q: %w", tmplName, err)
+	}
+	specs := make([]WorkloadSpec, 0, len(man.Workloads))
+	for _, w := range man.Workloads {
+		s := WorkloadSpec{Template: tmplName, Workspace: w.Name, Name: w.Name, Image: w.Image}
+		if w.Kind == "tinbase" {
+			s.Type = runtime.WorkloadTinbaseProject
+			s.Name = "" // primary
+		} else {
+			s.Type = runtime.WorkloadRapidNativeDev
+		}
+		specs = append(specs, s)
+	}
+	if projName == "" {
+		projName = man.Name
+	}
+	return m.CreateProject(ctx, projName, regionID, specs)
+}
+
 // CreateProject creates a project grouping and provisions its workloads. With no
 // specs it defaults to a single primary tinbase workload, preserving the simple
 // "one project, one backend" case.
@@ -544,6 +614,8 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		Image:     ws.Image,
 		Port:      ws.Port,
 		HostPort:  m.allocHostPort(),
+		Template:  ws.Template,
+		Workspace: ws.Workspace,
 		MemoryMB:  mem,
 		CPUs:      cpus,
 		State:     runtime.StateProvisioning,
@@ -566,16 +638,36 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		return nil, err
 	}
 
-	inst, err := m.rt.Create(ctx, m.specFor(w))
-	if err != nil {
-		_ = m.store.SetWorkloadState(wid, runtime.StateFailed)
-		return nil, fmt.Errorf("provision: %w", err)
-	}
-	_ = m.store.SetWorkloadState(wid, runtime.StateRunning)
-	m.markLive(wid, inst.Addr)
-
 	m.emit("workload.created", proj.ID, wid, ws.Name)
+
+	// Provision in the background so a slow first boot (npm install for a heavy
+	// template workspace, an image pull, tinbase initdb) doesn't block the create
+	// call. The workload starts "provisioning" and flips to running/failed; the
+	// admin polls state. Synchronous errors above (bad spec, store) still return.
+	go m.provision(wid)
+
 	return m.store.GetWorkload(wid)
+}
+
+// provision boots a freshly-created workload in the background, updating its
+// state to running or failed. Serialized per workload via refLock.
+func (m *Manager) provision(workloadID string) {
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return // deleted before provisioning ran
+	}
+	inst, err := m.rt.Create(context.Background(), m.specFor(w))
+	if err != nil {
+		log.Printf("provision %s: %v", workloadID, err)
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+		m.emit("workload.failed", w.ProjectID, workloadID, err.Error())
+		return
+	}
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+	m.markLive(workloadID, inst.Addr)
 }
 
 // AddRoute attaches an additional hostname to a workload (e.g. a custom domain).
@@ -917,7 +1009,7 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 		m.forget(workloadID)
 	}
 
-	b, err := bk.Create(workloadID, w.DataDir)
+	b, err := bk.Create(workloadID, w.DataDir, deltaBackupExclude)
 
 	if wasRunning {
 		if inst, e := m.rt.Start(ctx, m.specFor(w)); e == nil {
@@ -953,7 +1045,7 @@ func (m *Manager) BackupState(ctx context.Context) (backup.Backup, error) {
 		}
 	}
 	stateDir := filepath.Join(m.cfg.DataRoot, "state")
-	b, err := bk.Create(StateBackupKey, stateDir)
+	b, err := bk.Create(StateBackupKey, stateDir, nil)
 	if err != nil {
 		return backup.Backup{}, err
 	}
@@ -1129,13 +1221,15 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		}
 	}
 	return runtime.Spec{
-		Type:       w.Type,
-		Ref:        w.ID, // runtime key = workload id
-		DataDir:    w.DataDir,
-		Image:      w.Image,
-		Port:       w.Port,
-		HostPort:   w.HostPort,
-		DockerHost: dockerHost,
+		Type:        w.Type,
+		Ref:         w.ID, // runtime key = workload id
+		DataDir:     w.DataDir,
+		Image:       w.Image,
+		Port:        w.Port,
+		HostPort:    w.HostPort,
+		TemplateSrc: m.templatePath(w.Template),
+		Workspace:   w.Workspace,
+		DockerHost:  dockerHost,
 		Env: map[string]string{
 			"TINBASE_JWT_SECRET": w.JWTSecret,
 		},

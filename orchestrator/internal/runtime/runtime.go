@@ -72,6 +72,13 @@ type Spec struct {
 	// 0.0.0.0 and addresses them by the node host.
 	DockerHost string
 
+	// TemplateSrc + Workspace drive template mode (local process driver): the
+	// driver copies the template folder at TemplateSrc into DataDir on first boot,
+	// reads its orchd.json, and runs the workload named Workspace (a monorepo
+	// workspace) on the assigned port. Empty = the image/scaffold model.
+	TemplateSrc string
+	Workspace   string
+
 	// Env is passed to the workload process/VM (JWT secret, engine, secrets).
 	Env map[string]string
 

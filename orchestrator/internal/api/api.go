@@ -68,6 +68,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/images", a.listImages)
 	mux.HandleFunc("POST /v1/images/pull", a.pullImage)
 	mux.HandleFunc("DELETE /v1/images", a.removeImage)
+	mux.HandleFunc("GET /v1/templates", a.listTemplates)
+	mux.HandleFunc("PUT /v1/templates", a.setTemplate)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/name", a.setInstanceName)
 	mux.HandleFunc("POST /v1/system/backup", a.backupState)
@@ -248,16 +250,23 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string            `json:"name"`
 		Region    string            `json:"region"`
+		Template  string            `json:"template"` // create from a registered template
 		Workloads []workloadSpecReq `json:"workloads"`
 	}
 	if r.ContentLength > 0 {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
-	specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
-	for _, ws := range body.Workloads {
-		specs = append(specs, ws.toSpec())
+	var proj *store.Project
+	var err error
+	if body.Template != "" {
+		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region)
+	} else {
+		specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
+		for _, ws := range body.Workloads {
+			specs = append(specs, ws.toSpec())
+		}
+		proj, _, err = a.mgr.CreateProject(r.Context(), body.Name, body.Region, specs)
 	}
-	proj, _, err := a.mgr.CreateProject(r.Context(), body.Name, body.Region, specs)
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
 		return
@@ -587,6 +596,34 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 		"webhook":           map[string]string{"url": a.mgr.GetWebhook()},
 		"metrics":           a.mgr.GetMetricsTarget(),
 	})
+}
+
+func (a *API) listTemplates(w http.ResponseWriter, r *http.Request) {
+	t := a.mgr.GetTemplates()
+	if t == nil {
+		t = map[string]string{}
+	}
+	writeJSON(w, http.StatusOK, t)
+}
+
+func (a *API) setTemplate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if strings.TrimSpace(body.Name) == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("name required"))
+		return
+	}
+	if err := a.mgr.SetTemplate(body.Name, body.Path); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, a.mgr.GetTemplates())
 }
 
 func (a *API) setInstanceName(w http.ResponseWriter, r *http.Request) {

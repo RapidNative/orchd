@@ -97,7 +97,9 @@ type Workload struct {
 	Name      string               `json:"name"` // role within the project ("", "api", "web", ...)
 	Image     string               `json:"image,omitempty"`
 	Port      int                  `json:"port,omitempty"`
-	HostPort  int                  `json:"host_port,omitempty"` // stable external port (port-addressing mode); 0 = gateway model
+	HostPort  int                  `json:"host_port,omitempty"`  // stable external port (port-addressing mode); 0 = gateway model
+	Template  string               `json:"template,omitempty"`   // template name this workload came from (local template mode)
+	Workspace string               `json:"workspace,omitempty"`  // orchd.json workload name within the template
 	MemoryMB  int                  `json:"memory_mb,omitempty"`
 	CPUs      float64              `json:"cpus,omitempty"`
 	KeepWarm  bool                 `json:"keep_warm,omitempty"` // always-on: exempt from scale-to-zero
@@ -143,6 +145,9 @@ type Settings struct {
 	Backup       BackupTarget  `json:"backup"`
 	Webhook      Webhook       `json:"webhook"`
 	Metrics      MetricsTarget `json:"metrics"`
+	// Templates maps a template name to a local folder path holding its
+	// orchd.json (local template mode). e.g. "rapidnative" -> "/Users/…/rapidnative-template".
+	Templates map[string]string `json:"templates,omitempty"`
 }
 
 // Route maps a workload to a hostname and a stable key. Host drives subdomain

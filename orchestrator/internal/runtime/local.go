@@ -97,16 +97,6 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	}
 	d.mu.Unlock()
 
-	// Every workload kind runs as a local process via its recipe: tinbase
-	// directly, and the RapidNative dev apps (web/api/app) from a scaffolded
-	// source dir with their real dev servers (Vite/Hono/Expo). "" = no recipe.
-	kind := localKind(spec)
-	if kind == "" {
-		return nil, fmt.Errorf(
-			"local driver has no recipe for image %q (type %q) — use the docker driver",
-			spec.Image, spec.Type)
-	}
-
 	// A pinned HostPort gives stable port-per-workload addressing; otherwise pick
 	// a free one.
 	port := spec.HostPort
@@ -116,13 +106,8 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 			return nil, fmt.Errorf("allocate port: %w", err)
 		}
 	}
-
 	if err := os.MkdirAll(spec.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("data dir: %w", err)
-	}
-	workDir := spec.WorkDir
-	if workDir == "" {
-		workDir = spec.DataDir
 	}
 
 	// Capture output into a bounded ring buffer (for the Logs API) while still
@@ -131,30 +116,53 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	out := io.MultiWriter(os.Stderr, lw)
 
 	var cmd *exec.Cmd
-	if kind == "tinbase" {
-		args := []string{
-			"start",
-			"--port", fmt.Sprint(port),
-			"--dir", workDir,
-			"--data-dir", filepath.Join(spec.DataDir, "db"),
+	label := "workload"
+	if spec.TemplateSrc != "" {
+		// Template mode: copy the template into DataDir and run its orchd.json
+		// workspace (the local, no-Docker path).
+		label = "template:" + spec.Workspace
+		c, err := d.bootTemplateCmd(spec, port, out)
+		if err != nil {
+			return nil, err
 		}
-		if d.Engine != "" {
-			args = append(args, "--engine", d.Engine)
-		}
-		cmd = d.command(args) // handles a .js tinbase binary via node
+		cmd = c
 	} else {
-		r, _ := recipeFor(kind)
-		if err := r.scaffold(workDir); err != nil {
-			return nil, fmt.Errorf("scaffold %s: %w", kind, err)
+		// Image/scaffold model: tinbase directly, or a built-in dev-app recipe.
+		kind := localKind(spec)
+		if kind == "" {
+			return nil, fmt.Errorf(
+				"local driver has no recipe for image %q (type %q) — use the docker driver",
+				spec.Image, spec.Type)
 		}
-		if err := ensureInstalled(workDir, r.install, out); err != nil {
-			return nil, fmt.Errorf("install %s: %w", kind, err)
+		label = kind
+		workDir := spec.WorkDir
+		if workDir == "" {
+			workDir = spec.DataDir
 		}
-		argv, extraEnv := r.run(port)
-		cmd = exec.Command(argv[0], argv[1:]...)
-		cmd.Env = append(os.Environ(), extraEnv...)
+		if kind == "tinbase" {
+			args := []string{
+				"start", "--port", fmt.Sprint(port),
+				"--dir", workDir, "--data-dir", filepath.Join(spec.DataDir, "db"),
+			}
+			if d.Engine != "" {
+				args = append(args, "--engine", d.Engine)
+			}
+			cmd = d.command(args) // handles a .js tinbase binary via node
+		} else {
+			r, _ := recipeFor(kind)
+			if err := r.scaffold(workDir); err != nil {
+				return nil, fmt.Errorf("scaffold %s: %w", kind, err)
+			}
+			if err := ensureInstalled(workDir, r.install, out); err != nil {
+				return nil, fmt.Errorf("install %s: %w", kind, err)
+			}
+			argv, extraEnv := r.run(port)
+			cmd = exec.Command(argv[0], argv[1:]...)
+			cmd.Env = append(os.Environ(), extraEnv...)
+		}
+		cmd.Dir = workDir
 	}
-	cmd.Dir = workDir
+
 	if cmd.Env == nil {
 		cmd.Env = os.Environ()
 	}
@@ -165,16 +173,12 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	cmd.Stderr = out
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start %s: %w", kind, err)
+		return nil, fmt.Errorf("start %s: %w", label, err)
 	}
 
+	// Dev servers / installs can be slow to first-serve; tinbase is quick.
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	// Dev servers can be slow to first-serve (bundling); tinbase is quick.
-	readyTimeout := 30 * time.Second
-	if kind != "tinbase" {
-		readyTimeout = 120 * time.Second
-	}
-	if err := waitReady(ctx, addr, readyTimeout); err != nil {
+	if err := waitReady(ctx, addr, 120*time.Second); err != nil {
 		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}

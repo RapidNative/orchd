@@ -31,9 +31,10 @@ func TestLocalKind(t *testing.T) {
 func TestLocalDriverRejectsUnknownImage(t *testing.T) {
 	d := NewLocalDriver("/nonexistent/tinbase", "")
 	_, err := d.Create(context.Background(), Spec{
-		Ref:   "w1",
-		Type:  WorkloadRapidNativeDev,
-		Image: "ghcr.io/acme/custom:1",
+		Ref:     "w1",
+		Type:    WorkloadRapidNativeDev,
+		Image:   "ghcr.io/acme/custom:1",
+		DataDir: t.TempDir(),
 	})
 	if err == nil || !strings.Contains(err.Error(), "no recipe") {
 		t.Fatalf("expected a 'no recipe' error for an unknown image, got: %v", err)

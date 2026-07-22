@@ -59,7 +59,7 @@ func (s *S3Store) objURL(key string) string {
 	return s.endpoint + "/" + s.bucket + "/" + key
 }
 
-func (s *S3Store) Create(workloadID, dataDir string) (Backup, error) {
+func (s *S3Store) Create(workloadID, dataDir string, exclude []string) (Backup, error) {
 	now := time.Now().UTC()
 	ts := now.Format(tsLayout)
 
@@ -70,7 +70,7 @@ func (s *S3Store) Create(workloadID, dataDir string) (Backup, error) {
 		return Backup{}, err
 	}
 	defer os.Remove(tmp.Name())
-	if err := writeTarGz(tmp, dataDir); err != nil {
+	if err := writeTarGz(tmp, dataDir, exclude); err != nil {
 		tmp.Close()
 		return Backup{}, err
 	}
