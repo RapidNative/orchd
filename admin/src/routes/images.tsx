@@ -12,6 +12,36 @@ import { Pager, SearchBox, usePaged } from '@/components/paged'
 import { Select } from '@/components/ui/select'
 import { relativeTime } from '@/lib/utils'
 
+// AboutImages is a short primer distinguishing the two things this page shows:
+// ORCHD's versioned template freezes (tarball + docker) vs. raw daemon images.
+function AboutImages() {
+  return (
+    <Card className="mb-4 max-w-3xl border-border/60 bg-muted/20">
+      <CardContent className="space-y-2 py-4 text-sm text-muted-foreground">
+        <p>
+          An <span className="font-medium text-foreground">Image</span> is an immutable, versioned
+          freeze of a{' '}
+          <a href="/templates" className="text-primary underline-offset-2 hover:underline">
+            template
+          </a>
+          . It has two parts: a base{' '}
+          <span className="font-medium text-foreground">tarball</span> (
+          <code className="font-mono text-xs">.tar.gz</code> of the source tree, stored on this
+          instance — local/process boots restore from it) and a per-workspace{' '}
+          <span className="font-medium text-foreground">docker image</span> tag (what the Docker
+          driver runs in prod). Building always writes the tarball; docker tags are built when the
+          Docker CLI is available.
+        </p>
+        <p>
+          The card below lists these template freezes. The{' '}
+          <span className="font-medium text-foreground">raw Docker images</span> table further down is
+          the daemon's own image list per region — pull/remove tags directly.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 // BuiltImagesCard shows immutable, versioned images frozen from templates. Each
 // image is a base tarball on this instance (local boots restore from it) plus,
 // per workspace, a docker image tag (prod runs them). "Build" freezes the current
@@ -210,7 +240,7 @@ export function Images() {
     <div>
       <PageHeader
         title="Images"
-        subtitle="Docker images available to launch as workloads, per region"
+        subtitle="Versioned freezes of a template, plus the raw Docker images per region"
         actions={
           <>
             {supported && (
@@ -224,6 +254,7 @@ export function Images() {
         }
       />
 
+      <AboutImages />
       <BuiltImagesCard />
 
       {supported === false ? (

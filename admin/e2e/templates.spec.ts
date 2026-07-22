@@ -1,9 +1,10 @@
 import { test, expect } from './fixtures'
 
-// Registering a template in Settings lists it (the create-from-template source).
-test('settings: register a template', async ({ page }) => {
-  await page.goto('/settings')
-  await expect(page.getByText('Templates', { exact: true })).toBeVisible()
+// Registering a template on its dedicated Templates page lists it (the
+// create-from-template source, and what Images are built from).
+test('templates: register a template', async ({ page }) => {
+  await page.goto('/templates')
+  await expect(page.getByRole('heading', { level: 1, name: 'Templates' })).toBeVisible()
 
   await page.getByPlaceholder('name (e.g. rapidnative)').fill('demo-tmpl')
   await page.getByPlaceholder(/absolute\/path/).fill('/tmp/demo-template')

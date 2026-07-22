@@ -15,6 +15,7 @@ import {
   IconMenu,
   IconProjects,
   IconSettings,
+  IconTemplate,
   TinbaseLogo,
 } from './icons'
 
@@ -22,6 +23,7 @@ const nav = [
   { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true },
   { to: '/projects', label: 'Projects', Icon: IconProjects, exact: false },
   { to: '/backups', label: 'Backups', Icon: IconBackups, exact: false },
+  { to: '/templates', label: 'Templates', Icon: IconTemplate, exact: false },
   { to: '/images', label: 'Images', Icon: IconImage, exact: false },
   { to: '/activity', label: 'Activity', Icon: IconActivity, exact: false },
   { to: '/system', label: 'System', Icon: IconDatabase, exact: false },

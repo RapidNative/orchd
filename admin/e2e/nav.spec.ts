@@ -7,6 +7,7 @@ test('sidebar navigates across all sections', async ({ page }) => {
 
   const dests: [string, string][] = [
     ['Projects', 'Projects'],
+    ['Templates', 'Templates'],
     ['Images', 'Images'],
     ['Backups', 'Backups'],
     ['Activity', 'Activity'],
