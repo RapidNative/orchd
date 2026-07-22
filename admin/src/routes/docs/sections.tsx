@@ -122,7 +122,7 @@ export function Repo() {
       </P>
       <Code title="Local layout">{`ORCHD API    http://localhost:8090
 Gateway      http://localhost:8091
-Admin        http://localhost:5173
+Admin        http://localhost:8092
 
 # a project's workloads each get their own port (shown as the endpoint):
 tinbase      http://localhost:8100

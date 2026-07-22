@@ -6,7 +6,7 @@
 # Layout (override any with env vars of the same name):
 #   ORCHD API    :8090   control plane
 #   Gateway      :8091   host/subroute routing (optional in port mode)
-#   Admin (Vite) :5173
+#   Admin (Vite) :8092
 #   Workloads    :8100+  each workload gets its OWN stable port (8100, 8101, …)
 #                        via ORCHD_PORT_BASE — reach it directly at
 #                        http://localhost:<port>, no gateway/subdomain needed.
@@ -31,7 +31,7 @@ KEYFILE="$DATA/dev.key"
 DEV_KEY="local-dev-key"
 API_PORT="${API_PORT:-8090}"
 GW_PORT="${GW_PORT:-8091}"
-ADMIN_PORT="${ADMIN_PORT:-5173}"
+ADMIN_PORT="${ADMIN_PORT:-8092}"
 PORT_BASE="${PORT_BASE:-8100}"
 
 case "$DRIVER" in
