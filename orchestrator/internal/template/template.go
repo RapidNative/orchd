@@ -34,13 +34,14 @@ type Manifest struct {
 //	kind "node"    — a Node app: `install` once, then `run` (with $PORT), in Dir.
 //	kind "static"  — serve Dir over HTTP on the assigned port (no install/run).
 type Workload struct {
-	Name    string   `json:"name"`
-	Kind    string   `json:"kind"`               // tinbase | node | static
-	Dir     string   `json:"dir,omitempty"`      // subdir relative to the template root
-	Install []string `json:"install,omitempty"`  // one-time setup, e.g. ["npm","install"]
-	Run     []string `json:"run,omitempty"`      // run argv; "$PORT" is substituted
-	PortEnv string   `json:"port_env,omitempty"` // if set, the port is passed via this env var
-	Image   string   `json:"image,omitempty"`    // prod image tag (built from the template)
+	Name    string            `json:"name"`
+	Kind    string            `json:"kind"`               // tinbase | node | static
+	Dir     string            `json:"dir,omitempty"`      // subdir relative to the template root
+	Install []string          `json:"install,omitempty"`  // one-time setup, e.g. ["npm","install"]
+	Run     []string          `json:"run,omitempty"`      // run argv; "$PORT" is substituted
+	PortEnv string            `json:"port_env,omitempty"` // if set, the port is passed via this env var
+	Image   string            `json:"image,omitempty"`    // prod image tag (built from the template)
+	Env     map[string]string `json:"env,omitempty"`      // default env vars for this workload
 }
 
 // Load reads and validates <dir>/orchd.json.

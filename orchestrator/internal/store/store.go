@@ -97,9 +97,10 @@ type Workload struct {
 	Name      string               `json:"name"` // role within the project ("", "api", "web", ...)
 	Image     string               `json:"image,omitempty"`
 	Port      int                  `json:"port,omitempty"`
-	HostPort  int                  `json:"host_port,omitempty"`  // stable external port (port-addressing mode); 0 = gateway model
-	Template  string               `json:"template,omitempty"`   // template name this workload came from (local template mode)
-	Workspace string               `json:"workspace,omitempty"`  // orchd.json workload name within the template
+	HostPort  int                  `json:"host_port,omitempty"` // stable external port (port-addressing mode); 0 = gateway model
+	Template  string               `json:"template,omitempty"`  // template name this workload came from (local template mode)
+	Workspace string               `json:"workspace,omitempty"` // orchd.json workload name within the template
+	Env       map[string]string    `json:"env,omitempty"`       // user-injected environment variables
 	MemoryMB  int                  `json:"memory_mb,omitempty"`
 	CPUs      float64              `json:"cpus,omitempty"`
 	KeepWarm  bool                 `json:"keep_warm,omitempty"` // always-on: exempt from scale-to-zero

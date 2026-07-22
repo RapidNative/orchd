@@ -48,6 +48,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/workloads/{id}/routes", a.addRoute)
 	mux.HandleFunc("DELETE /v1/routes", a.removeRoute)
 	mux.HandleFunc("POST /v1/workloads/{id}/keepwarm", a.setKeepWarm)
+	mux.HandleFunc("PUT /v1/workloads/{id}/env", a.setWorkloadEnv)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
@@ -184,12 +185,13 @@ type workloadSpecReq struct {
 	Port     int                  `json:"port"`
 	MemoryMB int                  `json:"memory_mb"`
 	CPUs     float64              `json:"cpus"`
+	Env      map[string]string    `json:"env"`
 }
 
 func (r workloadSpecReq) toSpec() manager.WorkloadSpec {
 	return manager.WorkloadSpec{
 		Preset: r.Preset, Type: r.Type, Name: r.Name, Image: r.Image, Port: r.Port,
-		MemoryMB: r.MemoryMB, CPUs: r.CPUs,
+		MemoryMB: r.MemoryMB, CPUs: r.CPUs, Env: r.Env,
 	}
 }
 
@@ -316,6 +318,21 @@ func (a *API) addWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, a.workloadView(wl))
+}
+
+func (a *API) setWorkloadEnv(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetWorkloadEnv(r.Context(), r.PathValue("id"), body.Env); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"env": body.Env})
 }
 
 func (a *API) setKeepWarm(w http.ResponseWriter, r *http.Request) {

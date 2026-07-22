@@ -166,7 +166,7 @@ export function Templates() {
     { "name": "db",     "kind": "tinbase" },
     { "name": "api",    "kind": "node",   "dir": "api",
       "install": ["npm","install"], "run": ["node","--watch","index.js"], "port_env": "PORT",
-      "image": "rn-api:dev" },
+      "env": { "NODE_ENV": "development" }, "image": "rn-api:dev" },
     { "name": "web",    "kind": "static", "dir": "web",    "image": "rn-web:dev" },
     { "name": "mobile", "kind": "node",   "dir": "mobile",
       "install": ["npm","install"], "run": ["npx","expo","start","--web","--port","$PORT"],
@@ -180,11 +180,20 @@ export function Templates() {
       </P>
       <H>Register & create</H>
       <P>
-        Add the template in <A href="/settings">Settings → Templates</A> (name → local path), then
-        on <A href="/projects">Projects</A> pick it from <B>"from template…"</B> and Create. That
-        provisions one workload per manifest entry; <B>provisioning is async</B> (the call returns
-        immediately, workloads go <M>provisioning → running/failed</M>) so a heavy first{' '}
-        <M>npm install</M> never blocks it.
+        Bundled examples in <M>template-examples/</M> are <B>auto-registered on startup</B> (via{' '}
+        <M>ORCHD_TEMPLATES_DIR</M>), so they're available on a fresh clone with no setup. Add your
+        own in <A href="/settings">Settings → Templates</A> (name → local path). Then on{' '}
+        <A href="/projects">Projects</A> use <B>New project → &lt;template&gt;</B>. That provisions
+        one workload per manifest entry; <B>provisioning is async</B> (the call returns immediately,
+        workloads go <M>provisioning → running/failed</M>) so a heavy first <M>npm install</M> never
+        blocks it.
+      </P>
+      <H>Environment variables</H>
+      <P>
+        Each workload can carry env vars: a workload's <M>env</M> in <M>orchd.json</M> (defaults),{' '}
+        <M>env</M> on the create/workload API, and the <B>Env</B> editor on a project's page (
+        <M>PUT /v1/workloads/&lt;id&gt;/env</M>). Setting env <B>reboots</B> the workload to apply
+        it. Platform vars (e.g. the tinbase JWT secret) are injected too; your keys can override.
       </P>
       <H>Local vs prod (same template)</H>
       <UL>

@@ -85,6 +85,11 @@ export const api = {
   deleteWorkload: (id: string) => req<null>('/v1/workloads/' + id, { method: 'DELETE' }),
   setKeepWarm: (id: string, enabled: boolean) =>
     req('/v1/workloads/' + id + '/keepwarm', { method: 'POST', body: JSON.stringify({ enabled }) }),
+  setWorkloadEnv: (id: string, env: Record<string, string>) =>
+    req<{ env: Record<string, string> }>('/v1/workloads/' + id + '/env', {
+      method: 'PUT',
+      body: JSON.stringify({ env }),
+    }),
   stats: (id: string) => req<Stats>('/v1/workloads/' + id + '/stats'),
   logs: (id: string, tail = 200) =>
     req<{ logs: string }>('/v1/workloads/' + id + '/logs?tail=' + tail),

@@ -19,7 +19,7 @@ export function Projects() {
   const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions })
   const templates = useQuery({ queryKey: ['templates'], queryFn: api.templates })
   const [region, setRegion] = useState('')
-  const [template, setTemplate] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
   const templateNames = Object.keys(templates.data ?? {})
 
   const create = useMutation({
@@ -62,36 +62,48 @@ export function Projects() {
                 </option>
               ))}
             </Select>
-            {templateNames.length > 0 && (
-              <>
-                <Select
-                  value={template}
-                  onChange={(e) => setTemplate(e.target.value)}
-                  title="Create a project from a template"
-                  className="h-9 font-mono"
-                >
-                  <option value="">from template…</option>
-                  {templateNames.map((t) => (
-                    <option key={t} value={t}>
-                      {t}
-                    </option>
-                  ))}
-                </Select>
-                <Button
-                  variant="secondary"
-                  disabled={!template || create.isPending}
-                  onClick={() => create.mutate({ template })}
-                >
-                  <IconPlus /> Create
-                </Button>
-              </>
-            )}
             <Button variant="secondary" onClick={() => projects.refetch()} title="Refresh">
               <IconRefresh />
             </Button>
-            <Button disabled={create.isPending} onClick={() => create.mutate({})}>
-              <IconPlus /> New project
-            </Button>
+            <div className="relative">
+              <Button disabled={create.isPending} onClick={() => setMenuOpen((v) => !v)}>
+                <IconPlus /> New project
+              </Button>
+              {menuOpen && (
+                <>
+                  <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
+                  <div className="absolute right-0 z-20 mt-1 w-60 overflow-hidden rounded-md border border-border bg-card py-1 shadow-lg">
+                    {templateNames.length > 0 && (
+                      <div className="px-3 pb-1 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                        From template
+                      </div>
+                    )}
+                    {templateNames.map((t) => (
+                      <button
+                        key={t}
+                        className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
+                        onClick={() => {
+                          setMenuOpen(false)
+                          create.mutate({ template: t })
+                        }}
+                      >
+                        <span className="font-mono">{t}</span>
+                      </button>
+                    ))}
+                    <div className="my-1 border-t border-border" />
+                    <button
+                      className="flex w-full items-center px-3 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+                      onClick={() => {
+                        setMenuOpen(false)
+                        create.mutate({})
+                      }}
+                    >
+                      Blank (tinbase backend)
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
           </>
         }
       />

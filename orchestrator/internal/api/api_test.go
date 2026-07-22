@@ -281,6 +281,34 @@ func TestPortAddressing(t *testing.T) {
 	}
 }
 
+func TestWorkloadEnvInjection(t *testing.T) {
+	srv := newTestServer(t)
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d", code)
+	}
+	var proj struct {
+		Workloads []struct {
+			ID string `json:"id"`
+		} `json:"workloads"`
+	}
+	json.Unmarshal(body, &proj)
+	wid := proj.Workloads[0].ID
+
+	if code, _ := do(t, srv, "PUT", "/v1/workloads/"+wid+"/env", bootstrapKey,
+		map[string]any{"env": map[string]string{"FOO": "bar"}}); code != http.StatusOK {
+		t.Fatalf("set env: %d", code)
+	}
+	_, wb := do(t, srv, "GET", "/v1/workloads/"+wid, bootstrapKey, nil)
+	var wl struct {
+		Env map[string]string `json:"env"`
+	}
+	json.Unmarshal(wb, &wl)
+	if wl.Env["FOO"] != "bar" {
+		t.Fatalf("env not applied: %v", wl.Env)
+	}
+}
+
 func TestTLSAllowAcrossDomains(t *testing.T) {
 	t.Setenv("ORCHD_ALT_DOMAINS", "tinbase.dev")
 	srv := newTestServer(t) // base domain defaults to lvh.me

@@ -21,6 +21,11 @@ type Config struct {
 	// lvh.me resolves *.lvh.me to 127.0.0.1, ideal for local dev.
 	BaseDomain string
 
+	// TemplatesDir, when set, is scanned on startup: every subdir containing an
+	// orchd.json is auto-registered as a template (by dir name) if not already
+	// registered — so bundled example templates are available on a fresh clone.
+	TemplatesDir string
+
 	// PortBase, when > 0, enables port-per-workload addressing: each workload is
 	// assigned a stable host port counting up from PortBase (8100, 8101, …) and
 	// is reachable directly at http://localhost:<port>, no gateway/subdomain
@@ -124,6 +129,7 @@ func Load() Config {
 		GatewayAddr:     gatewayAddr,
 		BaseDomain:      env("ORCHD_BASE_DOMAIN", baseDefault),
 		AltDomains:      splitCSV(env("ORCHD_ALT_DOMAINS", "")),
+		TemplatesDir:    env("ORCHD_TEMPLATES_DIR", ""),
 		PortBase:        envInt("ORCHD_PORT_BASE", 0),
 		DataRoot:        env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
 		Driver:          env("ORCHD_DRIVER", "local"),

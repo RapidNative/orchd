@@ -156,7 +156,7 @@ run. One template = one project; each workload is a workspace on its own port (l
     { "name": "db",     "kind": "tinbase" },
     { "name": "api",    "kind": "node",   "dir": "api",
       "install": ["npm","install"], "run": ["node","--watch","index.js"], "port_env": "PORT",
-      "image": "rn-api:dev" },
+      "env": { "NODE_ENV": "development" }, "image": "rn-api:dev" },
     { "name": "web",    "kind": "static", "dir": "web",    "image": "rn-web:dev" },
     { "name": "mobile", "kind": "node",   "dir": "mobile",
       "install": ["npm","install"], "run": ["npx","expo","start","--web","--port","$PORT"],
@@ -168,10 +168,16 @@ run. One template = one project; each workload is a workspace on its own port (l
 Kinds: `tinbase` (a tinbase backend), `node` (`install` once, then `run` with `$PORT`/`port_env`),
 `static` (a built-in zero-dep server for a folder).
 
-**Register & create:** add the template in Settings → Templates (name → local path), then on
-Projects pick it from *"from template…"* and Create. One workload per manifest entry; **provisioning
-is async** (the call returns immediately, workloads go `provisioning → running/failed`) so a heavy
-first `npm install` never blocks it.
+**Register & create:** bundled examples in `template-examples/` are **auto-registered on startup**
+(via `ORCHD_TEMPLATES_DIR`), so they work on a fresh clone with no setup. Add your own in
+Settings → Templates (name → local path). Then on Projects use **New project → <template>**. One
+workload per manifest entry; **provisioning is async** (the call returns immediately, workloads go
+`provisioning → running/failed`) so a heavy first `npm install` never blocks it.
+
+**Environment variables:** each workload can carry env vars — a workload's `env` in `orchd.json`
+(defaults), `env` on the create/workload API, and the **Env** editor on a project's page
+(`PUT /v1/workloads/<id>/env`). Setting env **reboots** the workload to apply it. Platform vars
+(e.g. the tinbase JWT secret) are injected too; your keys can override.
 
 **Local vs prod (same template):**
 - **Local (per-workload copy):** the template is copied into each workload's dir (minus

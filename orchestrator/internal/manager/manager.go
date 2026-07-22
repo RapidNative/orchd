@@ -70,13 +70,14 @@ type liveInstance struct {
 type WorkloadSpec struct {
 	Preset    string // optional: resolves Type/Image/Port/Name from the catalog
 	Type      runtime.WorkloadType
-	Name      string  // role within the project ("" = primary, else "api"/"web"/...)
-	Image     string  // optional image override
-	Port      int     // optional container port override
-	MemoryMB  int     // optional memory cap override (0 = type default)
-	CPUs      float64 // optional CPU cap override (0 = type default)
-	Template  string  // template name (local template mode)
-	Workspace string  // orchd.json workspace name within the template
+	Name      string            // role within the project ("" = primary, else "api"/"web"/...)
+	Image     string            // optional image override
+	Port      int               // optional container port override
+	MemoryMB  int               // optional memory cap override (0 = type default)
+	CPUs      float64           // optional CPU cap override (0 = type default)
+	Template  string            // template name (local template mode)
+	Workspace string            // orchd.json workspace name within the template
+	Env       map[string]string // user-injected environment variables
 }
 
 // preset is a named workload template so the API/UI can ask for "expo"/"vite"/
@@ -110,6 +111,7 @@ func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 	m.applyWebhookSettings()
 	m.applyMetricsSettings()
 	m.seedRegions()
+	m.seedTemplates()
 	return m
 }
 
@@ -471,8 +473,63 @@ func (m *Manager) templatePath(name string) string {
 	return os.Getenv("ORCHD_TEMPLATE_" + strings.ToUpper(strings.ReplaceAll(name, "-", "_")))
 }
 
+// seedTemplates auto-registers every subdir of cfg.TemplatesDir that has an
+// orchd.json, so bundled example templates are available on a fresh clone
+// without manual setup. It never overwrites a template a user already set.
+func (m *Manager) seedTemplates() {
+	if m.cfg.TemplatesDir == "" {
+		return
+	}
+	entries, err := os.ReadDir(m.cfg.TemplatesDir)
+	if err != nil {
+		return
+	}
+	existing := m.store.GetSettings().Templates
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		if _, ok := existing[e.Name()]; ok {
+			continue // user-registered wins
+		}
+		dir := filepath.Join(m.cfg.TemplatesDir, e.Name())
+		if _, err := os.Stat(filepath.Join(dir, template.FileName)); err != nil {
+			continue // not a template
+		}
+		if err := m.SetTemplate(e.Name(), dir); err == nil {
+			log.Printf("template seeded: %s -> %s", e.Name(), dir)
+		}
+	}
+}
+
 // GetTemplates returns the configured template name->path map.
 func (m *Manager) GetTemplates() map[string]string { return m.store.GetSettings().Templates }
+
+// SetWorkloadEnv replaces a workload's injected env and reboots it to apply.
+func (m *Manager) SetWorkloadEnv(ctx context.Context, workloadID string, env map[string]string) error {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	w.Env = env
+	if err := m.store.PutWorkload(w); err != nil {
+		return err
+	}
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+	_ = m.rt.Stop(ctx, workloadID)
+	m.forget(workloadID)
+	inst, err := m.rt.Create(ctx, m.specFor(w)) // recreate so new env takes effect
+	if err != nil {
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+		return fmt.Errorf("reboot with new env: %w", err)
+	}
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+	m.markLive(workloadID, inst.Addr)
+	m.emit("workload.env_updated", w.ProjectID, workloadID, "")
+	return nil
+}
 
 // SetTemplate registers (or, with an empty path, removes) a template path.
 func (m *Manager) SetTemplate(name, path string) error {
@@ -502,7 +559,7 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 	}
 	specs := make([]WorkloadSpec, 0, len(man.Workloads))
 	for _, w := range man.Workloads {
-		s := WorkloadSpec{Template: tmplName, Workspace: w.Name, Name: w.Name, Image: w.Image}
+		s := WorkloadSpec{Template: tmplName, Workspace: w.Name, Name: w.Name, Image: w.Image, Env: w.Env}
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
 			s.Name = "" // primary
@@ -616,6 +673,7 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		HostPort:  m.allocHostPort(),
 		Template:  ws.Template,
 		Workspace: ws.Workspace,
+		Env:       ws.Env,
 		MemoryMB:  mem,
 		CPUs:      cpus,
 		State:     runtime.StateProvisioning,
@@ -1220,6 +1278,11 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 			dockerHost = rg.DockerHost
 		}
 	}
+	// Platform env first, then the user's injected env (which may override).
+	env := map[string]string{"TINBASE_JWT_SECRET": w.JWTSecret}
+	for k, v := range w.Env {
+		env[k] = v
+	}
 	return runtime.Spec{
 		Type:        w.Type,
 		Ref:         w.ID, // runtime key = workload id
@@ -1230,9 +1293,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		TemplateSrc: m.templatePath(w.Template),
 		Workspace:   w.Workspace,
 		DockerHost:  dockerHost,
-		Env: map[string]string{
-			"TINBASE_JWT_SECRET": w.JWTSecret,
-		},
+		Env:         env,
 		Limits: runtime.Limits{
 			MemoryMB:  w.MemoryMB,
 			CPUs:      w.CPUs,

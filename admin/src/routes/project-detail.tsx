@@ -97,6 +97,87 @@ function DomainsCard({ workloads, onChange }: { workloads: Workload[]; onChange:
   )
 }
 
+// parseEnv turns "KEY=value" lines (blank/# ignored) into a map.
+function parseEnv(text: string): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const line of text.split('\n')) {
+    const t = line.trim()
+    if (!t || t.startsWith('#')) continue
+    const i = t.indexOf('=')
+    if (i < 0) continue
+    out[t.slice(0, i).trim()] = t.slice(i + 1).trim()
+  }
+  return out
+}
+
+// EnvButton edits a workload's injected env vars; saving reboots the workload.
+function EnvButton({ w, onSaved }: { w: Workload; onSaved: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [text, setText] = useState('')
+  const save = useMutation({
+    mutationFn: () => api.setWorkloadEnv(w.id, parseEnv(text)),
+    onSuccess: () => {
+      setOpen(false)
+      onSaved()
+    },
+  })
+  const count = Object.keys(w.env ?? {}).length
+  return (
+    <>
+      <Button
+        size="sm"
+        variant="secondary"
+        title="Environment variables"
+        onClick={() => {
+          setText(
+            Object.entries(w.env ?? {})
+              .map(([k, v]) => `${k}=${v}`)
+              .join('\n'),
+          )
+          setOpen(true)
+        }}
+      >
+        Env{count ? ` (${count})` : ''}
+      </Button>
+      {open && (
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4"
+          onClick={() => setOpen(false)}
+        >
+          <Card className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <CardHeader>
+              <CardTitle className="text-base">Env — {w.name || 'primary'}</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <textarea
+                className="h-48 w-full rounded-md border border-border bg-input p-3 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                placeholder={'KEY=value\nANOTHER_KEY=value'}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                One <code className="font-mono">KEY=value</code> per line. Saving reboots the
+                workload to apply.
+              </p>
+              {save.isError && (
+                <p className="mt-1 text-sm text-destructive">{(save.error as Error).message}</p>
+              )}
+              <div className="mt-3 flex justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setOpen(false)}>
+                  Cancel
+                </Button>
+                <Button size="sm" disabled={save.isPending} onClick={() => save.mutate()}>
+                  {save.isPending ? 'Saving…' : 'Save & reboot'}
+                </Button>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      )}
+    </>
+  )
+}
+
 function WorkloadStats({ w }: { w: Workload }) {
   const q = useQuery({
     queryKey: ['stats', w.id],
@@ -312,6 +393,7 @@ export function ProjectDetail() {
                           <CopyButton value={w.anon_key} label="anon" />
                         </>
                       )}
+                      <EnvButton w={w} onSaved={invalidate} />
                       <Button
                         size="sm"
                         variant="destructive"

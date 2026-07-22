@@ -8,6 +8,10 @@ export interface Workload {
   memory_mb?: number
   cpus?: number
   keep_warm?: boolean
+  host_port?: number
+  template?: string
+  workspace?: string
+  env?: Record<string, string>
   state: 'provisioning' | 'running' | 'suspended' | 'stopped' | 'failed'
   anon_key?: string
   service_role_key?: string
