@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"strconv"
@@ -78,6 +79,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/images", a.removeImage)
 	mux.HandleFunc("GET /v1/templates", a.listTemplates)
 	mux.HandleFunc("PUT /v1/templates", a.setTemplate)
+	mux.HandleFunc("GET /v1/templates/{name}", a.getTemplate)
+	mux.HandleFunc("GET /v1/templates/{name}/files", a.templateFiles)
+	mux.HandleFunc("GET /v1/templates/{name}/bundle", a.templateBundle)
+	mux.HandleFunc("GET /v1/workloads/{id}/fs", a.workloadFiles)
+	mux.HandleFunc("GET /v1/workloads/{id}/fs/file", a.workloadFileGet)
+	mux.HandleFunc("PUT /v1/workloads/{id}/fs/file", a.workloadFilePut)
+	mux.HandleFunc("DELETE /v1/workloads/{id}/fs/file", a.workloadFileDelete)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/name", a.setInstanceName)
 	mux.HandleFunc("POST /v1/system/backup", a.backupState)
@@ -259,7 +267,9 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string            `json:"name"`
 		Region    string            `json:"region"`
-		Template  string            `json:"template"` // create from a registered template
+		Template  string            `json:"template"`          // create from a registered template
+		Delta     map[string]string `json:"delta,omitempty"`   // files to overlay on the base (path -> content)
+		Deleted   []string          `json:"deleted,omitempty"` // base paths to remove
 		Workloads []workloadSpecReq `json:"workloads"`
 	}
 	if r.ContentLength > 0 {
@@ -268,7 +278,7 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var proj *store.Project
 	var err error
 	if body.Template != "" {
-		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region)
+		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region, body.Delta, body.Deleted)
 	} else {
 		specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
 		for _, ws := range body.Workloads {
@@ -692,6 +702,98 @@ func (a *API) setTemplate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, a.mgr.GetTemplates())
+}
+
+func (a *API) getTemplate(w http.ResponseWriter, r *http.Request) {
+	man, err := a.mgr.TemplateManifest(r.PathValue("name"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, man)
+}
+
+func (a *API) templateFiles(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if path := r.URL.Query().Get("path"); path != "" {
+		b, err := a.mgr.TemplateFile(name, path)
+		if err != nil {
+			writeErr(w, http.StatusNotFound, err)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = w.Write(b)
+		return
+	}
+	files, err := a.mgr.TemplateFiles(name)
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+func (a *API) templateBundle(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`.tar.gz"`)
+	if err := a.mgr.TemplateBundle(name, w); err != nil {
+		// Headers may already be sent; log-level only.
+		return
+	}
+}
+
+func (a *API) workloadFiles(w http.ResponseWriter, r *http.Request) {
+	files, err := a.mgr.WorkloadFiles(r.PathValue("id"))
+	if err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	if files == nil {
+		files = []string{}
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+func (a *API) workloadFileGet(w http.ResponseWriter, r *http.Request) {
+	b, err := a.mgr.WorkloadFile(r.PathValue("id"), r.URL.Query().Get("path"))
+	if err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	_, _ = w.Write(b)
+}
+
+func (a *API) workloadFilePut(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("path query param required"))
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 16<<20)) // 16 MiB cap
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.WriteWorkloadFile(r.PathValue("id"), path, body); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"path": path, "bytes": len(body)})
+}
+
+func (a *API) workloadFileDelete(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		writeErr(w, http.StatusBadRequest, errors.New("path query param required"))
+		return
+	}
+	if err := a.mgr.DeleteWorkloadFile(r.PathValue("id"), path); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) setInstanceName(w http.ResponseWriter, r *http.Request) {

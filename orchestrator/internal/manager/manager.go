@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -68,16 +69,18 @@ type liveInstance struct {
 
 // WorkloadSpec describes a workload to create within a project.
 type WorkloadSpec struct {
-	Preset    string // optional: resolves Type/Image/Port/Name from the catalog
-	Type      runtime.WorkloadType
-	Name      string            // role within the project ("" = primary, else "api"/"web"/...)
-	Image     string            // optional image override
-	Port      int               // optional container port override
-	MemoryMB  int               // optional memory cap override (0 = type default)
-	CPUs      float64           // optional CPU cap override (0 = type default)
-	Template  string            // template name (local template mode)
-	Workspace string            // orchd.json workspace name within the template
-	Env       map[string]string // user-injected environment variables
+	Preset      string // optional: resolves Type/Image/Port/Name from the catalog
+	Type        runtime.WorkloadType
+	Name        string            // role within the project ("" = primary, else "api"/"web"/...)
+	Image       string            // optional image override
+	Port        int               // optional container port override
+	MemoryMB    int               // optional memory cap override (0 = type default)
+	CPUs        float64           // optional CPU cap override (0 = type default)
+	Template    string            // template name (local template mode)
+	Workspace   string            // orchd.json workspace name within the template
+	Env         map[string]string // user-injected environment variables
+	SeedDelta   map[string]string // files to overlay on the base at seed (path -> content)
+	SeedDeleted []string          // base paths to remove at seed (tombstones)
 }
 
 // preset is a named workload template so the API/UI can ask for "expo"/"vite"/
@@ -505,6 +508,88 @@ func (m *Manager) seedTemplates() {
 // GetTemplates returns the configured template name->path map.
 func (m *Manager) GetTemplates() map[string]string { return m.store.GetSettings().Templates }
 
+// ---- template base (served + browsable) ----
+
+func (m *Manager) TemplateManifest(name string) (*template.Manifest, error) {
+	p := m.templatePath(name)
+	if p == "" {
+		return nil, fmt.Errorf("template %q not configured", name)
+	}
+	return template.Load(p)
+}
+
+func (m *Manager) templateExcludes(name string) (string, []string, error) {
+	p := m.templatePath(name)
+	if p == "" {
+		return "", nil, fmt.Errorf("template %q not configured", name)
+	}
+	man, err := template.Load(p)
+	if err != nil {
+		return p, nil, nil // still browsable even without a valid manifest
+	}
+	return p, man.BackupExclude, nil
+}
+
+func (m *Manager) TemplateFiles(name string) ([]string, error) {
+	p, ex, err := m.templateExcludes(name)
+	if err != nil {
+		return nil, err
+	}
+	return template.ListFiles(p, ex)
+}
+
+func (m *Manager) TemplateFile(name, rel string) ([]byte, error) {
+	p, _, err := m.templateExcludes(name)
+	if err != nil {
+		return nil, err
+	}
+	return template.ReadFile(p, rel)
+}
+
+func (m *Manager) TemplateBundle(name string, w io.Writer) error {
+	p, ex, err := m.templateExcludes(name)
+	if err != nil {
+		return err
+	}
+	return template.Bundle(p, ex, w)
+}
+
+// ---- live workload filesystem (the materialized base + delta) ----
+
+func (m *Manager) WorkloadFiles(id string) ([]string, error) {
+	w, err := m.store.GetWorkload(id)
+	if err != nil {
+		return nil, err
+	}
+	return template.ListFiles(w.DataDir, deltaBackupExclude)
+}
+
+func (m *Manager) WorkloadFile(id, rel string) ([]byte, error) {
+	w, err := m.store.GetWorkload(id)
+	if err != nil {
+		return nil, err
+	}
+	return template.ReadFile(w.DataDir, rel)
+}
+
+// WriteWorkloadFile writes into the running workload's tree. The dev server's
+// file watcher picks it up (HMR). No reboot.
+func (m *Manager) WriteWorkloadFile(id, rel string, content []byte) error {
+	w, err := m.store.GetWorkload(id)
+	if err != nil {
+		return err
+	}
+	return template.WriteFile(w.DataDir, rel, content)
+}
+
+func (m *Manager) DeleteWorkloadFile(id, rel string) error {
+	w, err := m.store.GetWorkload(id)
+	if err != nil {
+		return err
+	}
+	return template.DeleteFile(w.DataDir, rel)
+}
+
 // rebootWorkload recreates a workload's instance (stop -> create), picking up
 // the current spec — new env, etc. Serialized per workload via refLock.
 func (m *Manager) rebootWorkload(ctx context.Context, w *store.Workload) error {
@@ -660,7 +745,7 @@ func (m *Manager) SetTemplate(name, path string) error {
 // CreateFromTemplate provisions a project whose workloads come from a template's
 // orchd.json: one workload per manifest entry, each running its workspace on its
 // own port (local) or from its image (prod).
-func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string, delta map[string]string, deleted []string) (*store.Project, []*store.Workload, error) {
 	path := m.templatePath(tmplName)
 	if path == "" {
 		return nil, nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmplName)
@@ -671,7 +756,7 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 	}
 	specs := make([]WorkloadSpec, 0, len(man.Workloads))
 	for _, w := range man.Workloads {
-		s := WorkloadSpec{Template: tmplName, Workspace: w.Name, Name: w.Name, Image: w.Image, Env: w.Env}
+		s := WorkloadSpec{Template: tmplName, Workspace: w.Name, Name: w.Name, Image: w.Image, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
 			s.Name = "" // primary
@@ -806,6 +891,23 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 	host := key + "." + m.cfg.BaseDomain
 	if err := m.store.PutRoute(&store.Route{Host: host, Key: key, WorkloadID: wid, CreatedAt: time.Now()}); err != nil {
 		return nil, err
+	}
+
+	// Materialize a template workload's working tree now (base copy + delta), and
+	// mark it seeded so the driver runs it as-is. Fast (file copy); the slow part
+	// (npm install) stays in the async boot below.
+	if w.Template != "" {
+		if base := m.templatePath(w.Template); base != "" {
+			var excl []string
+			if man, err := template.Load(base); err == nil {
+				excl = man.BackupExclude
+			}
+			if err := template.Materialize(base, w.DataDir, excl, ws.SeedDelta, ws.SeedDeleted); err != nil {
+				log.Printf("materialize %s: %v", wid, err)
+			} else {
+				_ = os.WriteFile(filepath.Join(w.DataDir, ".orchd-seeded"), []byte("ok\n"), 0o644)
+			}
+		}
 	}
 
 	m.emit("workload.created", proj.ID, wid, ws.Name)
