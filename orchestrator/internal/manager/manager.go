@@ -843,6 +843,12 @@ func (m *Manager) WakeKeepWarm(ctx context.Context) {
 
 // ReapIdle suspends workloads idle longer than the configured timeout.
 func (m *Manager) ReapIdle(ctx context.Context) {
+	// IdleTimeout <= 0 disables scale-to-zero (everything stays warm). Used
+	// locally, where workloads are addressed by their own port (bypassing the
+	// gateway) so there is nothing to refresh idleness or wake a reaped one.
+	if m.cfg.IdleTimeout <= 0 {
+		return
+	}
 	now := time.Now()
 	m.mu.Lock()
 	var stale []string

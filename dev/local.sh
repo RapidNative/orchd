@@ -62,7 +62,7 @@ env ORCHD_LOCAL=1 \
     ORCHD_STATE_SQLITE="$DATA/state/orchd.db" \
     ORCHD_BACKUP_DIR="$DATA/backups" \
     ORCHD_API_KEY_FILE="$KEYFILE" \
-    ORCHD_IDLE_TIMEOUT=120s \
+    ORCHD_IDLE_TIMEOUT=0 \
     "$DATA/orchd" &
 ORCHD_PID=$!
 trap 'kill $ORCHD_PID 2>/dev/null || true' EXIT INT TERM
