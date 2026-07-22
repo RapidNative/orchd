@@ -398,6 +398,16 @@ func (m *Manager) SetInstanceName(name string) error {
 	return m.store.SetSettings(s)
 }
 
+// GetRegistry returns the container registry prefix `push` re-tags under.
+func (m *Manager) GetRegistry() string { return m.store.GetSettings().Registry }
+
+// SetRegistry sets the container registry prefix (e.g. "ghcr.io/acme").
+func (m *Manager) SetRegistry(prefix string) error {
+	s := m.store.GetSettings()
+	s.Registry = strings.TrimSpace(prefix)
+	return m.store.SetSettings(s)
+}
+
 func (m *Manager) GetWebhook() string { return m.store.GetSettings().Webhook.URL }
 
 func (m *Manager) SetWebhook(url string) error {
@@ -777,22 +787,29 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 // image's tarball (local) or runs the versioned container tag (prod), rather than
 // the live template. A caller-supplied delta still overlays on top.
 func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projName, regionID string, delta map[string]string, deleted []string) (*store.Project, []*store.Workload, error) {
-	if _, err := m.store.GetImage(tmplName, version); err != nil {
+	im, err := m.store.GetImage(tmplName, version)
+	if err != nil {
 		return nil, nil, fmt.Errorf("image %s: %w", store.ImageID(tmplName, version), err)
 	}
-	// The manifest still lives with the template; the image is a frozen copy of
-	// the same tree, so the workload shape matches.
-	path := m.templatePath(tmplName)
-	if path == "" {
-		return nil, nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmplName)
+
+	// Prefer the workload shape frozen into the image (self-describing, works for
+	// imported images with no template folder); fall back to the live template
+	// manifest for older images built before shapes were stored.
+	shape := im.Workloads
+	if len(shape) == 0 {
+		if path := m.templatePath(tmplName); path != "" {
+			if man, lerr := template.Load(path); lerr == nil {
+				shape = imageWorkloads(man)
+			}
+		}
 	}
-	man, err := template.Load(path)
-	if err != nil {
-		return nil, nil, fmt.Errorf("template %q: %w", tmplName, err)
+	if len(shape) == 0 {
+		return nil, nil, fmt.Errorf("image %s has no workload shape and template %q is not available", store.ImageID(tmplName, version), tmplName)
 	}
-	specs := make([]WorkloadSpec, 0, len(man.Workloads))
-	for _, w := range man.Workloads {
-		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Name, Name: w.Name, Image: w.Image, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
+
+	specs := make([]WorkloadSpec, 0, len(shape))
+	for _, w := range shape {
+		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Workspace, Name: w.Name, Image: w.Image, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
 			s.Name = ""
@@ -802,7 +819,7 @@ func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projNa
 		specs = append(specs, s)
 	}
 	if projName == "" {
-		projName = man.Name
+		projName = tmplName
 	}
 	return m.CreateProject(ctx, projName, regionID, specs)
 }
@@ -936,11 +953,16 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 	// tarball (boot-from-image) or the live template dir (boot-from-template).
 	if w.Template != "" {
 		var err error
+		seeded := true
 		if w.ImageVer != "" {
-			if im, gerr := m.store.GetImage(w.Template, w.ImageVer); gerr == nil {
+			if im, gerr := m.store.GetImage(w.Template, w.ImageVer); gerr != nil {
+				err = fmt.Errorf("image %s: %w", store.ImageID(w.Template, w.ImageVer), gerr)
+			} else if im.Tarball != "" {
 				err = template.MaterializeFromTar(im.Tarball, w.DataDir, ws.SeedDelta, ws.SeedDeleted)
 			} else {
-				err = fmt.Errorf("image %s: %w", store.ImageID(w.Template, w.ImageVer), gerr)
+				// Docker-only (imported) image: no tree to restore. The docker
+				// driver runs the registry image, which carries its own files.
+				seeded = false
 			}
 		} else if base := m.templatePath(w.Template); base != "" {
 			var excl []string
@@ -951,7 +973,7 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		}
 		if err != nil {
 			log.Printf("materialize %s: %v", wid, err)
-		} else {
+		} else if seeded {
 			_ = os.WriteFile(filepath.Join(w.DataDir, ".orchd-seeded"), []byte("ok\n"), 0o644)
 		}
 	}

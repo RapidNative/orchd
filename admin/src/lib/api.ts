@@ -6,6 +6,7 @@ import type {
   BuiltImage,
   Event,
   Image,
+  ImageImportSpec,
   Info,
   MetricsTarget,
   Project,
@@ -92,6 +93,17 @@ export const api = {
       '/v1/built-images/' + encodeURIComponent(template) + '/' + encodeURIComponent(version),
       { method: 'DELETE' },
     ),
+  pushImage: (template: string, version: string) =>
+    req<{ registry: Record<string, string> }>(
+      '/v1/built-images/' + encodeURIComponent(template) + '/' + encodeURIComponent(version) + '/push',
+      { method: 'POST' },
+    ),
+  imageSpec: (template: string, version: string) =>
+    req<ImageImportSpec>(
+      '/v1/built-images/' + encodeURIComponent(template) + '/' + encodeURIComponent(version) + '/spec',
+    ),
+  importImage: (spec: ImageImportSpec) =>
+    req<BuiltImage>('/v1/built-images/import', { method: 'POST', body: JSON.stringify(spec) }),
   workloadFiles: (id: string) => req<string[]>('/v1/workloads/' + id + '/fs'),
   workloadFile: (id: string, path: string) =>
     reqText('/v1/workloads/' + id + '/fs/file?path=' + encodeURIComponent(path)),
@@ -166,6 +178,11 @@ export const api = {
     req<{ instance_name: string }>('/v1/settings/name', {
       method: 'PUT',
       body: JSON.stringify({ instance_name }),
+    }),
+  setRegistry: (registry: string) =>
+    req<{ registry: string }>('/v1/settings/registry', {
+      method: 'PUT',
+      body: JSON.stringify({ registry }),
     }),
   backupState: () => req<Backup>('/v1/system/backup', { method: 'POST' }),
   setWebhook: (url: string) =>

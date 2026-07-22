@@ -90,6 +90,7 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 		Version:   version,
 		Tarball:   tarPath,
 		Dockers:   map[string]string{},
+		Workloads: imageWorkloads(man),
 		CreatedAt: time.Now(),
 	}
 
@@ -115,6 +116,114 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 		return nil, err
 	}
 	m.emit("image.built", "", "", store.ImageID(tmpl, version))
+	return im, nil
+}
+
+// imageWorkloads freezes a manifest's workload shape into the driver-agnostic
+// form stored on an image (so an import needs no template folder).
+func imageWorkloads(man *template.Manifest) []store.ImageWorkload {
+	out := make([]store.ImageWorkload, 0, len(man.Workloads))
+	for _, w := range man.Workloads {
+		out = append(out, store.ImageWorkload{
+			Name:      w.Name,
+			Kind:      w.Kind,
+			Workspace: w.Name,
+			Image:     w.Image,
+			Env:       w.Env,
+		})
+	}
+	return out
+}
+
+// PushImage re-tags each of an image's local docker tags under the configured
+// registry prefix and pushes them, recording the pushed refs. Returns the
+// workspace -> registry ref map. Requires a configured registry, the docker CLI,
+// and an image that actually built docker tags (not tarball-only).
+func (m *Manager) PushImage(ctx context.Context, tmpl, version string) (map[string]string, error) {
+	im, err := m.store.GetImage(tmpl, version)
+	if err != nil {
+		return nil, err
+	}
+	registry := strings.TrimRight(m.store.GetSettings().Registry, "/")
+	if registry == "" {
+		return nil, fmt.Errorf("no registry configured (set one in Settings)")
+	}
+	if len(im.Dockers) == 0 {
+		return nil, fmt.Errorf("image %s has no docker images to push (tarball-only)", store.ImageID(tmpl, version))
+	}
+	if _, err := exec.LookPath("docker"); err != nil {
+		return nil, fmt.Errorf("docker CLI not found")
+	}
+	pushed := map[string]string{}
+	for ws, localTag := range im.Dockers {
+		ref := fmt.Sprintf("%s/orchd-%s-%s:%s", registry, sanitizeTag(tmpl), sanitizeTag(ws), version)
+		if out, err := exec.CommandContext(ctx, "docker", "tag", localTag, ref).CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("tag %s: %v: %s", ws, err, tailStr(string(out), 300))
+		}
+		if out, err := exec.CommandContext(ctx, "docker", "push", ref).CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("push %s: %v: %s", ws, err, tailStr(string(out), 300))
+		}
+		pushed[ws] = ref
+	}
+	im.Registry = pushed
+	if err := m.store.PutImage(im); err != nil {
+		return nil, err
+	}
+	m.emit("image.pushed", "", "", store.ImageID(tmpl, version))
+	return pushed, nil
+}
+
+// ImportSpec is the self-contained descriptor another instance imports to run a
+// frozen image without its tarball or template folder: the registry docker refs
+// plus the workload shape.
+type ImportSpec struct {
+	Template  string                `json:"template"`
+	Version   string                `json:"version"`
+	Dockers   map[string]string     `json:"dockers"` // workspace -> registry ref (pullable on the target)
+	Workloads []store.ImageWorkload `json:"workloads"`
+}
+
+// ImageImportSpec produces the ImportSpec for a pushed image — what an operator
+// copies to a target ORCHD instance. Requires the image to have been pushed
+// (registry refs), since the target must be able to pull it.
+func (m *Manager) ImageImportSpec(tmpl, version string) (*ImportSpec, error) {
+	im, err := m.store.GetImage(tmpl, version)
+	if err != nil {
+		return nil, err
+	}
+	if len(im.Registry) == 0 {
+		return nil, fmt.Errorf("image %s has not been pushed to a registry yet", store.ImageID(tmpl, version))
+	}
+	return &ImportSpec{
+		Template:  im.Template,
+		Version:   im.Version,
+		Dockers:   im.Registry,
+		Workloads: im.Workloads,
+	}, nil
+}
+
+// ImportImage records a frozen image imported from another instance. It is
+// docker-only (no tarball): the docker driver pulls the registry refs on boot.
+func (m *Manager) ImportImage(spec ImportSpec) (*store.Image, error) {
+	if spec.Template == "" || spec.Version == "" {
+		return nil, fmt.Errorf("template and version are required")
+	}
+	if len(spec.Dockers) == 0 {
+		return nil, fmt.Errorf("no docker refs to import")
+	}
+	im := &store.Image{
+		Template:  spec.Template,
+		Version:   spec.Version,
+		Dockers:   spec.Dockers,
+		Registry:  spec.Dockers,
+		Workloads: spec.Workloads,
+		Imported:  true,
+		CreatedAt: time.Now(),
+	}
+	if err := m.store.PutImage(im); err != nil {
+		return nil, err
+	}
+	m.emit("image.imported", "", "", store.ImageID(spec.Template, spec.Version))
 	return im, nil
 }
 

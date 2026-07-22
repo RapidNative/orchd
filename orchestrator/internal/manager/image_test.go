@@ -108,6 +108,73 @@ func TestCreateFromImageMaterializesTarballPlusDelta(t *testing.T) {
 	}
 }
 
+// TestImportImageBootsWithoutTemplateOrTarball simulates the target side of a
+// registry publish: an image imported from another instance (docker-only, no
+// tarball, no template folder registered here). Creating a project from it must
+// succeed using the frozen workload shape, and the workload must carry the
+// registry docker ref for the driver to run.
+func TestImportImageBootsWithoutTemplateOrTarball(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir()}, st, reapStub{})
+
+	// No template registered, no tarball on disk — only the import spec.
+	spec := ImportSpec{
+		Template: "rapidnative",
+		Version:  "v2",
+		Dockers:  map[string]string{"api": "ghcr.io/acme/orchd-rapidnative-api:v2"},
+		Workloads: []store.ImageWorkload{
+			{Name: "api", Kind: "node", Workspace: "api", Image: "rn-api:dev"},
+		},
+	}
+	im, err := m.ImportImage(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !im.Imported || im.Tarball != "" {
+		t.Fatalf("imported image should be docker-only: imported=%v tarball=%q", im.Imported, im.Tarball)
+	}
+
+	_, wls, err := m.CreateFromImage(context.Background(), "rapidnative", "v2", "proj", "", nil, nil)
+	if err != nil {
+		t.Fatalf("CreateFromImage from imported image: %v", err)
+	}
+	if len(wls) != 1 {
+		t.Fatalf("workloads = %d, want 1", len(wls))
+	}
+	w := wls[0]
+	if w.ImageVer != "v2" || w.Workspace != "api" {
+		t.Fatalf("workload not wired to image: ver=%q ws=%q", w.ImageVer, w.Workspace)
+	}
+	// The docker driver resolves the registry ref via specFor.
+	spec2 := m.specFor(w)
+	if spec2.Image != "ghcr.io/acme/orchd-rapidnative-api:v2" {
+		t.Fatalf("specFor image = %q, want the registry ref", spec2.Image)
+	}
+	// No tree was materialized (docker-only), so no seed marker.
+	if _, err := os.Stat(filepath.Join(w.DataDir, ".orchd-seeded")); err == nil {
+		t.Fatal("docker-only image should not seed a working tree")
+	}
+}
+
+// TestPushImageRequiresRegistry errors clearly when no registry is set.
+func TestPushImageRequiresRegistry(t *testing.T) {
+	tmplDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"),
+		[]byte(`{"name":"demo","workloads":[{"name":"db","kind":"tinbase"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir()}, st, reapStub{})
+	_ = m.SetTemplate("demo", tmplDir)
+	if _, err := m.BuildImage(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	// tinbase-only image → no docker tags, and no registry set: push must error.
+	if _, err := m.PushImage(context.Background(), "demo", "v1"); err == nil {
+		t.Fatal("expected push to fail without a registry")
+	}
+}
+
 // TestBuildImageUnknownTemplate errors cleanly.
 func TestBuildImageUnknownTemplate(t *testing.T) {
 	st, _ := store.Open("")

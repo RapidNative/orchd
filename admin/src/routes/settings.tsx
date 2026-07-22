@@ -156,6 +156,49 @@ function InstanceCard() {
   )
 }
 
+// RegistryCard configures the container registry that `push` re-tags built
+// images under, so they can be published to another ORCHD instance.
+function RegistryCard() {
+  const qc = useQueryClient()
+  const settings = useQuery({ queryKey: ['settings'], queryFn: API.settings })
+  const [val, setVal] = useState<string | null>(null)
+  const current = settings.data?.registry ?? ''
+  const value = val ?? current
+  const save = useMutation({
+    mutationFn: () => API.setRegistry(value.trim()),
+    onSuccess: () => {
+      setVal(null)
+      qc.invalidateQueries({ queryKey: ['settings'] })
+    },
+  })
+
+  return (
+    <Card className="mb-6 max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">Container registry</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Field
+          label="Registry prefix"
+          hint='Where "Push" re-tags and pushes built images, e.g. "ghcr.io/acme". Leave blank to disable pushing. Another ORCHD instance imports the pushed refs to run the same image.'
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              className="max-w-80 font-mono"
+              placeholder="ghcr.io/acme"
+              value={value}
+              onChange={(e) => setVal(e.target.value)}
+            />
+            <Button onClick={() => save.mutate()} disabled={save.isPending || value.trim() === current}>
+              Save
+            </Button>
+          </div>
+        </Field>
+      </CardContent>
+    </Card>
+  )
+}
+
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="grid gap-1.5">
@@ -314,6 +357,7 @@ export function Settings() {
       <PageHeader title="Settings" subtitle="Instance, regions, backups, notifications" />
 
       <InstanceCard />
+      <RegistryCard />
       <RegionsCard />
       <KeysCard />
 

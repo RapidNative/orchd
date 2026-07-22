@@ -75,13 +75,29 @@ type APIKey struct {
 
 // Image is an immutable, versioned build of a template: a base tarball (stored
 // on this ORCHD instance) plus, per workspace, a docker image tag. Local runs
-// from the tarball; prod runs the docker images.
+// from the tarball; prod runs the docker images. An imported image (moved from
+// another instance) has no local tarball — it carries only registry docker refs
+// and the workload shape, and is docker-only.
 type Image struct {
 	Template  string            `json:"template"`
-	Version   string            `json:"version"`           // v1, v2, …
-	Tarball   string            `json:"tarball"`           // local path to base.tar.gz on this instance
-	Dockers   map[string]string `json:"dockers,omitempty"` // workspace name -> docker image tag
+	Version   string            `json:"version"`             // v1, v2, …
+	Tarball   string            `json:"tarball,omitempty"`   // local path to base.tar.gz ("" = docker-only / imported)
+	Dockers   map[string]string `json:"dockers,omitempty"`   // workspace name -> docker image tag (local or registry ref)
+	Registry  map[string]string `json:"registry,omitempty"`  // workspace name -> pushed registry ref (after a push)
+	Workloads []ImageWorkload   `json:"workloads,omitempty"` // the frozen workload shape (so an import is self-describing)
+	Imported  bool              `json:"imported,omitempty"`  // true = created via import, not built here
 	CreatedAt time.Time         `json:"created_at"`
+}
+
+// ImageWorkload is the minimal, driver-agnostic shape of one template workload,
+// frozen into an image so a project can be created from it without the original
+// template folder (e.g. on an instance the image was imported to).
+type ImageWorkload struct {
+	Name      string            `json:"name"`
+	Kind      string            `json:"kind"` // tinbase | node | static
+	Workspace string            `json:"workspace"`
+	Image     string            `json:"image,omitempty"`
+	Env       map[string]string `json:"env,omitempty"`
 }
 
 // ImageID is the "template@version" key for an image.
@@ -170,6 +186,9 @@ type Settings struct {
 	// Templates maps a template name to a local folder path holding its
 	// orchd.json (local template mode). e.g. "rapidnative" -> "/Users/…/rapidnative-template".
 	Templates map[string]string `json:"templates,omitempty"`
+	// Registry is the container registry prefix that `push` re-tags images under,
+	// e.g. "ghcr.io/acme". Empty = pushing is disabled.
+	Registry string `json:"registry,omitempty"`
 }
 
 // Route maps a workload to a hostname and a stable key. Host drives subdomain

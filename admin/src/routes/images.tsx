@@ -9,7 +9,7 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconPlus, IconRefresh, IconTrash } from '@/components/icons'
 import { Pager, SearchBox, usePaged } from '@/components/paged'
 import { Select } from '@/components/ui/select'
-import { BuiltImagesTable, useBuildImage } from '@/components/built-images'
+import { BuiltImagesTable, ImportImageCard, useBuildImage } from '@/components/built-images'
 
 // AboutImages is a short primer distinguishing the two things this page shows:
 // ORCHD's versioned template freezes (tarball + docker) vs. raw daemon images.
@@ -186,6 +186,15 @@ export function Images() {
 
       <AboutImages />
       <BuiltImagesCard />
+
+      <Card className="mb-4">
+        <CardHeader>
+          <CardTitle className="text-base">Import an image (from another instance)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ImportImageCard />
+        </CardContent>
+      </Card>
 
       {supported === false ? (
         <Card>

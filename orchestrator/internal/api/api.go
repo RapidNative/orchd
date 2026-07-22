@@ -85,12 +85,16 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/templates/{name}/build", a.buildImage)
 	mux.HandleFunc("GET /v1/built-images", a.listBuiltImages)
 	mux.HandleFunc("DELETE /v1/built-images/{name}/{version}", a.deleteBuiltImage)
+	mux.HandleFunc("POST /v1/built-images/{name}/{version}/push", a.pushBuiltImage)
+	mux.HandleFunc("GET /v1/built-images/{name}/{version}/spec", a.builtImageSpec)
+	mux.HandleFunc("POST /v1/built-images/import", a.importBuiltImage)
 	mux.HandleFunc("GET /v1/workloads/{id}/fs", a.workloadFiles)
 	mux.HandleFunc("GET /v1/workloads/{id}/fs/file", a.workloadFileGet)
 	mux.HandleFunc("PUT /v1/workloads/{id}/fs/file", a.workloadFilePut)
 	mux.HandleFunc("DELETE /v1/workloads/{id}/fs/file", a.workloadFileDelete)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/name", a.setInstanceName)
+	mux.HandleFunc("PUT /v1/settings/registry", a.setRegistry)
 	mux.HandleFunc("POST /v1/system/backup", a.backupState)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
@@ -684,6 +688,7 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 		"backup_secret_set": secretSet,
 		"webhook":           map[string]string{"url": a.mgr.GetWebhook()},
 		"metrics":           a.mgr.GetMetricsTarget(),
+		"registry":          a.mgr.GetRegistry(),
 	})
 }
 
@@ -782,6 +787,44 @@ func (a *API) deleteBuiltImage(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// pushBuiltImage re-tags an image's docker images under the configured registry
+// prefix and pushes them, so another instance can pull and run them.
+func (a *API) pushBuiltImage(w http.ResponseWriter, r *http.Request) {
+	pushed, err := a.mgr.PushImage(r.Context(), r.PathValue("name"), r.PathValue("version"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"registry": pushed})
+}
+
+// builtImageSpec returns the self-contained import descriptor (registry refs +
+// workload shape) an operator copies to a target ORCHD instance.
+func (a *API) builtImageSpec(w http.ResponseWriter, r *http.Request) {
+	spec, err := a.mgr.ImageImportSpec(r.PathValue("name"), r.PathValue("version"))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, spec)
+}
+
+// importBuiltImage records an image described by an ImportSpec (from another
+// instance), so projects here can boot from it (docker driver pulls the refs).
+func (a *API) importBuiltImage(w http.ResponseWriter, r *http.Request) {
+	var spec manager.ImportSpec
+	if err := json.NewDecoder(r.Body).Decode(&spec); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	im, err := a.mgr.ImportImage(spec)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, im)
+}
+
 func (a *API) workloadFiles(w http.ResponseWriter, r *http.Request) {
 	files, err := a.mgr.WorkloadFiles(r.PathValue("id"))
 	if err != nil {
@@ -848,6 +891,21 @@ func (a *API) setInstanceName(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"instance_name": a.mgr.GetInstanceName()})
+}
+
+func (a *API) setRegistry(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Registry string `json:"registry"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetRegistry(body.Registry); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"registry": a.mgr.GetRegistry()})
 }
 
 func (a *API) backupState(w http.ResponseWriter, r *http.Request) {

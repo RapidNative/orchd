@@ -65,6 +65,7 @@ export interface SettingsResp {
   backup_secret_set: boolean
   webhook: { url: string }
   metrics: MetricsTarget
+  registry: string
 }
 
 export interface Event {
@@ -129,12 +130,32 @@ export interface Image {
 // BuiltImage is an immutable, versioned freeze of a template: a base tarball
 // (local boots restore from it) plus per-workspace docker image tags (prod runs
 // them).
+export interface ImageWorkload {
+  name: string
+  kind: string
+  workspace: string
+  image?: string
+  env?: Record<string, string>
+}
+
 export interface BuiltImage {
   template: string
   version: string
-  tarball: string
+  tarball?: string
   dockers?: Record<string, string>
+  registry?: Record<string, string>
+  workloads?: ImageWorkload[]
+  imported?: boolean
   created_at: string
+}
+
+// ImageImportSpec is the self-contained descriptor for moving a pushed image to
+// another ORCHD instance: registry refs the target can pull + the workload shape.
+export interface ImageImportSpec {
+  template: string
+  version: string
+  dockers: Record<string, string>
+  workloads: ImageWorkload[]
 }
 
 export interface WorkloadSpecReq {
