@@ -90,6 +90,17 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ env }),
     }),
+  startWorkload: (id: string) => req('/v1/workloads/' + id + '/start', { method: 'POST' }),
+  stopWorkload: (id: string) => req('/v1/workloads/' + id + '/stop', { method: 'POST' }),
+  restartWorkload: (id: string) => req('/v1/workloads/' + id + '/restart', { method: 'POST' }),
+  startProject: (id: string) => req('/v1/projects/' + id + '/start', { method: 'POST' }),
+  stopProject: (id: string) => req('/v1/projects/' + id + '/stop', { method: 'POST' }),
+  restartProject: (id: string) => req('/v1/projects/' + id + '/restart', { method: 'POST' }),
+  setProjectEnv: (id: string, env: Record<string, string>) =>
+    req<{ env: Record<string, string> }>('/v1/projects/' + id + '/env', {
+      method: 'PUT',
+      body: JSON.stringify({ env }),
+    }),
   stats: (id: string) => req<Stats>('/v1/workloads/' + id + '/stats'),
   logs: (id: string, tail = 200) =>
     req<{ logs: string }>('/v1/workloads/' + id + '/logs?tail=' + tail),

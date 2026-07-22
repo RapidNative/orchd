@@ -49,6 +49,13 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/routes", a.removeRoute)
 	mux.HandleFunc("POST /v1/workloads/{id}/keepwarm", a.setKeepWarm)
 	mux.HandleFunc("PUT /v1/workloads/{id}/env", a.setWorkloadEnv)
+	mux.HandleFunc("POST /v1/workloads/{id}/start", a.workloadStart)
+	mux.HandleFunc("POST /v1/workloads/{id}/stop", a.workloadStop)
+	mux.HandleFunc("POST /v1/workloads/{id}/restart", a.workloadRestart)
+	mux.HandleFunc("POST /v1/projects/{id}/start", a.projectStart)
+	mux.HandleFunc("POST /v1/projects/{id}/stop", a.projectStop)
+	mux.HandleFunc("POST /v1/projects/{id}/restart", a.projectRestart)
+	mux.HandleFunc("PUT /v1/projects/{id}/env", a.setProjectEnv)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
@@ -320,6 +327,49 @@ func (a *API) addWorkload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, a.workloadView(wl))
 }
 
+// lifecycle handlers. ok is a small helper for {"status": "..."}.
+func lifecycle(w http.ResponseWriter, a *API, err error, status string) {
+	if err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": status})
+}
+
+func (a *API) workloadStart(w http.ResponseWriter, r *http.Request) {
+	lifecycle(w, a, a.mgr.StartWorkload(r.Context(), r.PathValue("id")), "started")
+}
+func (a *API) workloadStop(w http.ResponseWriter, r *http.Request) {
+	lifecycle(w, a, a.mgr.StopWorkload(r.Context(), r.PathValue("id")), "stopped")
+}
+func (a *API) workloadRestart(w http.ResponseWriter, r *http.Request) {
+	lifecycle(w, a, a.mgr.RestartWorkload(r.Context(), r.PathValue("id")), "restarted")
+}
+func (a *API) projectStart(w http.ResponseWriter, r *http.Request) {
+	lifecycle(w, a, a.mgr.StartProject(r.Context(), r.PathValue("id")), "started")
+}
+func (a *API) projectStop(w http.ResponseWriter, r *http.Request) {
+	lifecycle(w, a, a.mgr.StopProject(r.Context(), r.PathValue("id")), "stopped")
+}
+func (a *API) projectRestart(w http.ResponseWriter, r *http.Request) {
+	lifecycle(w, a, a.mgr.RestartProject(r.Context(), r.PathValue("id")), "restarted")
+}
+
+func (a *API) setProjectEnv(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Env map[string]string `json:"env"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetProjectEnv(r.Context(), r.PathValue("id"), body.Env); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"env": body.Env})
+}
+
 func (a *API) setWorkloadEnv(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Env map[string]string `json:"env"`
@@ -402,6 +452,7 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 			"retain":   a.cfg.BackupRetain,
 		},
 		"images_supported": a.mgr.ImagesSupported(),
+		"port_addressing":  a.cfg.PortBase > 0,
 		"presets":          presetNames(),
 	})
 }

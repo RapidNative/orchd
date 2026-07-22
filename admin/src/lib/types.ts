@@ -26,6 +26,7 @@ export interface Project {
   id: string
   name?: string
   region: string
+  env?: Record<string, string>
   created_at: string
   workloads: Workload[]
 }
@@ -111,6 +112,7 @@ export interface Info {
     retain: number
   }
   images_supported: boolean
+  port_addressing: boolean
   presets: string[]
 }
 

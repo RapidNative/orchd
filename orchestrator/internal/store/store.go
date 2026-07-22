@@ -82,10 +82,11 @@ type Region struct {
 // Project is a logical grouping of workloads under one tenant. Its ID is a
 // DNS-label-safe short ref used as the subdomain prefix for its workloads.
 type Project struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name,omitempty"`
-	Region    string    `json:"region"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string            `json:"id"`
+	Name      string            `json:"name,omitempty"`
+	Region    string            `json:"region"`
+	Env       map[string]string `json:"env,omitempty"` // env injected into every workload of the project
+	CreatedAt time.Time         `json:"created_at"`
 }
 
 // Workload is a single routable instance. It is what the runtime driver operates

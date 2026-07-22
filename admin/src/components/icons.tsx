@@ -109,6 +109,23 @@ export const IconDocs = (p: P) => (
     <path d="M9 7h7M9 11h7" />
   </S>
 )
+export const IconPlay = (p: P) => (
+  <S {...p}>
+    <path d="M6 4v16l14-8z" />
+  </S>
+)
+export const IconPause = (p: P) => (
+  <S {...p}>
+    <rect x="6" y="4" width="4" height="16" rx="1" />
+    <rect x="14" y="4" width="4" height="16" rx="1" />
+  </S>
+)
+export const IconRestart = (p: P) => (
+  <S {...p}>
+    <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+    <path d="M3 3v5h5" />
+  </S>
+)
 export const IconMenu = (p: P) => (
   <S {...p}>
     <path d="M3 12h18M3 6h18M3 18h18" />

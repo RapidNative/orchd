@@ -11,7 +11,15 @@ import { Select } from '@/components/ui/select'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { IconBackups, IconExternal, IconPlus, IconTrash } from '@/components/icons'
+import {
+  IconBackups,
+  IconExternal,
+  IconPause,
+  IconPlay,
+  IconPlus,
+  IconRestart,
+  IconTrash,
+} from '@/components/icons'
 import { relativeTime } from '@/lib/utils'
 
 function primaryUrl(w: Workload) {
@@ -97,6 +105,44 @@ function DomainsCard({ workloads, onChange }: { workloads: Workload[]; onChange:
   )
 }
 
+// Lifecycle renders play/pause + restart controls. Restart also refreshes env.
+function Lifecycle({
+  running,
+  busy,
+  onStart,
+  onStop,
+  onRestart,
+}: {
+  running: boolean
+  busy: boolean
+  onStart: () => void
+  onStop: () => void
+  onRestart: () => void
+}) {
+  return (
+    <>
+      {running ? (
+        <Button size="sm" variant="ghost" title="Pause (suspend)" disabled={busy} onClick={onStop}>
+          <IconPause />
+        </Button>
+      ) : (
+        <Button size="sm" variant="ghost" title="Play (start)" disabled={busy} onClick={onStart}>
+          <IconPlay />
+        </Button>
+      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        title="Restart (also refreshes env)"
+        disabled={busy}
+        onClick={onRestart}
+      >
+        <IconRestart />
+      </Button>
+    </>
+  )
+}
+
 // parseEnv turns "KEY=value" lines (blank/# ignored) into a map.
 function parseEnv(text: string): Record<string, string> {
   const out: Record<string, string> = {}
@@ -110,27 +156,39 @@ function parseEnv(text: string): Record<string, string> {
   return out
 }
 
-// EnvButton edits a workload's injected env vars; saving reboots the workload.
-function EnvButton({ w, onSaved }: { w: Workload; onSaved: () => void }) {
+// EnvButton edits an env-var map (a workload's or a project's); saving reboots.
+function EnvButton({
+  label,
+  env,
+  onSave,
+  onSaved,
+  size = 'sm',
+}: {
+  label: string
+  env?: Record<string, string>
+  onSave: (env: Record<string, string>) => Promise<unknown>
+  onSaved: () => void
+  size?: 'sm' | 'default'
+}) {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
   const save = useMutation({
-    mutationFn: () => api.setWorkloadEnv(w.id, parseEnv(text)),
+    mutationFn: () => onSave(parseEnv(text)),
     onSuccess: () => {
       setOpen(false)
       onSaved()
     },
   })
-  const count = Object.keys(w.env ?? {}).length
+  const count = Object.keys(env ?? {}).length
   return (
     <>
       <Button
-        size="sm"
+        size={size}
         variant="secondary"
         title="Environment variables"
         onClick={() => {
           setText(
-            Object.entries(w.env ?? {})
+            Object.entries(env ?? {})
               .map(([k, v]) => `${k}=${v}`)
               .join('\n'),
           )
@@ -146,7 +204,7 @@ function EnvButton({ w, onSaved }: { w: Workload; onSaved: () => void }) {
         >
           <Card className="w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
             <CardHeader>
-              <CardTitle className="text-base">Env — {w.name || 'primary'}</CardTitle>
+              <CardTitle className="text-base">Env — {label}</CardTitle>
             </CardHeader>
             <CardContent>
               <textarea
@@ -258,6 +316,20 @@ export function ProjectDetail() {
     mutationFn: (v: { wid: string; enabled: boolean }) => api.setKeepWarm(v.wid, v.enabled),
     onSuccess: invalidate,
   })
+  const wlAction = useMutation({
+    mutationFn: (v: { wid: string; a: 'start' | 'stop' | 'restart' }) =>
+      v.a === 'start'
+        ? api.startWorkload(v.wid)
+        : v.a === 'stop'
+          ? api.stopWorkload(v.wid)
+          : api.restartWorkload(v.wid),
+    onSuccess: invalidate,
+  })
+  const projAction = useMutation({
+    mutationFn: (a: 'start' | 'stop' | 'restart') =>
+      a === 'start' ? api.startProject(id) : a === 'stop' ? api.stopProject(id) : api.restartProject(id),
+    onSuccess: invalidate,
+  })
 
   const p = project.data
   const workloads = p?.workloads ?? []
@@ -274,6 +346,19 @@ export function ProjectDetail() {
         subtitle={p ? `${p.name || 'project'} · region ${p.region} · ${relativeTime(p.created_at)}` : ''}
         actions={
           <>
+            <Lifecycle
+              running={workloads.some((w) => w.state === 'running')}
+              busy={projAction.isPending}
+              onStart={() => projAction.mutate('start')}
+              onStop={() => projAction.mutate('stop')}
+              onRestart={() => projAction.mutate('restart')}
+            />
+            <EnvButton
+              label="project"
+              env={p?.env}
+              onSave={(e) => api.setProjectEnv(id, e)}
+              onSaved={invalidate}
+            />
             <Button
               variant="secondary"
               disabled={backupProject.isPending}
@@ -393,7 +478,19 @@ export function ProjectDetail() {
                           <CopyButton value={w.anon_key} label="anon" />
                         </>
                       )}
-                      <EnvButton w={w} onSaved={invalidate} />
+                      <Lifecycle
+                        running={w.state === 'running'}
+                        busy={wlAction.isPending}
+                        onStart={() => wlAction.mutate({ wid: w.id, a: 'start' })}
+                        onStop={() => wlAction.mutate({ wid: w.id, a: 'stop' })}
+                        onRestart={() => wlAction.mutate({ wid: w.id, a: 'restart' })}
+                      />
+                      <EnvButton
+                        label={w.name || 'primary'}
+                        env={w.env}
+                        onSave={(e) => api.setWorkloadEnv(w.id, e)}
+                        onSaved={invalidate}
+                      />
                       <Button
                         size="sm"
                         variant="destructive"
@@ -418,7 +515,9 @@ export function ProjectDetail() {
         </CardContent>
       </Card>
 
-      {workloads.length > 0 && <DomainsCard workloads={workloads} onChange={invalidate} />}
+      {workloads.length > 0 && !info.data?.port_addressing && (
+        <DomainsCard workloads={workloads} onChange={invalidate} />
+      )}
 
       {workloads.length > 0 && (
         <Card className="mt-6">

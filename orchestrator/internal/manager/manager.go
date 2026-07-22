@@ -505,6 +505,103 @@ func (m *Manager) seedTemplates() {
 // GetTemplates returns the configured template name->path map.
 func (m *Manager) GetTemplates() map[string]string { return m.store.GetSettings().Templates }
 
+// rebootWorkload recreates a workload's instance (stop -> create), picking up
+// the current spec — new env, etc. Serialized per workload via refLock.
+func (m *Manager) rebootWorkload(ctx context.Context, w *store.Workload) error {
+	rl := m.refLock(w.ID)
+	rl.Lock()
+	defer rl.Unlock()
+	_ = m.rt.Stop(ctx, w.ID)
+	m.forget(w.ID)
+	inst, err := m.rt.Create(ctx, m.specFor(w))
+	if err != nil {
+		_ = m.store.SetWorkloadState(w.ID, runtime.StateFailed)
+		return fmt.Errorf("reboot: %w", err)
+	}
+	_ = m.store.SetWorkloadState(w.ID, runtime.StateRunning)
+	m.markLive(w.ID, inst.Addr)
+	return nil
+}
+
+// RestartWorkload recreates a workload (also the way to refresh its env).
+func (m *Manager) RestartWorkload(ctx context.Context, workloadID string) error {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	if err := m.rebootWorkload(ctx, w); err != nil {
+		return err
+	}
+	m.emit("workload.restarted", w.ProjectID, workloadID, "")
+	return nil
+}
+
+// StopWorkload suspends a workload (scale to zero) — the "pause".
+func (m *Manager) StopWorkload(ctx context.Context, workloadID string) error {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+	if err := m.rt.Suspend(ctx, workloadID); err != nil {
+		return err
+	}
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateSuspended)
+	m.forget(workloadID)
+	m.emit("workload.stopped", w.ProjectID, workloadID, "")
+	return nil
+}
+
+// StartWorkload boots a suspended/stopped workload — the "play".
+func (m *Manager) StartWorkload(ctx context.Context, workloadID string) error {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+	if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
+		return nil
+	}
+	inst, err := m.rt.Start(ctx, m.specFor(w))
+	if err != nil {
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+		return fmt.Errorf("start: %w", err)
+	}
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+	m.markLive(workloadID, inst.Addr)
+	m.emit("workload.started", w.ProjectID, workloadID, "")
+	return nil
+}
+
+// forEachWorkload runs fn over every workload of a project, returning the first error.
+func (m *Manager) forEachWorkload(projectID string, fn func(id string) error) error {
+	if _, err := m.store.GetProject(projectID); err != nil {
+		return err
+	}
+	var firstErr error
+	for _, w := range m.store.ListWorkloads(projectID) {
+		if err := fn(w.ID); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
+}
+
+// StartProject / StopProject / RestartProject apply the action to every workload.
+func (m *Manager) StartProject(ctx context.Context, id string) error {
+	return m.forEachWorkload(id, func(w string) error { return m.StartWorkload(ctx, w) })
+}
+func (m *Manager) StopProject(ctx context.Context, id string) error {
+	return m.forEachWorkload(id, func(w string) error { return m.StopWorkload(ctx, w) })
+}
+func (m *Manager) RestartProject(ctx context.Context, id string) error {
+	return m.forEachWorkload(id, func(w string) error { return m.RestartWorkload(ctx, w) })
+}
+
 // SetWorkloadEnv replaces a workload's injected env and reboots it to apply.
 func (m *Manager) SetWorkloadEnv(ctx context.Context, workloadID string, env map[string]string) error {
 	w, err := m.store.GetWorkload(workloadID)
@@ -515,20 +612,35 @@ func (m *Manager) SetWorkloadEnv(ctx context.Context, workloadID string, env map
 	if err := m.store.PutWorkload(w); err != nil {
 		return err
 	}
-	rl := m.refLock(workloadID)
-	rl.Lock()
-	defer rl.Unlock()
-	_ = m.rt.Stop(ctx, workloadID)
-	m.forget(workloadID)
-	inst, err := m.rt.Create(ctx, m.specFor(w)) // recreate so new env takes effect
-	if err != nil {
-		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
-		return fmt.Errorf("reboot with new env: %w", err)
+	if err := m.rebootWorkload(ctx, w); err != nil {
+		return err
 	}
-	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
-	m.markLive(workloadID, inst.Addr)
 	m.emit("workload.env_updated", w.ProjectID, workloadID, "")
 	return nil
+}
+
+// SetProjectEnv replaces a project's env (injected into every workload) and
+// restarts its workloads to apply.
+func (m *Manager) SetProjectEnv(ctx context.Context, projectID string, env map[string]string) error {
+	p, err := m.store.GetProject(projectID)
+	if err != nil {
+		return err
+	}
+	p.Env = env
+	if err := m.store.PutProject(p); err != nil {
+		return err
+	}
+	m.emit("project.env_updated", projectID, "", "")
+	return m.RestartProject(ctx, projectID)
+}
+
+// GetProjectEnv returns a project's injected env.
+func (m *Manager) GetProjectEnv(projectID string) (map[string]string, error) {
+	p, err := m.store.GetProject(projectID)
+	if err != nil {
+		return nil, err
+	}
+	return p.Env, nil
 }
 
 // SetTemplate registers (or, with an empty path, removes) a template path.
@@ -1273,13 +1385,18 @@ func portFree(p int) bool {
 func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	// Place the workload on its region's Docker host (a worker node); empty = local.
 	dockerHost := ""
+	var projEnv map[string]string
 	if p, err := m.store.GetProject(w.ProjectID); err == nil {
+		projEnv = p.Env
 		if rg, err := m.store.GetRegion(p.Region); err == nil {
 			dockerHost = rg.DockerHost
 		}
 	}
-	// Platform env first, then the user's injected env (which may override).
+	// Precedence: platform env, then project env, then per-workload env (most specific wins).
 	env := map[string]string{"TINBASE_JWT_SECRET": w.JWTSecret}
+	for k, v := range projEnv {
+		env[k] = v
+	}
 	for k, v := range w.Env {
 		env[k] = v
 	}
