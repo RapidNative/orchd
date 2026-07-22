@@ -3,10 +3,12 @@ package runtime
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -38,6 +40,31 @@ type localProc struct {
 	port  int
 	addr  string
 	state State
+	logs  *ringWriter // captured stdout+stderr (last ~64 KiB)
+}
+
+// ringWriter is a thread-safe writer that keeps only the last max bytes, so a
+// long-running process's log stays bounded but the recent tail is available.
+type ringWriter struct {
+	mu  sync.Mutex
+	buf []byte
+	max int
+}
+
+func (w *ringWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.buf = append(w.buf, p...)
+	if len(w.buf) > w.max {
+		w.buf = w.buf[len(w.buf)-w.max:]
+	}
+	return len(p), nil
+}
+
+func (w *ringWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return string(w.buf)
 }
 
 // NewLocalDriver constructs a LocalDriver. binary is the path to the tinbase
@@ -69,6 +96,16 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 		return inst, nil
 	}
 	d.mu.Unlock()
+
+	// The process driver only knows how to run tinbase. RapidNative dev apps
+	// (web/api/app) are container images with a dev server inside — they need the
+	// docker driver. Fail loudly rather than silently serving tinbase on their
+	// port.
+	if spec.Type != WorkloadTinbaseProject {
+		return nil, fmt.Errorf(
+			"local driver runs only tinbase workloads (got type %q, image %q) — use the docker driver for web/api/app",
+			spec.Type, spec.Image)
+	}
 
 	// A pinned HostPort gives stable port-per-workload addressing; otherwise pick
 	// a free one.
@@ -104,10 +141,11 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	for k, v := range spec.Env {
 		cmd.Env = append(cmd.Env, k+"="+v)
 	}
-	// Surface tinbase logs on the orchestrator's stderr for now; a real deployment
-	// would ship these to a per-project log sink.
-	cmd.Stdout = os.Stderr
-	cmd.Stderr = os.Stderr
+	// Capture output into a bounded ring buffer (for the Logs API) while still
+	// surfacing it on the orchestrator's stderr.
+	lw := &ringWriter{max: 64 * 1024}
+	cmd.Stdout = io.MultiWriter(os.Stderr, lw)
+	cmd.Stderr = cmd.Stdout
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start tinbase: %w", err)
@@ -120,7 +158,7 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	}
 
 	d.mu.Lock()
-	d.procs[spec.Ref] = &localProc{cmd: cmd, port: port, addr: addr, state: StateRunning}
+	d.procs[spec.Ref] = &localProc{cmd: cmd, port: port, addr: addr, state: StateRunning, logs: lw}
 	d.mu.Unlock()
 
 	// Reap the process if it exits on its own so state does not go stale.
@@ -171,9 +209,22 @@ func (d *LocalDriver) Stats(ctx context.Context, ref string) (Stats, error) {
 	return Stats{}, nil
 }
 
-// Logs is unsupported for the process driver (output goes to orchd's stderr).
+// Logs returns the last `tail` lines of the workload's captured output.
 func (d *LocalDriver) Logs(ctx context.Context, ref string, tail int) (string, error) {
-	return "", nil
+	d.mu.Lock()
+	p, ok := d.procs[ref]
+	d.mu.Unlock()
+	if !ok || p.logs == nil {
+		return "", nil
+	}
+	if tail <= 0 {
+		tail = 200
+	}
+	lines := strings.Split(strings.TrimRight(p.logs.String(), "\n"), "\n")
+	if len(lines) > tail {
+		lines = lines[len(lines)-tail:]
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 func (d *LocalDriver) Status(ctx context.Context, ref string) (State, error) {

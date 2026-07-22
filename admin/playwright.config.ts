@@ -4,8 +4,10 @@ import { defineConfig, devices } from '@playwright/test'
 // mock orchd (ORCHD_DRIVER=mock — no Docker). global-setup boots orchd; the
 // webServer runs Vite with its /api proxy pointed at that mock via
 // E2E_API_TARGET. Fixed ports keep it hermetic.
-export const API_PORT = 8099
-export const WEB_PORT = 5199
+// 819x, clear of the local dev range (dev/local.sh uses 8090-8092 + workloads
+// from 8100), so a running local stack never clashes with the E2E harness.
+export const API_PORT = 8190
+export const WEB_PORT = 8192
 export const API_KEY = 'e2e-admin-key'
 
 export default defineConfig({
