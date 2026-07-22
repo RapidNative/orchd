@@ -19,10 +19,12 @@ export function Projects() {
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 5000 })
   const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions })
   const templates = useQuery({ queryKey: ['templates'], queryFn: api.templates })
+  const builtImages = useQuery({ queryKey: ['built-images'], queryFn: api.builtImages })
   const [region, setRegion] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [createTmpl, setCreateTmpl] = useState<string | null>(null)
   const templateNames = Object.keys(templates.data ?? {})
+  const images = builtImages.data ?? []
 
   const create = useMutation({
     mutationFn: (body: Parameters<typeof api.createProject>[0]) =>
@@ -92,6 +94,27 @@ export function Projects() {
                         <span className="font-mono">{t}</span>
                       </button>
                     ))}
+                    {images.length > 0 && (
+                      <>
+                        <div className="my-1 border-t border-border" />
+                        <div className="px-3 pb-1 pt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">
+                          From image (frozen)
+                        </div>
+                        {images.map((im) => (
+                          <button
+                            key={im.template + '@' + im.version}
+                            className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
+                            onClick={() => {
+                              setMenuOpen(false)
+                              create.mutate({ image: im.template + '@' + im.version })
+                            }}
+                          >
+                            <span className="font-mono">{im.template}</span>
+                            <span className="text-xs text-muted-foreground">{im.version}</span>
+                          </button>
+                        ))}
+                      </>
+                    )}
                     <div className="my-1 border-t border-border" />
                     <button
                       className="flex w-full items-center px-3 py-2 text-left text-sm text-muted-foreground hover:bg-muted hover:text-foreground"

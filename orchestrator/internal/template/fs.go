@@ -158,6 +158,82 @@ func Bundle(baseDir string, exclude []string, w io.Writer) error {
 	return gz.Close()
 }
 
+// MaterializeFromTar builds a workload's working tree from a frozen image
+// tarball (base.tar.gz) instead of a live template dir: extract the tar, then
+// apply the delta (write files, remove tombstones). This is the boot-from-image
+// path — local/process drivers restore the exact frozen tree, then overlay the
+// per-project delta on top.
+func MaterializeFromTar(tarPath, destDir string, delta map[string]string, deleted []string) error {
+	if err := Untar(tarPath, destDir); err != nil {
+		return err
+	}
+	for path, content := range delta {
+		p := safeJoin(destDir, path)
+		if p == "" {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+			return err
+		}
+	}
+	for _, path := range deleted {
+		if p := safeJoin(destDir, path); p != "" {
+			_ = os.RemoveAll(p)
+		}
+	}
+	return nil
+}
+
+// Untar extracts a tar.gz into destDir (path-traversal safe).
+func Untar(tarPath, destDir string) error {
+	f, err := os.Open(tarPath)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		p := safeJoin(destDir, hdr.Name)
+		if p == "" {
+			continue
+		}
+		switch hdr.Typeflag {
+		case tar.TypeDir:
+			if err := os.MkdirAll(p, 0o755); err != nil {
+				return err
+			}
+		default:
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				return err
+			}
+			out, err := os.OpenFile(p, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, os.FileMode(hdr.Mode))
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(out, tr); err != nil {
+				out.Close()
+				return err
+			}
+			out.Close()
+		}
+	}
+}
+
 // copyTree recursively copies src to dst, skipping directories named in skip.
 func copyTree(src, dst string, skip map[string]bool) error {
 	return filepath.WalkDir(src, func(p string, de os.DirEntry, err error) error {

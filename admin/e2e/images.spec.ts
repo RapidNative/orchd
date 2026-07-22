@@ -25,3 +25,13 @@ test('images: list, pull, and delete round-trip', async ({ page }) => {
     .click()
   await expect(page.getByRole('cell', { name: 'nginx', exact: true })).toHaveCount(0)
 })
+
+// The "Built from templates" card is the ORCHD image concept (versioned freezes),
+// distinct from the raw Docker daemon list. With no templates registered it shows
+// the empty state and a disabled Build button.
+test('images: built-from-templates card renders', async ({ page }) => {
+  await page.goto('/images')
+  await expect(page.getByText('Built from templates')).toBeVisible()
+  await expect(page.getByText('No images built yet.', { exact: false })).toBeVisible()
+  await expect(page.getByRole('button', { name: /Build image/ })).toBeDisabled()
+})

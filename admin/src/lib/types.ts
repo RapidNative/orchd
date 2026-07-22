@@ -126,6 +126,17 @@ export interface Image {
   created_at: string
 }
 
+// BuiltImage is an immutable, versioned freeze of a template: a base tarball
+// (local boots restore from it) plus per-workspace docker image tags (prod runs
+// them).
+export interface BuiltImage {
+  template: string
+  version: string
+  tarball: string
+  dockers?: Record<string, string>
+  created_at: string
+}
+
 export interface WorkloadSpecReq {
   preset?: string
   type?: string

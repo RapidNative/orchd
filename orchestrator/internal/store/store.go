@@ -54,6 +54,11 @@ type Store interface {
 	ListAPIKeys() []*APIKey
 	DeleteAPIKey(id string) error
 
+	PutImage(*Image) error
+	GetImage(template, version string) (*Image, error)
+	ListImages() []*Image
+	DeleteImage(template, version string) error
+
 	GetSettings() Settings
 	SetSettings(Settings) error
 }
@@ -67,6 +72,20 @@ type APIKey struct {
 	Hash      string    `json:"hash,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
+
+// Image is an immutable, versioned build of a template: a base tarball (stored
+// on this ORCHD instance) plus, per workspace, a docker image tag. Local runs
+// from the tarball; prod runs the docker images.
+type Image struct {
+	Template  string            `json:"template"`
+	Version   string            `json:"version"`           // v1, v2, …
+	Tarball   string            `json:"tarball"`           // local path to base.tar.gz on this instance
+	Dockers   map[string]string `json:"dockers,omitempty"` // workspace name -> docker image tag
+	CreatedAt time.Time         `json:"created_at"`
+}
+
+// ImageID is the "template@version" key for an image.
+func ImageID(template, version string) string { return template + "@" + version }
 
 // Region is a placement target. Today all regions run on the local box; the
 // DockerHost field is the seam for pointing a region at a remote worker node
@@ -98,10 +117,11 @@ type Workload struct {
 	Name      string               `json:"name"` // role within the project ("", "api", "web", ...)
 	Image     string               `json:"image,omitempty"`
 	Port      int                  `json:"port,omitempty"`
-	HostPort  int                  `json:"host_port,omitempty"` // stable external port (port-addressing mode); 0 = gateway model
-	Template  string               `json:"template,omitempty"`  // template name this workload came from (local template mode)
-	Workspace string               `json:"workspace,omitempty"` // orchd.json workload name within the template
-	Env       map[string]string    `json:"env,omitempty"`       // user-injected environment variables
+	HostPort  int                  `json:"host_port,omitempty"`     // stable external port (port-addressing mode); 0 = gateway model
+	Template  string               `json:"template,omitempty"`      // template name this workload came from (local template mode)
+	ImageVer  string               `json:"image_version,omitempty"` // if set, booted from a frozen image (template@version) rather than the live template
+	Workspace string               `json:"workspace,omitempty"`     // orchd.json workload name within the template
+	Env       map[string]string    `json:"env,omitempty"`           // user-injected environment variables
 	MemoryMB  int                  `json:"memory_mb,omitempty"`
 	CPUs      float64              `json:"cpus,omitempty"`
 	KeepWarm  bool                 `json:"keep_warm,omitempty"` // always-on: exempt from scale-to-zero
@@ -170,6 +190,7 @@ type memStore struct {
 	routes    map[string]*Route // key: lowercased host
 	regions   map[string]*Region
 	apikeys   map[string]*APIKey
+	images    map[string]*Image // key: template@version
 	settings  Settings
 }
 
@@ -179,6 +200,7 @@ type snapshot struct {
 	Routes    []*Route    `json:"routes"`
 	Regions   []*Region   `json:"regions"`
 	APIKeys   []*APIKey   `json:"api_keys"`
+	Images    []*Image    `json:"images"`
 	Settings  Settings    `json:"settings"`
 }
 
@@ -199,6 +221,7 @@ func openWith(p Persister) (*memStore, error) {
 		routes:    make(map[string]*Route),
 		regions:   make(map[string]*Region),
 		apikeys:   make(map[string]*APIKey),
+		images:    make(map[string]*Image),
 	}
 	b, err := p.Load()
 	if err != nil {
@@ -223,6 +246,9 @@ func openWith(p Persister) (*memStore, error) {
 		}
 		for _, ak := range snap.APIKeys {
 			s.apikeys[ak.ID] = ak
+		}
+		for _, im := range snap.Images {
+			s.images[ImageID(im.Template, im.Version)] = im
 		}
 		s.settings = snap.Settings
 	}
@@ -258,6 +284,55 @@ func (s *memStore) DeleteAPIKey(id string) error {
 		return ErrNotFound
 	}
 	delete(s.apikeys, id)
+	return s.flushLocked()
+}
+
+// ---- Images (built template artifacts) ----
+
+func (s *memStore) PutImage(im *Image) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := *im
+	s.images[ImageID(im.Template, im.Version)] = &cp
+	return s.flushLocked()
+}
+
+func (s *memStore) GetImage(template, version string) (*Image, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	im, ok := s.images[ImageID(template, version)]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	cp := *im
+	return &cp, nil
+}
+
+func (s *memStore) ListImages() []*Image {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Image, 0, len(s.images))
+	for _, im := range s.images {
+		cp := *im
+		out = append(out, &cp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Template != out[j].Template {
+			return out[i].Template < out[j].Template
+		}
+		return out[i].CreatedAt.After(out[j].CreatedAt)
+	})
+	return out
+}
+
+func (s *memStore) DeleteImage(template, version string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	id := ImageID(template, version)
+	if _, ok := s.images[id]; !ok {
+		return ErrNotFound
+	}
+	delete(s.images, id)
 	return s.flushLocked()
 }
 
@@ -531,6 +606,9 @@ func (s *memStore) flushLocked() error {
 	}
 	for _, ak := range s.apikeys {
 		snap.APIKeys = append(snap.APIKeys, ak)
+	}
+	for _, im := range s.images {
+		snap.Images = append(snap.Images, im)
 	}
 	snap.Settings = s.settings
 	sort.Slice(snap.Projects, func(i, j int) bool { return snap.Projects[i].CreatedAt.Before(snap.Projects[j].CreatedAt) })

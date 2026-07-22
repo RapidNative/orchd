@@ -69,18 +69,19 @@ type liveInstance struct {
 
 // WorkloadSpec describes a workload to create within a project.
 type WorkloadSpec struct {
-	Preset      string // optional: resolves Type/Image/Port/Name from the catalog
-	Type        runtime.WorkloadType
-	Name        string            // role within the project ("" = primary, else "api"/"web"/...)
-	Image       string            // optional image override
-	Port        int               // optional container port override
-	MemoryMB    int               // optional memory cap override (0 = type default)
-	CPUs        float64           // optional CPU cap override (0 = type default)
-	Template    string            // template name (local template mode)
-	Workspace   string            // orchd.json workspace name within the template
-	Env         map[string]string // user-injected environment variables
-	SeedDelta   map[string]string // files to overlay on the base at seed (path -> content)
-	SeedDeleted []string          // base paths to remove at seed (tombstones)
+	Preset       string // optional: resolves Type/Image/Port/Name from the catalog
+	Type         runtime.WorkloadType
+	Name         string            // role within the project ("" = primary, else "api"/"web"/...)
+	Image        string            // optional image override
+	Port         int               // optional container port override
+	MemoryMB     int               // optional memory cap override (0 = type default)
+	CPUs         float64           // optional CPU cap override (0 = type default)
+	Template     string            // template name (local template mode)
+	ImageVersion string            // if set, boot from this frozen image version (v1, v2, …) of Template
+	Workspace    string            // orchd.json workspace name within the template
+	Env          map[string]string // user-injected environment variables
+	SeedDelta    map[string]string // files to overlay on the base at seed (path -> content)
+	SeedDeleted  []string          // base paths to remove at seed (tombstones)
 }
 
 // preset is a named workload template so the API/UI can ask for "expo"/"vite"/
@@ -771,6 +772,41 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 	return m.CreateProject(ctx, projName, regionID, specs)
 }
 
+// CreateFromImage provisions a project from a frozen image (template@version):
+// same workload shape as the template, but each workload restores from the
+// image's tarball (local) or runs the versioned container tag (prod), rather than
+// the live template. A caller-supplied delta still overlays on top.
+func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projName, regionID string, delta map[string]string, deleted []string) (*store.Project, []*store.Workload, error) {
+	if _, err := m.store.GetImage(tmplName, version); err != nil {
+		return nil, nil, fmt.Errorf("image %s: %w", store.ImageID(tmplName, version), err)
+	}
+	// The manifest still lives with the template; the image is a frozen copy of
+	// the same tree, so the workload shape matches.
+	path := m.templatePath(tmplName)
+	if path == "" {
+		return nil, nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmplName)
+	}
+	man, err := template.Load(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("template %q: %w", tmplName, err)
+	}
+	specs := make([]WorkloadSpec, 0, len(man.Workloads))
+	for _, w := range man.Workloads {
+		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Name, Name: w.Name, Image: w.Image, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
+		if w.Kind == "tinbase" {
+			s.Type = runtime.WorkloadTinbaseProject
+			s.Name = ""
+		} else {
+			s.Type = runtime.WorkloadRapidNativeDev
+		}
+		specs = append(specs, s)
+	}
+	if projName == "" {
+		projName = man.Name
+	}
+	return m.CreateProject(ctx, projName, regionID, specs)
+}
+
 // CreateProject creates a project grouping and provisions its workloads. With no
 // specs it defaults to a single primary tinbase workload, preserving the simple
 // "one project, one backend" case.
@@ -869,6 +905,7 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		Port:      ws.Port,
 		HostPort:  m.allocHostPort(),
 		Template:  ws.Template,
+		ImageVer:  ws.ImageVersion,
 		Workspace: ws.Workspace,
 		Env:       ws.Env,
 		MemoryMB:  mem,
@@ -895,18 +932,27 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 
 	// Materialize a template workload's working tree now (base copy + delta), and
 	// mark it seeded so the driver runs it as-is. Fast (file copy); the slow part
-	// (npm install) stays in the async boot below.
+	// (npm install) stays in the async boot below. Two sources: a frozen image
+	// tarball (boot-from-image) or the live template dir (boot-from-template).
 	if w.Template != "" {
-		if base := m.templatePath(w.Template); base != "" {
+		var err error
+		if w.ImageVer != "" {
+			if im, gerr := m.store.GetImage(w.Template, w.ImageVer); gerr == nil {
+				err = template.MaterializeFromTar(im.Tarball, w.DataDir, ws.SeedDelta, ws.SeedDeleted)
+			} else {
+				err = fmt.Errorf("image %s: %w", store.ImageID(w.Template, w.ImageVer), gerr)
+			}
+		} else if base := m.templatePath(w.Template); base != "" {
 			var excl []string
-			if man, err := template.Load(base); err == nil {
+			if man, lerr := template.Load(base); lerr == nil {
 				excl = man.BackupExclude
 			}
-			if err := template.Materialize(base, w.DataDir, excl, ws.SeedDelta, ws.SeedDeleted); err != nil {
-				log.Printf("materialize %s: %v", wid, err)
-			} else {
-				_ = os.WriteFile(filepath.Join(w.DataDir, ".orchd-seeded"), []byte("ok\n"), 0o644)
-			}
+			err = template.Materialize(base, w.DataDir, excl, ws.SeedDelta, ws.SeedDeleted)
+		}
+		if err != nil {
+			log.Printf("materialize %s: %v", wid, err)
+		} else {
+			_ = os.WriteFile(filepath.Join(w.DataDir, ".orchd-seeded"), []byte("ok\n"), 0o644)
 		}
 	}
 
@@ -1502,11 +1548,22 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	for k, v := range w.Env {
 		env[k] = v
 	}
+	// Boot-from-image: the docker driver runs the frozen, versioned image tag
+	// built for this workspace. The local/process driver ignores Image and boots
+	// from the tarball-materialized DataDir instead.
+	image := w.Image
+	if w.ImageVer != "" && w.Workspace != "" {
+		if im, err := m.store.GetImage(w.Template, w.ImageVer); err == nil {
+			if tag, ok := im.Dockers[w.Workspace]; ok {
+				image = tag
+			}
+		}
+	}
 	return runtime.Spec{
 		Type:        w.Type,
 		Ref:         w.ID, // runtime key = workload id
 		DataDir:     w.DataDir,
-		Image:       w.Image,
+		Image:       image,
 		Port:        w.Port,
 		HostPort:    w.HostPort,
 		TemplateSrc: m.templatePath(w.Template),

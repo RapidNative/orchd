@@ -82,6 +82,9 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/templates/{name}", a.getTemplate)
 	mux.HandleFunc("GET /v1/templates/{name}/files", a.templateFiles)
 	mux.HandleFunc("GET /v1/templates/{name}/bundle", a.templateBundle)
+	mux.HandleFunc("POST /v1/templates/{name}/build", a.buildImage)
+	mux.HandleFunc("GET /v1/built-images", a.listBuiltImages)
+	mux.HandleFunc("DELETE /v1/built-images/{name}/{version}", a.deleteBuiltImage)
 	mux.HandleFunc("GET /v1/workloads/{id}/fs", a.workloadFiles)
 	mux.HandleFunc("GET /v1/workloads/{id}/fs/file", a.workloadFileGet)
 	mux.HandleFunc("PUT /v1/workloads/{id}/fs/file", a.workloadFilePut)
@@ -268,6 +271,7 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 		Name      string            `json:"name"`
 		Region    string            `json:"region"`
 		Template  string            `json:"template"`          // create from a registered template
+		Image     string            `json:"image,omitempty"`   // create from a frozen image ("template@version")
 		Delta     map[string]string `json:"delta,omitempty"`   // files to overlay on the base (path -> content)
 		Deleted   []string          `json:"deleted,omitempty"` // base paths to remove
 		Workloads []workloadSpecReq `json:"workloads"`
@@ -277,7 +281,14 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	var proj *store.Project
 	var err error
-	if body.Template != "" {
+	if body.Image != "" {
+		tmpl, ver, ok := strings.Cut(body.Image, "@")
+		if !ok {
+			writeErr(w, http.StatusBadRequest, fmt.Errorf("image must be \"template@version\""))
+			return
+		}
+		proj, _, err = a.mgr.CreateFromImage(r.Context(), tmpl, ver, body.Name, body.Region, body.Delta, body.Deleted)
+	} else if body.Template != "" {
 		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region, body.Delta, body.Deleted)
 	} else {
 		specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
@@ -741,6 +752,34 @@ func (a *API) templateBundle(w http.ResponseWriter, r *http.Request) {
 		// Headers may already be sent; log-level only.
 		return
 	}
+}
+
+// buildImage freezes the named template into a new, auto-versioned image.
+func (a *API) buildImage(w http.ResponseWriter, r *http.Request) {
+	im, err := a.mgr.BuildImage(r.Context(), r.PathValue("name"))
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, im)
+}
+
+// listBuiltImages returns all frozen template images.
+func (a *API) listBuiltImages(w http.ResponseWriter, r *http.Request) {
+	list := a.mgr.BuiltImages()
+	if list == nil {
+		list = []*store.Image{}
+	}
+	writeJSON(w, http.StatusOK, list)
+}
+
+// deleteBuiltImage removes one frozen image (tarball + record).
+func (a *API) deleteBuiltImage(w http.ResponseWriter, r *http.Request) {
+	if err := a.mgr.DeleteImage(r.PathValue("name"), r.PathValue("version")); err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) workloadFiles(w http.ResponseWriter, r *http.Request) {

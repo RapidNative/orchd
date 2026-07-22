@@ -208,6 +208,23 @@ export function Templates() {
           mounted volume. Build with <M>deploy/build-template.sh &lt;path&gt;</M>.
         </li>
       </UL>
+      <H>Templates vs. images (versioned freezes)</H>
+      <P>
+        A <B>template</B> is live, mutable source. An <B>image</B> is an immutable, versioned{' '}
+        <B>freeze</B> of a template: a base <B>tarball</B> stored on this ORCHD instance{' '}
+        <M>plus</M>, per workspace, a <B>docker image tag</B>. Build one from{' '}
+        <A href="/images">Images → Build image → &lt;template&gt;</A> or{' '}
+        <M>POST /v1/templates/&lt;name&gt;/build</M>; the version auto-increments (<M>v1</M>,{' '}
+        <M>v2</M>, …). The tarball is always written (a box without Docker still produces a usable
+        image for local); docker builds are best-effort per node/static workspace.
+      </P>
+      <P>
+        <B>Booting from an image</B> (<A href="/projects">New project → From image</A>, or{' '}
+        <M>{`{"image":"template@version"}`}</M> on create): <B>local</B> restores the working tree
+        from the tarball, <B>prod</B> runs the versioned docker tag — and the driver auto-selects
+        (no flag). A create-time delta still overlays on top, so the same base+delta model applies
+        whether you boot from the live template or a frozen image.
+      </P>
       <H>Backups are the delta</H>
       <P>
         A backup captures only the user's files — <M>node_modules</M>/<M>.git</M>/<M>dist</M>/
@@ -246,11 +263,18 @@ export function ImagesDoc() {
         Pick the region, paste a ref like <M>ghcr.io/acme/app:1.2.0</M>, and pull; delete removes a
         tag (with a forced-removal fallback when a container still holds it).
       </P>
-      <H>Building a custom image</H>
+      <H>Two kinds of "image" in ORCHD</H>
       <P>
-        Pulling is in the panel; <B>building</B> is not yet (a build needs a Docker context upload,
-        which is on the roadmap). Until then, build on the box the standard way and then reference
-        it — no redeploy needed:
+        This page shows <B>two</B> things. The <B>Built from templates</B> card at the top lists{' '}
+        ORCHD's own <B>versioned freezes</B> of a template (tarball + per-workspace docker tags) —
+        build them with <B>Build image</B>, boot projects from them (see{' '}
+        <A href="/docs#templates">Templates</A>). The tables below are the raw{' '}
+        <B>Docker daemon images</B> on a region's host, which you pull/remove directly.
+      </P>
+      <H>Building a raw custom image</H>
+      <P>
+        ORCHD builds template images for you. For an <B>arbitrary</B> custom image (not tied to a
+        template), build it on the box the standard way and reference it — no redeploy needed:
       </P>
       <Code title="On the box (or a region's Docker host)">{`# build from a Dockerfile
 docker build -t my-runtime:dev .

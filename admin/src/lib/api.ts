@@ -3,6 +3,7 @@ import type {
   ApiKeyMeta,
   Backup,
   BackupTarget,
+  BuiltImage,
   Event,
   Image,
   Info,
@@ -64,6 +65,7 @@ export const api = {
     name?: string
     region?: string
     template?: string
+    image?: string
     delta?: Record<string, string>
     deleted?: string[]
     workloads?: WorkloadSpecReq[]
@@ -82,6 +84,14 @@ export const api = {
   templateFile: (name: string, path: string) =>
     reqText('/v1/templates/' + encodeURIComponent(name) + '/files?path=' + encodeURIComponent(path)),
   templateBundleUrl: (name: string) => BASE + '/v1/templates/' + encodeURIComponent(name) + '/bundle',
+  buildImage: (name: string) =>
+    req<BuiltImage>('/v1/templates/' + encodeURIComponent(name) + '/build', { method: 'POST' }),
+  builtImages: () => req<BuiltImage[]>('/v1/built-images'),
+  deleteBuiltImage: (template: string, version: string) =>
+    req<null>(
+      '/v1/built-images/' + encodeURIComponent(template) + '/' + encodeURIComponent(version),
+      { method: 'DELETE' },
+    ),
   workloadFiles: (id: string) => req<string[]>('/v1/workloads/' + id + '/fs'),
   workloadFile: (id: string, path: string) =>
     reqText('/v1/workloads/' + id + '/fs/file?path=' + encodeURIComponent(path)),
