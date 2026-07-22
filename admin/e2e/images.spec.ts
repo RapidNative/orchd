@@ -52,4 +52,11 @@ test('images: import an image from a spec', async ({ page }) => {
   await expect(page.getByText('Imported.')).toBeVisible()
   await expect(page.getByRole('cell', { name: 'imp-demo', exact: true })).toBeVisible()
   await expect(page.getByText('imported', { exact: true })).toBeVisible()
+
+  // An image with registry refs (published) exposes a Copy spec button, and
+  // clicking it reports back (copied, or a clipboard-blocked fallback).
+  const copy = page.getByRole('button', { name: /Copy spec/ })
+  await expect(copy).toBeVisible()
+  await copy.click()
+  await expect(page.getByText(/Copied import spec|Clipboard blocked/)).toBeVisible()
 })

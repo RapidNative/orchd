@@ -1,10 +1,24 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import type { BuiltImage, ImageImportSpec } from '@/lib/types'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
+import { IconCopy } from '@/components/icons'
 import { relativeTime } from '@/lib/utils'
+
+// importSpecFor builds the paste-on-another-instance descriptor from an image,
+// using its registry refs (pullable elsewhere) and frozen workload shape. Done
+// client-side so copying is instant and offline — no server round-trip.
+function importSpecFor(im: BuiltImage): ImageImportSpec {
+  return {
+    template: im.template,
+    version: im.version,
+    dockers: im.registry ?? {},
+    workloads: im.workloads ?? [],
+  }
+}
 
 // useBuildImage is the shared "freeze a template into the next version" mutation,
 // used by the Build controls on both the Images and Templates pages.
@@ -45,14 +59,15 @@ export function BuiltImagesTable({ filterTemplate }: { filterTemplate?: string }
     onError: (e) => setNote((e as Error).message),
   })
   // Copy the import spec (registry refs + workload shape) for pasting on another
-  // ORCHD instance's "Import image" form.
-  const copySpec = async (template: string, version: string) => {
+  // ORCHD instance's "Import image" form. Built from the image itself.
+  const copySpec = async (im: BuiltImage) => {
+    const json = JSON.stringify(importSpecFor(im), null, 2)
     try {
-      const spec = await api.imageSpec(template, version)
-      await navigator.clipboard.writeText(JSON.stringify(spec, null, 2))
-      setNote(`Copied import spec for ${template}@${version}.`)
-    } catch (e) {
-      setNote((e as Error).message)
+      await navigator.clipboard.writeText(json)
+      setNote(`Copied import spec for ${im.template}@${im.version}.`)
+    } catch {
+      setNote('Clipboard blocked — spec logged to the console instead.')
+      console.log(json)
     }
   }
 
@@ -128,10 +143,10 @@ export function BuiltImagesTable({ filterTemplate }: { filterTemplate?: string }
                       <Button
                         size="sm"
                         variant="secondary"
-                        title="Copy the import spec to paste on another ORCHD instance"
-                        onClick={() => copySpec(im.template, im.version)}
+                        title="Copy the import JSON to paste on another ORCHD instance"
+                        onClick={() => copySpec(im)}
                       >
-                        Copy spec
+                        <IconCopy /> Copy spec
                       </Button>
                     )}
                     <Button
