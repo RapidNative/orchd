@@ -51,8 +51,18 @@ export const api = {
   info: () => req<Info>('/v1/info'),
   projects: () => req<Project[]>('/v1/projects'),
   project: (id: string) => req<Project>('/v1/projects/' + id),
-  createProject: (body: { name?: string; region?: string; workloads?: WorkloadSpecReq[] }) =>
-    req<Project>('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+  createProject: (body: {
+    name?: string
+    region?: string
+    template?: string
+    workloads?: WorkloadSpecReq[]
+  }) => req<Project>('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
+  templates: () => req<Record<string, string>>('/v1/templates'),
+  setTemplate: (name: string, path: string) =>
+    req<Record<string, string>>('/v1/templates', {
+      method: 'PUT',
+      body: JSON.stringify({ name, path }),
+    }),
   regions: () => req<Region[]>('/v1/regions'),
   createRegion: (name: string, docker_host?: string) =>
     req<Region>('/v1/regions', { method: 'POST', body: JSON.stringify({ name, docker_host }) }),

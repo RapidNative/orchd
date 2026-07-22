@@ -1,0 +1,23 @@
+{
+  "op": "create_table",
+  "table": "todos",
+  "columns": [
+    {
+      "name": "id",
+      "type": "text"
+    },
+    {
+      "name": "title",
+      "type": "text"
+    },
+    {
+      "name": "completed",
+      "type": "boolean"
+    },
+    {
+      "name": "createdAt",
+      "type": "timestamp"
+    }
+  ],
+  "seq": 1
+}

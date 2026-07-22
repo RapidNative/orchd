@@ -1,0 +1,29 @@
+{
+  "type": "fullstack-v2",
+  "paths": {
+    "root": "mobile",
+    "app": "app",
+    "components": "components",
+    "src": "src",
+    "api": "api",
+    "web": "web",
+    "alias": {
+      "@": "mobile"
+    }
+  },
+  "workspaces": {
+    "mobile": {
+      "type": "expo",
+      "root": "mobile"
+    },
+    "api": {
+      "type": "express",
+      "root": "api",
+      "entry": "index.js"
+    },
+    "web": {
+      "type": "static",
+      "root": "web"
+    }
+  }
+}

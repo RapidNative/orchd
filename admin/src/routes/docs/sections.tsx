@@ -78,7 +78,8 @@ export function Repo() {
 │       ├── events/      event Sink adaptor: Memory / Webhook / Multi
 │       └── metrics/     metrics Sink adaptor: Nop / Log / HTTP
 ├── admin/               this panel — Vite + React + TanStack + Tailwind
-└── deploy/              Caddyfile, systemd units, deploy.sh`}</Code>
+├── deploy/              Caddyfile, systemd units, deploy.sh
+└── template-examples/   bundled example templates (tinbase, rapidnative)`}</Code>
       <H>Build & deploy</H>
       <UL>
         <li>
@@ -144,6 +145,65 @@ app (api)    http://localhost:8102
         (needs node/npm). <M>docker</M> runs the real container images (runc, no gVisor needed);{' '}
         <M>mock</M> boots the whole control plane and admin with no Docker at all (workloads don't
         serve real traffic). Any explicit <M>ORCHD_*</M> var still overrides the local defaults.
+      </P>
+    </Section>
+  )
+}
+
+export function Templates() {
+  return (
+    <Section title="Templates">
+      <P>
+        A <B>template</B> is a project folder (a monorepo) with an{' '}
+        <M>orchd.json</M> at its root — ORCHD's own descriptor, independent of any framework's
+        manifest. It lists the <B>workloads</B> a project should run. One template = one project;
+        each workload is a workspace on its own port (local) or an image (prod).
+      </P>
+      <Code title="orchd.json">{`{
+  "name": "rapidnative",
+  "backup_exclude": ["node_modules", ".git", "dist", ".expo", "build"],
+  "workloads": [
+    { "name": "db",     "kind": "tinbase" },
+    { "name": "api",    "kind": "node",   "dir": "api",
+      "install": ["npm","install"], "run": ["node","--watch","index.js"], "port_env": "PORT",
+      "image": "rn-api:dev" },
+    { "name": "web",    "kind": "static", "dir": "web",    "image": "rn-web:dev" },
+    { "name": "mobile", "kind": "node",   "dir": "mobile",
+      "install": ["npm","install"], "run": ["npx","expo","start","--web","--port","$PORT"],
+      "image": "rn-mobile:dev" }
+  ]
+}`}</Code>
+      <P>
+        Kinds: <M>tinbase</M> (a tinbase backend), <M>node</M> (<M>install</M> once, then <M>run</M>{' '}
+        with <M>$PORT</M> or <M>port_env</M>), <M>static</M> (a built-in zero-dep server for a
+        folder).
+      </P>
+      <H>Register & create</H>
+      <P>
+        Add the template in <A href="/settings">Settings → Templates</A> (name → local path), then
+        on <A href="/projects">Projects</A> pick it from <B>"from template…"</B> and Create. That
+        provisions one workload per manifest entry; <B>provisioning is async</B> (the call returns
+        immediately, workloads go <M>provisioning → running/failed</M>) so a heavy first{' '}
+        <M>npm install</M> never blocks it.
+      </P>
+      <H>Local vs prod (same template)</H>
+      <UL>
+        <li>
+          <B>Local (per-workload copy):</B> the template is copied into each workload's dir (minus{' '}
+          <M>node_modules</M>/derived), deps installed, and the workspace's dev server runs on its
+          port. Edits are live and isolated per project.
+        </li>
+        <li>
+          <B>Prod (image):</B> the template's Dockerfiles (mirroring the manifest, one per{' '}
+          <M>image</M>) build to the registry; prod pulls and runs them, with the user's files on a
+          mounted volume. Build with <M>deploy/build-template.sh &lt;path&gt;</M>.
+        </li>
+      </UL>
+      <H>Backups are the delta</H>
+      <P>
+        A backup captures only the user's files — <M>node_modules</M>/<M>.git</M>/<M>dist</M>/
+        <M>.expo</M>/build caches are excluded (deps come from install or the image, never a
+        backup). So a project backup is small: source + tinbase data. Same rule local and prod.
       </P>
     </Section>
   )

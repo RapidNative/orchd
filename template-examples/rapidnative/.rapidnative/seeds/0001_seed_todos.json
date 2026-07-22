@@ -1,0 +1,31 @@
+{
+  "table": "todos",
+  "rows": [
+    {
+      "id": "todo-1",
+      "title": "Buy groceries",
+      "completed": false
+    },
+    {
+      "id": "todo-2",
+      "title": "Walk the dog",
+      "completed": true
+    },
+    {
+      "id": "todo-3",
+      "title": "Finish the report",
+      "completed": false
+    },
+    {
+      "id": "todo-4",
+      "title": "Call mom",
+      "completed": false
+    },
+    {
+      "id": "todo-5",
+      "title": "Schedule dentist appointment",
+      "completed": true
+    }
+  ],
+  "seq": 1
+}

@@ -1,0 +1,43 @@
+{
+  "name": "rapidnative",
+  "backup_exclude": [
+    "node_modules",
+    ".git",
+    "dist",
+    "build",
+    ".expo",
+    ".next",
+    ".cache",
+    "ios",
+    "android"
+  ],
+  "workloads": [
+    {
+      "name": "db",
+      "kind": "tinbase"
+    },
+    {
+      "name": "api",
+      "kind": "node",
+      "dir": "api",
+      "install": ["npm", "install"],
+      "run": ["node", "--watch", "index.js"],
+      "port_env": "PORT",
+      "image": "rn-api:dev"
+    },
+    {
+      "name": "web",
+      "kind": "static",
+      "dir": "web",
+      "image": "rn-web:dev"
+    },
+    {
+      "name": "mobile",
+      "kind": "node",
+      "dir": "mobile",
+      "install": ["npm", "install"],
+      "run": ["npx", "expo", "start", "--web", "--port", "$PORT"],
+      "image": "rn-mobile:dev"
+    }
+  ]
+}

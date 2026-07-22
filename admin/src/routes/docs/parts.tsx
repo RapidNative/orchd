@@ -8,6 +8,7 @@ export const API_BASE = 'https://api.rnproject.dev'
 export const SECTIONS = [
   { path: '', title: 'About tinbase cloud', short: 'About' },
   { path: 'repo', title: 'Repository & layout', short: 'Repository' },
+  { path: 'templates', title: 'Templates', short: 'Templates' },
   { path: 'images', title: 'Images & presets', short: 'Images' },
   { path: 'regions', title: 'Adding regions', short: 'Regions' },
   { path: 'adaptors', title: 'Adaptors', short: 'Adaptors' },

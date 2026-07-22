@@ -5,7 +5,7 @@ test('projects: create and open detail', async ({ page }) => {
   await page.goto('/projects')
   await expect(page.getByRole('heading', { level: 1, name: 'Projects' })).toBeVisible()
 
-  await page.getByRole('button', { name: 'tinbase project' }).click()
+  await page.getByRole('button', { name: 'New project' }).click()
 
   // Create navigates to /projects/<id>; the detail page shows its actions.
   await expect(page).toHaveURL(/\/projects\/[a-z0-9]+$/i)

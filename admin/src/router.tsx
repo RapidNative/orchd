@@ -9,7 +9,7 @@ import { System } from './routes/system'
 import { Settings } from './routes/settings'
 import { Images } from './routes/images'
 import { DocsLayout } from './routes/docs/layout'
-import { About, Adaptors, ImagesDoc, Regions, Repo } from './routes/docs/sections'
+import { About, Adaptors, ImagesDoc, Regions, Repo, Templates } from './routes/docs/sections'
 import { ApiReference } from './routes/docs/api'
 
 const rootRoute = createRootRoute({ component: RootLayout })
@@ -22,6 +22,7 @@ const docsRoute = createRoute({
 const docsRoutes = docsRoute.addChildren([
   createRoute({ getParentRoute: () => docsRoute, path: '/', component: About }),
   createRoute({ getParentRoute: () => docsRoute, path: 'repo', component: Repo }),
+  createRoute({ getParentRoute: () => docsRoute, path: 'templates', component: Templates }),
   createRoute({ getParentRoute: () => docsRoute, path: 'images', component: ImagesDoc }),
   createRoute({ getParentRoute: () => docsRoute, path: 'regions', component: Regions }),
   createRoute({ getParentRoute: () => docsRoute, path: 'adaptors', component: Adaptors }),

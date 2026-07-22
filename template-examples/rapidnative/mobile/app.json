@@ -1,0 +1,11 @@
+{
+  "expo": {
+    "name": "Todos",
+    "slug": "todos",
+    "scheme": "todos",
+    "extra": {
+      "defaultAppIconSet": true,
+      "selectedIconUrl": "https://lriheocxsydddfotbuja.supabase.co/storage/v1/object/public/projects/bdaf0b66-080d-4c45-9782-a6749f3ea9df/fs/assets/images/icon.png?t=1784553533763"
+    }
+  }
+}

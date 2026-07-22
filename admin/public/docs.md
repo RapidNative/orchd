@@ -17,6 +17,7 @@ another instance might be **RapidNative Cloud** for on-demand dev environments. 
 **Guide**
 1. [About tinbase cloud](#about)
 2. [Repository & layout](#repo)
+2b. [Templates](#templates)
 3. [Images & presets](#images)
 4. [Adding regions](#regions)
 5. [Adaptors (replaceable parts)](#adaptors)
@@ -79,7 +80,8 @@ cloud/
 │       ├── events/      event Sink adaptor: Memory / Webhook / Multi
 │       └── metrics/     metrics Sink adaptor: Nop / Log / HTTP
 ├── admin/               admin panel — Vite + React + TanStack + Tailwind
-└── deploy/              Caddyfile, systemd units, deploy.sh
+├── deploy/              Caddyfile, systemd units, deploy.sh
+└── template-examples/   bundled example templates (tinbase, rapidnative)
 ```
 
 ### Build & deploy
@@ -135,6 +137,52 @@ Drivers:
 - `mock` — boots the whole control plane + admin with no Docker at all (workloads don't serve).
 
 Any explicit `ORCHD_*` var still overrides the local defaults.
+
+---
+
+<a id="templates"></a>
+## Templates
+
+A **template** is a project folder (a monorepo) with an `orchd.json` at its root — ORCHD's own
+descriptor, independent of any framework's manifest. It lists the **workloads** a project should
+run. One template = one project; each workload is a workspace on its own port (local) or an image
+(prod). Example templates ship in `template-examples/` (`tinbase`, `rapidnative`).
+
+```jsonc
+{
+  "name": "rapidnative",
+  "backup_exclude": ["node_modules", ".git", "dist", ".expo", "build"],
+  "workloads": [
+    { "name": "db",     "kind": "tinbase" },
+    { "name": "api",    "kind": "node",   "dir": "api",
+      "install": ["npm","install"], "run": ["node","--watch","index.js"], "port_env": "PORT",
+      "image": "rn-api:dev" },
+    { "name": "web",    "kind": "static", "dir": "web",    "image": "rn-web:dev" },
+    { "name": "mobile", "kind": "node",   "dir": "mobile",
+      "install": ["npm","install"], "run": ["npx","expo","start","--web","--port","$PORT"],
+      "image": "rn-mobile:dev" }
+  ]
+}
+```
+
+Kinds: `tinbase` (a tinbase backend), `node` (`install` once, then `run` with `$PORT`/`port_env`),
+`static` (a built-in zero-dep server for a folder).
+
+**Register & create:** add the template in Settings → Templates (name → local path), then on
+Projects pick it from *"from template…"* and Create. One workload per manifest entry; **provisioning
+is async** (the call returns immediately, workloads go `provisioning → running/failed`) so a heavy
+first `npm install` never blocks it.
+
+**Local vs prod (same template):**
+- **Local (per-workload copy):** the template is copied into each workload's dir (minus
+  `node_modules`/derived), deps installed, and the workspace's dev server runs on its port.
+- **Prod (image):** build the template's images with `deploy/build-template.sh <path> [--push]`
+  (a Dockerfile per workload, mirroring the manifest), push to a registry, and prod pulls + runs
+  them with the user's files on a mounted volume.
+
+**Backups are the delta:** only the user's files are captured — `node_modules`/`.git`/`dist`/`.expo`
+and build caches are excluded (deps come from install or the image). Small backups, same rule local
+and prod.
 
 ---
 

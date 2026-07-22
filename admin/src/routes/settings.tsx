@@ -156,6 +156,78 @@ function InstanceCard() {
   )
 }
 
+function TemplatesCard() {
+  const qc = useQueryClient()
+  const templates = useQuery({ queryKey: ['templates'], queryFn: API.templates })
+  const [name, setName] = useState('')
+  const [path, setPath] = useState('')
+  const inval = () => qc.invalidateQueries({ queryKey: ['templates'] })
+  const save = useMutation({
+    mutationFn: () => API.setTemplate(name.trim(), path.trim()),
+    onSuccess: () => {
+      setName('')
+      setPath('')
+      inval()
+    },
+  })
+  const del = useMutation({ mutationFn: (n: string) => API.setTemplate(n, ''), onSuccess: inval })
+  const entries = Object.entries(templates.data ?? {})
+
+  return (
+    <Card className="mb-6 max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">Templates</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <THead>
+            <TR>
+              <TH>Name</TH>
+              <TH>Local path</TH>
+              <TH></TH>
+            </TR>
+          </THead>
+          <TBody>
+            {entries.map(([n, p]) => (
+              <TR key={n}>
+                <TD className="font-mono">{n}</TD>
+                <TD className="font-mono text-xs text-muted-foreground">{p}</TD>
+                <TD className="text-right">
+                  <Button size="sm" variant="destructive" onClick={() => del.mutate(n)}>
+                    <IconTrash />
+                  </Button>
+                </TD>
+              </TR>
+            ))}
+          </TBody>
+        </Table>
+        <div className="mt-3 flex flex-wrap items-end gap-2">
+          <Input
+            className="max-w-40"
+            placeholder="name (e.g. rapidnative)"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+          />
+          <Input
+            className="max-w-96 flex-1"
+            placeholder="/absolute/path/to/template (has orchd.json)"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+          />
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !name.trim() || !path.trim()}>
+            Add template
+          </Button>
+          {save.isError && <span className="text-sm text-destructive">{(save.error as Error).message}</span>}
+        </div>
+        <p className="mt-2 text-xs text-muted-foreground">
+          A local folder with an <code className="font-mono">orchd.json</code>. Create a project from
+          it on the Projects page — each workspace runs on its own port.
+        </p>
+      </CardContent>
+    </Card>
+  )
+}
+
 function Field({ label, children, hint }: { label: string; children: ReactNode; hint?: string }) {
   return (
     <label className="grid gap-1.5">
@@ -314,6 +386,7 @@ export function Settings() {
       <PageHeader title="Settings" subtitle="Instance, regions, backups, notifications" />
 
       <InstanceCard />
+      <TemplatesCard />
       <RegionsCard />
       <KeysCard />
 

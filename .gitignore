@@ -16,3 +16,7 @@
 
 # Local dev harness (dev/local.sh)
 .localdev/
+
+# local deps inside bundled example templates
+template-examples/**/node_modules/
+template-examples/**/.env

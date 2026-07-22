@@ -17,7 +17,10 @@ export function Projects() {
   const navigate = useNavigate()
   const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 5000 })
   const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions })
+  const templates = useQuery({ queryKey: ['templates'], queryFn: api.templates })
   const [region, setRegion] = useState('')
+  const [template, setTemplate] = useState('')
+  const templateNames = Object.keys(templates.data ?? {})
 
   const create = useMutation({
     mutationFn: (body: Parameters<typeof api.createProject>[0]) =>
@@ -59,32 +62,35 @@ export function Projects() {
                 </option>
               ))}
             </Select>
-            <Button
-              variant="secondary"
-              onClick={() => projects.refetch()}
-              title="Refresh"
-            >
+            {templateNames.length > 0 && (
+              <>
+                <Select
+                  value={template}
+                  onChange={(e) => setTemplate(e.target.value)}
+                  title="Create a project from a template"
+                  className="h-9 font-mono"
+                >
+                  <option value="">from template…</option>
+                  {templateNames.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </Select>
+                <Button
+                  variant="secondary"
+                  disabled={!template || create.isPending}
+                  onClick={() => create.mutate({ template })}
+                >
+                  <IconPlus /> Create
+                </Button>
+              </>
+            )}
+            <Button variant="secondary" onClick={() => projects.refetch()} title="Refresh">
               <IconRefresh />
             </Button>
-            <Button
-              variant="secondary"
-              disabled={create.isPending}
-              onClick={() =>
-                create.mutate({
-                  name: 'rapidnative',
-                  workloads: [
-                    { preset: 'tinbase' },
-                    { preset: 'expo' },
-                    { preset: 'vite' },
-                    { preset: 'api' },
-                  ],
-                })
-              }
-            >
-              <IconPlus /> RapidNative project
-            </Button>
             <Button disabled={create.isPending} onClick={() => create.mutate({})}>
-              <IconPlus /> tinbase project
+              <IconPlus /> New project
             </Button>
           </>
         }

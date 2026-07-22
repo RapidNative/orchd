@@ -1,0 +1,6 @@
+{
+  "name": "tinbase",
+  "workloads": [
+    { "name": "db", "kind": "tinbase" }
+  ]
+}
