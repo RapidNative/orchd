@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconCopy } from '@/components/icons'
-import { relativeTime } from '@/lib/utils'
+import { copyToClipboard, relativeTime, toAbsoluteUrl } from '@/lib/utils'
 
 // importSpecFor builds the paste-on-another-instance descriptor from an image,
 // using its registry refs (pullable elsewhere) and frozen workload shape. Done
@@ -61,14 +61,19 @@ export function BuiltImagesTable({ filterTemplate }: { filterTemplate?: string }
   // Copy the import spec (registry refs + workload shape) for pasting on another
   // ORCHD instance's "Import image" form. Built from the image itself.
   const copySpec = async (im: BuiltImage) => {
-    const json = JSON.stringify(importSpecFor(im), null, 2)
-    try {
-      await navigator.clipboard.writeText(json)
-      setNote(`Copied import spec for ${im.template}@${im.version}.`)
-    } catch {
-      setNote('Clipboard blocked — spec logged to the console instead.')
-      console.log(json)
-    }
+    const ok = await copyToClipboard(JSON.stringify(importSpecFor(im), null, 2))
+    setNote(
+      ok
+        ? `Copied import spec for ${im.template}@${im.version}.`
+        : 'Clipboard blocked — spec logged to the console instead.',
+    )
+  }
+  // Copy the absolute tarball-download URL (the frozen base), e.g. to hydrate a
+  // client VFS from it. Needs a Bearer key when fetched.
+  const copyBundleUrl = async (im: BuiltImage) => {
+    const url = toAbsoluteUrl(api.imageBundleUrl(im.template, im.version))
+    const ok = await copyToClipboard(url)
+    setNote(ok ? `Copied tarball URL: ${url}` : 'Clipboard blocked — URL logged to the console.')
   }
 
   const images = (built.data ?? []).filter((im) => !filterTemplate || im.template === filterTemplate)
@@ -128,6 +133,16 @@ export function BuiltImagesTable({ filterTemplate }: { filterTemplate?: string }
                 <TD className="text-xs text-muted-foreground">{relativeTime(im.created_at)}</TD>
                 <TD className="text-right">
                   <div className="flex items-center justify-end gap-1.5">
+                    {im.tarball && (
+                      <Button
+                        size="sm"
+                        variant="secondary"
+                        title="Copy the tarball-download API URL (the frozen base — e.g. to hydrate a VFS)"
+                        onClick={() => copyBundleUrl(im)}
+                      >
+                        <IconCopy /> Copy URL
+                      </Button>
+                    )}
                     {tags.length > 0 && !im.imported && (
                       <Button
                         size="sm"

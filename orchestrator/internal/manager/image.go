@@ -48,6 +48,23 @@ func (m *Manager) BuiltImage(tmpl, version string) (*store.Image, error) {
 	return m.store.GetImage(tmpl, version)
 }
 
+// ImageTarball returns the on-disk path to an image's base tarball, so the API
+// can stream it (e.g. to hydrate a client VFS from the frozen base). Errors for
+// docker-only / imported images, which have no tarball.
+func (m *Manager) ImageTarball(tmpl, version string) (string, error) {
+	im, err := m.store.GetImage(tmpl, version)
+	if err != nil {
+		return "", err
+	}
+	if im.Tarball == "" {
+		return "", fmt.Errorf("image %s is docker-only (no tarball)", store.ImageID(tmpl, version))
+	}
+	if _, err := os.Stat(im.Tarball); err != nil {
+		return "", fmt.Errorf("tarball missing: %w", err)
+	}
+	return im.Tarball, nil
+}
+
 // BuildImage freezes the current state of a template into an immutable, versioned
 // image. It always writes a tarball of the template tree (the artifact local /
 // process boots restore from); when the `docker` CLI is available it additionally

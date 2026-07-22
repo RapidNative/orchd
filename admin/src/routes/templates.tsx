@@ -7,8 +7,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
-import { IconTrash } from '@/components/icons'
+import { IconCopy, IconTrash } from '@/components/icons'
 import { BuiltImagesTable, useBuildImage } from '@/components/built-images'
+import { copyToClipboard, toAbsoluteUrl } from '@/lib/utils'
 
 export function Templates() {
   return (
@@ -90,7 +91,13 @@ function TemplatesCard() {
   const del = useMutation({ mutationFn: (n: string) => api.setTemplate(n, ''), onSuccess: inval })
   const build = useBuildImage()
   const [browse, setBrowse] = useState<string | null>(null)
+  const [note, setNote] = useState('')
   const entries = Object.entries(templates.data ?? {})
+  const copyBundleUrl = async (name: string) => {
+    const url = toAbsoluteUrl(api.templateBundleUrl(name))
+    const ok = await copyToClipboard(url)
+    setNote(ok ? `Copied tarball URL: ${url}` : 'Clipboard blocked — URL logged to the console.')
+  }
 
   return (
     <Card className="mb-6 max-w-3xl">
@@ -121,6 +128,14 @@ function TemplatesCard() {
                     >
                       {build.isPending && build.variables === n ? 'Building…' : 'Build'}
                     </Button>
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      title="Copy the tarball-download API URL (base files — e.g. to hydrate a VFS)"
+                      onClick={() => copyBundleUrl(n)}
+                    >
+                      <IconCopy /> Copy URL
+                    </Button>
                     <Button size="sm" variant="secondary" onClick={() => setBrowse(n)}>
                       Browse
                     </Button>
@@ -143,6 +158,7 @@ function TemplatesCard() {
         {build.isError && (
           <p className="mt-2 text-sm text-destructive">{(build.error as Error).message}</p>
         )}
+        {note && <p className="mt-2 break-all text-xs text-muted-foreground">{note}</p>}
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <Input
             className="max-w-40"

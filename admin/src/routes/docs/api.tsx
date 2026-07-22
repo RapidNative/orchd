@@ -344,6 +344,13 @@ const GROUPS: Group[] = [
     "created_at": "2026-07-22T…" } ]`,
       },
       {
+        method: 'GET',
+        path: '/v1/built-images/{name}/{version}/bundle',
+        role: 'readonly',
+        desc: 'Download the image’s frozen base as a tar.gz (the exact source tree at build time) — e.g. to hydrate a client VFS from the base. 404 for docker-only/imported images (no tarball).',
+        res: `(application/gzip attachment)`,
+      },
+      {
         method: 'DELETE',
         path: '/v1/built-images/{name}/{version}',
         role: 'admin',

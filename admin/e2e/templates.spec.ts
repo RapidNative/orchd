@@ -12,4 +12,11 @@ test('templates: register a template', async ({ page }) => {
 
   await expect(page.getByText('demo-tmpl')).toBeVisible()
   await expect(page.getByText('/tmp/demo-template')).toBeVisible()
+
+  // Each row can copy the tarball-download API URL (used to hydrate a base VFS).
+  await page
+    .getByRole('row', { name: /demo-tmpl/ })
+    .getByRole('button', { name: /Copy URL/ })
+    .click()
+  await expect(page.getByText(/tarball URL|Clipboard blocked/)).toBeVisible()
 })

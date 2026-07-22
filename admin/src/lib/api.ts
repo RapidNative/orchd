@@ -85,6 +85,8 @@ export const api = {
   templateFile: (name: string, path: string) =>
     reqText('/v1/templates/' + encodeURIComponent(name) + '/files?path=' + encodeURIComponent(path)),
   templateBundleUrl: (name: string) => BASE + '/v1/templates/' + encodeURIComponent(name) + '/bundle',
+  imageBundleUrl: (template: string, version: string) =>
+    BASE + '/v1/built-images/' + encodeURIComponent(template) + '/' + encodeURIComponent(version) + '/bundle',
   buildImage: (name: string) =>
     req<BuiltImage>('/v1/templates/' + encodeURIComponent(name) + '/build', { method: 'POST' }),
   builtImages: () => req<BuiltImage[]>('/v1/built-images'),

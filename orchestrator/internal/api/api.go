@@ -84,6 +84,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/templates/{name}/bundle", a.templateBundle)
 	mux.HandleFunc("POST /v1/templates/{name}/build", a.buildImage)
 	mux.HandleFunc("GET /v1/built-images", a.listBuiltImages)
+	mux.HandleFunc("GET /v1/built-images/{name}/{version}/bundle", a.imageBundle)
 	mux.HandleFunc("DELETE /v1/built-images/{name}/{version}", a.deleteBuiltImage)
 	mux.HandleFunc("POST /v1/built-images/{name}/{version}/push", a.pushBuiltImage)
 	mux.HandleFunc("GET /v1/built-images/{name}/{version}/spec", a.builtImageSpec)
@@ -757,6 +758,20 @@ func (a *API) templateBundle(w http.ResponseWriter, r *http.Request) {
 		// Headers may already be sent; log-level only.
 		return
 	}
+}
+
+// imageBundle streams a built image's base tarball (base.tar.gz) — the frozen
+// source tree, e.g. to hydrate a client VFS from the base.
+func (a *API) imageBundle(w http.ResponseWriter, r *http.Request) {
+	name, version := r.PathValue("name"), r.PathValue("version")
+	path, err := a.mgr.ImageTarball(name, version)
+	if err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`-`+version+`.tar.gz"`)
+	http.ServeFile(w, r, path)
 }
 
 // buildImage freezes the named template into a new, auto-versioned image.
