@@ -112,20 +112,31 @@ export function Repo() {
           existing workloads and admin/api on the old domain keep working.
         </li>
       </UL>
-      <H>Run locally (ports, no domain)</H>
+      <H>Run locally (a port per workload, no domain)</H>
       <P>
         For local testing there is <B>no domain, TLS, or Caddy</B> — everything runs on localhost
-        ports. <M>dev/local.sh [docker|mock|local]</M> starts orchd (control API + gateway) and the
-        admin, and prints the URLs and a dev API key. Under the hood it sets <M>ORCHD_LOCAL=1</M>,
-        which switches the base domain to <M>localhost</M> and points endpoints at the gateway port.
+        ports, and <B>each workload gets its own stable port</B> instead of a subdomain.{' '}
+        <M>dev/local.sh [docker|mock|local]</M> starts orchd + the admin and prints the URLs and a
+        dev API key. It sets <M>ORCHD_LOCAL=1</M> and <M>ORCHD_PORT_BASE=8100</M>, so workloads are
+        assigned <M>8100</M>, <M>8101</M>, <M>8102</M>… as they're created and are reachable directly.
       </P>
-      <Code title="Local URLs">{`Admin     http://localhost:5173
-API       http://localhost:8080
-Gateway   http://localhost:8081
+      <Code title="Local layout">{`ORCHD API    http://localhost:8090
+Gateway      http://localhost:8091
+Admin        http://localhost:5173
 
-# reach a workload by port — two equivalent ways:
-http://localhost:8081/w/<key>       # subroute (pure ports, no DNS)
-http://<key>.localhost:8081         # subdomain (browsers resolve to loopback)`}</Code>
+# a project's workloads each get their own port (shown as the endpoint):
+tinbase      http://localhost:8100
+app (web)    http://localhost:8101
+app (api)    http://localhost:8102
+# next workload -> 8103, and so on`}</Code>
+      <P>
+        Port addressing is driven by <M>ORCHD_PORT_BASE</M> (empty in prod, where the
+        gateway/subdomain model is used instead). Each workload's assigned port is stable across
+        restarts and surfaced as its <M>endpoint</M> in the panel and API. The gateway subroute
+        (<M>/w/&lt;key&gt;</M>) and <M>&lt;key&gt;.localhost</M> subdomain still work as
+        alternatives. <B>Local can differ from prod/staging</B>: it's all env — prod sets a base
+        domain and leaves <M>ORCHD_PORT_BASE</M> unset.
+      </P>
       <P>
         <M>docker</M> runs real containers (runc, no gVisor needed); <M>mock</M> boots the whole
         control plane and admin with no Docker (workloads don't serve real traffic); <M>local</M>{' '}

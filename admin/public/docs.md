@@ -97,22 +97,34 @@ cloud/
 - `*.tinbase.dev` — also served (a Caddy wildcard block + `ORCHD_ALT_DOMAINS`), so existing
   workloads and admin/api on the old domain keep working.
 
-### Run locally (ports, no domain)
+### Run locally (a port per workload, no domain)
 
-For local testing there is **no domain, TLS, or Caddy** — everything runs on localhost ports.
-`dev/local.sh [docker|mock|local]` starts orchd (control API + gateway) and the admin, and prints the
-URLs and a dev API key. It sets `ORCHD_LOCAL=1`, which switches the base domain to `localhost` and
-points endpoints at the gateway port.
+For local testing there is **no domain, TLS, or Caddy** — everything runs on localhost ports, and
+**each workload gets its own stable port** instead of a subdomain. `dev/local.sh [docker|mock|local]`
+starts orchd + the admin and prints the URLs and a dev API key. It sets `ORCHD_LOCAL=1` and
+`ORCHD_PORT_BASE=8100`, so workloads are assigned `8100`, `8101`, `8102`… as they're created and are
+reachable directly.
 
 ```
-Admin     http://localhost:5173
-API       http://localhost:8080
-Gateway   http://localhost:8081
+ORCHD API    http://localhost:8090
+Gateway      http://localhost:8091
+Admin        http://localhost:5173
 
-# reach a workload by port — two equivalent ways:
-http://localhost:8081/w/<key>       # subroute (pure ports, no DNS)
-http://<key>.localhost:8081         # subdomain (browsers resolve to loopback)
+# a project's workloads each get their own port (shown as the endpoint):
+tinbase      http://localhost:8100
+app (web)    http://localhost:8101
+app (api)    http://localhost:8102
+# next workload -> 8103, and so on
+
+# the gateway routes still work as alternatives:
+http://localhost:8091/w/<key>       # subroute (pure ports, no DNS)
+http://<key>.localhost:8091         # subdomain (browsers resolve to loopback)
 ```
+
+Port addressing is driven by `ORCHD_PORT_BASE` (empty in prod, which uses the gateway/subdomain
+model). Each workload's assigned port is stable across restarts and surfaced as its `endpoint`.
+**Local can differ from prod/staging** — it's all env: prod sets a base domain and leaves
+`ORCHD_PORT_BASE` unset.
 
 Drivers: `docker` runs real containers (runc, no gVisor needed); `mock` boots the whole control
 plane + admin with no Docker (workloads don't serve real traffic); `local` runs the tinbase binary

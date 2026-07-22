@@ -97,6 +97,7 @@ type Workload struct {
 	Name      string               `json:"name"` // role within the project ("", "api", "web", ...)
 	Image     string               `json:"image,omitempty"`
 	Port      int                  `json:"port,omitempty"`
+	HostPort  int                  `json:"host_port,omitempty"` // stable external port (port-addressing mode); 0 = gateway model
 	MemoryMB  int                  `json:"memory_mb,omitempty"`
 	CPUs      float64              `json:"cpus,omitempty"`
 	KeepWarm  bool                 `json:"keep_warm,omitempty"` // always-on: exempt from scale-to-zero

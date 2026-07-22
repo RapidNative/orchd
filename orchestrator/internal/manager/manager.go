@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,6 +49,8 @@ type Manager struct {
 	mu       sync.Mutex
 	live     map[string]*liveInstance // workloadID -> running instance
 	refLocks map[string]*sync.Mutex   // per-workload wake serialization
+
+	portMu sync.Mutex // serializes host-port allocation (port-addressing mode)
 }
 
 type liveInstance struct {
@@ -540,6 +543,7 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 		Name:      ws.Name,
 		Image:     ws.Image,
 		Port:      ws.Port,
+		HostPort:  m.allocHostPort(),
 		MemoryMB:  mem,
 		CPUs:      cpus,
 		State:     runtime.StateProvisioning,
@@ -1075,6 +1079,41 @@ func (m *Manager) keyFor(ref, name string) string {
 	return ref + "-" + name
 }
 
+// allocHostPort assigns the next free stable port for port-per-workload
+// addressing, counting up from cfg.PortBase and skipping ports already reserved
+// by other workloads or currently in use. Returns 0 when port addressing is off
+// (the gateway/subdomain model).
+func (m *Manager) allocHostPort() int {
+	if m.cfg.PortBase <= 0 {
+		return 0
+	}
+	m.portMu.Lock()
+	defer m.portMu.Unlock()
+	used := map[int]bool{}
+	for _, w := range m.store.ListWorkloads("") {
+		if w.HostPort > 0 {
+			used[w.HostPort] = true
+		}
+	}
+	for p := m.cfg.PortBase; p < m.cfg.PortBase+2000; p++ {
+		if !used[p] && portFree(p) {
+			return p
+		}
+	}
+	log.Printf("port-alloc: no free port in [%d, %d)", m.cfg.PortBase, m.cfg.PortBase+2000)
+	return 0
+}
+
+// portFree reports whether a TCP port on localhost can be bound right now.
+func portFree(p int) bool {
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", p))
+	if err != nil {
+		return false
+	}
+	_ = l.Close()
+	return true
+}
+
 func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	// Place the workload on its region's Docker host (a worker node); empty = local.
 	dockerHost := ""
@@ -1089,6 +1128,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		DataDir:    w.DataDir,
 		Image:      w.Image,
 		Port:       w.Port,
+		HostPort:   w.HostPort,
 		DockerHost: dockerHost,
 		Env: map[string]string{
 			"TINBASE_JWT_SECRET": w.JWTSecret,

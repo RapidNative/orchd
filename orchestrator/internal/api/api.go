@@ -8,6 +8,7 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -208,12 +209,19 @@ func (a *API) workloadView(w *store.Workload) workloadView {
 	hosts := make([]string, 0, len(routes))
 	endpoints := make([]string, 0, len(routes))
 	subroutes := make([]string, 0, len(routes))
+	// Port-addressing mode: the workload is reached directly at its stable port,
+	// not through the gateway. That direct URL is the primary endpoint.
+	if w.HostPort > 0 {
+		endpoints = append(endpoints, fmt.Sprintf("http://localhost:%d", w.HostPort))
+	}
 	for _, r := range routes {
 		hosts = append(hosts, r.Host)
-		if a.cfg.PublicScheme == "https" {
-			endpoints = append(endpoints, "https://"+r.Host) // public subdomain, TLS on 443
-		} else {
-			endpoints = append(endpoints, "http://"+r.Host+gatewayPort(a.cfg.GatewayAddr))
+		if w.HostPort == 0 {
+			if a.cfg.PublicScheme == "https" {
+				endpoints = append(endpoints, "https://"+r.Host) // public subdomain, TLS on 443
+			} else {
+				endpoints = append(endpoints, "http://"+r.Host+gatewayPort(a.cfg.GatewayAddr))
+			}
 		}
 		if a.cfg.PublicURL != "" {
 			subroutes = append(subroutes, strings.TrimRight(a.cfg.PublicURL, "/")+"/w/"+r.Key)

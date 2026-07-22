@@ -111,9 +111,14 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	if err := os.MkdirAll(spec.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("data dir: %w", err)
 	}
-	hostPort, err := freePort()
-	if err != nil {
-		return nil, fmt.Errorf("allocate port: %w", err)
+	// A pinned HostPort gives stable port-per-workload addressing; otherwise pick
+	// a free one (gateway/subdomain model).
+	hostPort := spec.HostPort
+	if hostPort == 0 {
+		var err error
+		if hostPort, err = freePort(); err != nil {
+			return nil, fmt.Errorf("allocate port: %w", err)
+		}
 	}
 
 	image := d.Image

@@ -70,9 +70,14 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	}
 	d.mu.Unlock()
 
-	port, err := freePort()
-	if err != nil {
-		return nil, fmt.Errorf("allocate port: %w", err)
+	// A pinned HostPort gives stable port-per-workload addressing; otherwise pick
+	// a free one.
+	port := spec.HostPort
+	if port == 0 {
+		var err error
+		if port, err = freePort(); err != nil {
+			return nil, fmt.Errorf("allocate port: %w", err)
+		}
 	}
 
 	if err := os.MkdirAll(spec.DataDir, 0o700); err != nil {

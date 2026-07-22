@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
@@ -234,6 +235,50 @@ func gjson(body []byte, key string) string {
 	}
 	s, _ := m[key].(string)
 	return s
+}
+
+func TestPortAddressing(t *testing.T) {
+	t.Setenv("ORCHD_PORT_BASE", "8100")
+	srv := newTestServer(t)
+
+	// A project with a tinbase backend + two dev apps.
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{
+		"workloads": []map[string]any{
+			{"preset": "tinbase"},
+			{"preset": "vite"},
+			{"preset": "api"},
+		},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var proj struct {
+		Workloads []struct {
+			HostPort  int      `json:"host_port"`
+			Endpoints []string `json:"endpoints"`
+		} `json:"workloads"`
+	}
+	if err := json.Unmarshal(body, &proj); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(proj.Workloads) != 3 {
+		t.Fatalf("want 3 workloads, got %d", len(proj.Workloads))
+	}
+	// Each gets a distinct stable port >= base and a direct-port endpoint.
+	seen := map[int]bool{}
+	for i, w := range proj.Workloads {
+		if w.HostPort < 8100 {
+			t.Fatalf("workload %d host_port %d < base 8100", i, w.HostPort)
+		}
+		if seen[w.HostPort] {
+			t.Fatalf("duplicate host_port %d", w.HostPort)
+		}
+		seen[w.HostPort] = true
+		want := "http://localhost:" + strconv.Itoa(w.HostPort)
+		if len(w.Endpoints) == 0 || w.Endpoints[0] != want {
+			t.Fatalf("workload %d endpoints=%v, want first %s", i, w.Endpoints, want)
+		}
+	}
 }
 
 func TestTLSAllowAcrossDomains(t *testing.T) {

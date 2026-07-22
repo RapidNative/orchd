@@ -21,6 +21,12 @@ type Config struct {
 	// lvh.me resolves *.lvh.me to 127.0.0.1, ideal for local dev.
 	BaseDomain string
 
+	// PortBase, when > 0, enables port-per-workload addressing: each workload is
+	// assigned a stable host port counting up from PortBase (8100, 8101, …) and
+	// is reachable directly at http://localhost:<port>, no gateway/subdomain
+	// needed. 0 = the gateway/subdomain model (prod). Set ORCHD_PORT_BASE.
+	PortBase int
+
 	// AltDomains are additional base domains this server also fronts (e.g. a
 	// legacy domain kept alive alongside a new primary). admin.<d>/api.<d> for
 	// each are permitted through the on-demand-TLS gate; workload hostnames are
@@ -118,6 +124,7 @@ func Load() Config {
 		GatewayAddr:     gatewayAddr,
 		BaseDomain:      env("ORCHD_BASE_DOMAIN", baseDefault),
 		AltDomains:      splitCSV(env("ORCHD_ALT_DOMAINS", "")),
+		PortBase:        envInt("ORCHD_PORT_BASE", 0),
 		DataRoot:        env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")),
 		Driver:          env("ORCHD_DRIVER", "local"),
 		TinbaseBin:      env("ORCHD_TINBASE_BIN", "tinbase"),

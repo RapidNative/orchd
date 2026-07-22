@@ -58,6 +58,14 @@ type Spec struct {
 	// default (54321 for tinbase).
 	Port int
 
+	// HostPort, when non-zero, pins the stable external port the workload is
+	// published on (Docker: -p 127.0.0.1:<HostPort>:<Port>; Local: the process
+	// listens on <HostPort>). This is what makes port-per-workload addressing
+	// possible — reach the workload directly at http://localhost:<HostPort>
+	// instead of through the gateway. 0 = the driver picks a free port (the
+	// gateway/subdomain model).
+	HostPort int
+
 	// DockerHost places this workload on a specific Docker daemon (a region's
 	// worker node), e.g. tcp://node2:2375 or ssh://root@node2. Empty = the driver
 	// default (local). The DockerDriver publishes remotely-placed containers on
