@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconTrash } from '@/components/icons'
+import { BuiltImagesTable, useBuildImage } from '@/components/built-images'
 
 export function Templates() {
   return (
@@ -18,7 +19,24 @@ export function Templates() {
       />
       <AboutTemplates />
       <TemplatesCard />
+      <ImagesFromTemplates />
     </div>
+  )
+}
+
+// ImagesFromTemplates surfaces the built-image list on the Templates page too, so
+// the freeze workflow (Build on a row -> a version appears here) is visible in one
+// place. The full management UI lives on the Images page.
+function ImagesFromTemplates() {
+  return (
+    <Card className="mb-6 max-w-3xl">
+      <CardHeader>
+        <CardTitle className="text-base">Images built from templates</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <BuiltImagesTable />
+      </CardContent>
+    </Card>
   )
 }
 
@@ -70,6 +88,7 @@ function TemplatesCard() {
     },
   })
   const del = useMutation({ mutationFn: (n: string) => api.setTemplate(n, ''), onSuccess: inval })
+  const build = useBuildImage()
   const [browse, setBrowse] = useState<string | null>(null)
   const entries = Object.entries(templates.data ?? {})
 
@@ -94,6 +113,14 @@ function TemplatesCard() {
                 <TD className="font-mono text-xs text-muted-foreground">{p}</TD>
                 <TD className="text-right">
                   <div className="flex items-center justify-end gap-1.5">
+                    <Button
+                      size="sm"
+                      disabled={build.isPending}
+                      onClick={() => build.mutate(n)}
+                      title="Freeze this template into the next image version"
+                    >
+                      {build.isPending && build.variables === n ? 'Building…' : 'Build'}
+                    </Button>
                     <Button size="sm" variant="secondary" onClick={() => setBrowse(n)}>
                       Browse
                     </Button>
@@ -112,6 +139,9 @@ function TemplatesCard() {
             <code className="font-mono text-xs">template-examples/</code>, which auto-registers on
             startup).
           </p>
+        )}
+        {build.isError && (
+          <p className="mt-2 text-sm text-destructive">{(build.error as Error).message}</p>
         )}
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <Input

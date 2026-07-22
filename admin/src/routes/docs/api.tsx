@@ -25,15 +25,23 @@ const GROUPS: Group[] = [
         method: 'POST',
         path: '/v1/projects',
         role: 'admin',
-        desc: 'Create a project + its workloads. Empty body creates one primary tinbase workload. `region` defaults to the default region.',
+        desc: 'Create a project + its workloads. Four sources (first match wins): `image` (boot from a frozen image), `template` (from a live template), explicit `workloads`, or an empty body (one primary tinbase workload). `region` defaults to the default region. `delta`/`deleted` overlay files on the base (works with `template` or `image`).',
         req: `{
   "name": "my-app",           // optional
   "region": "local",          // optional (default region if omitted)
-  "workloads": [              // optional (default: [{ "preset": "tinbase" }])
-    { "preset": "tinbase" },
-    { "preset": "vite" },
-    { "preset": "api" }
-  ]
+
+  // (a) from a frozen image — one workload per manifest entry:
+  "image": "rapidnative@v2",  // "template@version"
+
+  // (b) OR from a live template:
+  "template": "rapidnative",
+
+  // (c) OR explicit workloads:
+  "workloads": [ { "preset": "tinbase" }, { "preset": "vite" } ],
+
+  // optional overlay (with template or image):
+  "delta":   { "api/index.js": "…file contents…" },
+  "deleted": ["README.md"]
 }`,
         res: `{
   "id": "abc123",
@@ -134,6 +142,81 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    id: 'lifecycle',
+    title: 'Lifecycle & env',
+    blurb:
+      'Play/pause/restart a workload or a whole project, and inject environment variables. Restart recreates the instance and re-reads env (precedence: platform → project → workload, most specific wins). Setting env reboots to apply it.',
+    endpoints: [
+      {
+        method: 'POST',
+        path: '/v1/workloads/{id}/start',
+        role: 'admin',
+        desc: 'Boot a stopped/suspended workload. Also POST …/stop (suspend) and …/restart (recreate + refresh env).',
+        res: `{ "status": "started" }`,
+      },
+      {
+        method: 'POST',
+        path: '/v1/projects/{id}/start',
+        role: 'admin',
+        desc: 'Start every workload in a project. Also POST …/stop and …/restart for the whole project.',
+        res: `{ "status": "started" }`,
+      },
+      {
+        method: 'PUT',
+        path: '/v1/workloads/{id}/env',
+        role: 'admin',
+        desc: 'Replace a workload’s injected env vars (reboots the workload to apply).',
+        req: `{ "env": { "NODE_ENV": "production", "API_URL": "https://…" } }`,
+        res: `{ "env": { "NODE_ENV": "production", "API_URL": "https://…" } }`,
+      },
+      {
+        method: 'PUT',
+        path: '/v1/projects/{id}/env',
+        role: 'admin',
+        desc: 'Replace project-level env (injected into every workload of the project; workload env still overrides it). Reboots affected workloads.',
+        req: `{ "env": { "STAGE": "staging" } }`,
+        res: `{ "env": { "STAGE": "staging" } }`,
+      },
+    ],
+  },
+  {
+    id: 'workload-fs',
+    title: 'Workload files',
+    blurb:
+      'Read and write files in a running workload’s materialized working tree (the base+delta the dev server watches). Edits are live — the workspace’s watcher/HMR picks them up. Derived dirs (node_modules, .git, dist, build, .next, .expo, caches) are hidden.',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/v1/workloads/{id}/fs',
+        role: 'readonly',
+        desc: 'List the workload’s file paths (relative, sorted).',
+        res: `[ "api/index.js", "orchd.json", "note.txt" ]`,
+      },
+      {
+        method: 'GET',
+        path: '/v1/workloads/{id}/fs/file',
+        role: 'readonly',
+        desc: 'Read one file (text/plain body).',
+        params: 'path=<relative path> (required)',
+      },
+      {
+        method: 'PUT',
+        path: '/v1/workloads/{id}/fs/file',
+        role: 'admin',
+        desc: 'Write one file (raw text/plain body, creates parents). Path-traversal safe.',
+        params: 'path=<relative path> (required)',
+        res: `{ "path": "api/index.js", "bytes": 128 }`,
+      },
+      {
+        method: 'DELETE',
+        path: '/v1/workloads/{id}/fs/file',
+        role: 'admin',
+        desc: 'Delete one file/dir. 204.',
+        params: 'path=<relative path> (required)',
+      },
+    ],
+  },
+  {
     id: 'domains',
     title: 'Domains (routes)',
     blurb:
@@ -186,6 +269,85 @@ const GROUPS: Group[] = [
         role: 'admin',
         desc: 'Remove an image by ref or id. Fails if a container still uses it unless force=true. 204.',
         params: 'ref=<ref|id> (required) · region=<id> (optional) · force=true (optional)',
+      },
+    ],
+  },
+  {
+    id: 'templates',
+    title: 'Templates',
+    blurb:
+      'A template is a project folder (monorepo) with an orchd.json declaring its workloads. Register a name → local path, then create projects from it. The base files are browsable and downloadable as a tarball (for hydrating a client VFS or seeding a workload).',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/v1/templates',
+        role: 'readonly',
+        desc: 'List registered templates (name → local path).',
+        res: `{ "rapidnative": "/…/template-examples/rapidnative", "tinbase": "/…/tinbase" }`,
+      },
+      {
+        method: 'PUT',
+        path: '/v1/templates',
+        role: 'admin',
+        desc: 'Register (or, with an empty path, unregister) a template by name.',
+        req: `{ "name": "rapidnative", "path": "/absolute/path/to/template" }`,
+        res: `{ "rapidnative": "/absolute/path/to/template", "tinbase": "…" }`,
+      },
+      {
+        method: 'GET',
+        path: '/v1/templates/{name}',
+        role: 'readonly',
+        desc: 'Get a template’s parsed orchd.json manifest (name, backup_exclude, workloads).',
+        res: `{ "name": "rapidnative", "workloads": [ { "name": "db", "kind": "tinbase" },
+    { "name": "api", "kind": "node", "dir": "api", "image": "rn-api:dev" } ] }`,
+      },
+      {
+        method: 'GET',
+        path: '/v1/templates/{name}/files',
+        role: 'readonly',
+        desc: 'List the template’s base file paths, or read one with the path query (text/plain).',
+        params: 'path=<relative path> (optional; omit to list)',
+      },
+      {
+        method: 'GET',
+        path: '/v1/templates/{name}/bundle',
+        role: 'readonly',
+        desc: 'Download the template base as a tar.gz (excludes node_modules/.git/derived dirs).',
+        res: `(application/gzip attachment)`,
+      },
+      {
+        method: 'POST',
+        path: '/v1/templates/{name}/build',
+        role: 'admin',
+        desc: 'Freeze the template into the next image version (v1, v2, …). Always writes a base tarball; additionally builds+tags a docker image per node/static workspace when the Docker CLI is available. Returns the new image.',
+        res: `{ "template": "rapidnative", "version": "v2",
+  "tarball": "/…/images/rapidnative/v2/base.tar.gz",
+  "dockers": { "api": "orchd-rapidnative-api:v2", "web": "orchd-rapidnative-web:v2" },
+  "created_at": "2026-07-22T…" }`,
+      },
+    ],
+  },
+  {
+    id: 'built-images',
+    title: 'Built images',
+    blurb:
+      'Images are immutable, versioned freezes of a template: a base tarball (local/process boots restore from it) plus per-workspace docker tags (the Docker driver runs them). Boot a project from one with POST /v1/projects { "image": "template@version" }.',
+    endpoints: [
+      {
+        method: 'GET',
+        path: '/v1/built-images',
+        role: 'readonly',
+        desc: 'List all frozen template images (newest first per template).',
+        res: `[ { "template": "rapidnative", "version": "v2",
+    "tarball": "/…/base.tar.gz",
+    "dockers": { "api": "orchd-rapidnative-api:v2" },
+    "created_at": "2026-07-22T…" } ]`,
+      },
+      {
+        method: 'DELETE',
+        path: '/v1/built-images/{name}/{version}',
+        role: 'admin',
+        desc: 'Delete a frozen image (its tarball + store record). Docker tags are left in place. 204.',
       },
     ],
   },

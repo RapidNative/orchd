@@ -2,7 +2,6 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { PageHeader } from '@/components/bits'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -10,7 +9,7 @@ import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconPlus, IconRefresh, IconTrash } from '@/components/icons'
 import { Pager, SearchBox, usePaged } from '@/components/paged'
 import { Select } from '@/components/ui/select'
-import { relativeTime } from '@/lib/utils'
+import { BuiltImagesTable, useBuildImage } from '@/components/built-images'
 
 // AboutImages is a short primer distinguishing the two things this page shows:
 // ORCHD's versioned template freezes (tarball + docker) vs. raw daemon images.
@@ -47,23 +46,10 @@ function AboutImages() {
 // per workspace, a docker image tag (prod runs them). "Build" freezes the current
 // template state into the next version (v1, v2, …).
 function BuiltImagesCard() {
-  const qc = useQueryClient()
   const templates = useQuery({ queryKey: ['templates'], queryFn: api.templates })
-  const built = useQuery({ queryKey: ['built-images'], queryFn: api.builtImages, refetchInterval: 10000 })
   const [menuOpen, setMenuOpen] = useState(false)
   const templateNames = Object.keys(templates.data ?? {})
-
-  const build = useMutation({
-    mutationFn: (name: string) => api.buildImage(name),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['built-images'] }),
-  })
-  const del = useMutation({
-    mutationFn: ({ template, version }: { template: string; version: string }) =>
-      api.deleteBuiltImage(template, version),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['built-images'] }),
-  })
-
-  const images = built.data ?? []
+  const build = useBuildImage()
 
   return (
     <Card className="mb-4">
@@ -79,7 +65,7 @@ function BuiltImagesCard() {
           <Button
             disabled={build.isPending || templateNames.length === 0}
             onClick={() => setMenuOpen((v) => !v)}
-            title={templateNames.length === 0 ? 'Register a template in Settings first' : undefined}
+            title={templateNames.length === 0 ? 'Register a template first' : undefined}
           >
             <IconPlus /> {build.isPending ? 'Building…' : 'Build image'}
           </Button>
@@ -111,63 +97,7 @@ function BuiltImagesCard() {
         {build.isError && (
           <p className="mb-3 text-sm text-destructive">{(build.error as Error).message}</p>
         )}
-        {images.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No images built yet. Build one from a registered template above.
-          </p>
-        ) : (
-          <Table>
-            <THead>
-              <TR>
-                <TH>Template</TH>
-                <TH>Version</TH>
-                <TH>Docker tags</TH>
-                <TH>Built</TH>
-                <TH className="text-right">Actions</TH>
-              </TR>
-            </THead>
-            <TBody>
-              {images.map((im) => {
-                const tags = Object.entries(im.dockers ?? {})
-                return (
-                  <TR key={im.template + '@' + im.version}>
-                    <TD className="font-mono">{im.template}</TD>
-                    <TD>
-                      <Badge variant="running">{im.version}</Badge>
-                    </TD>
-                    <TD className="text-xs text-muted-foreground">
-                      {tags.length === 0 ? (
-                        <span title={im.tarball}>tarball only</span>
-                      ) : (
-                        <div className="flex flex-col gap-0.5">
-                          {tags.map(([ws, tag]) => (
-                            <span key={ws} className="font-mono">
-                              {ws}: {tag}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </TD>
-                    <TD className="text-xs text-muted-foreground">{relativeTime(im.created_at)}</TD>
-                    <TD className="text-right">
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={del.isPending}
-                        onClick={() => {
-                          if (!confirm(`Delete image ${im.template}@${im.version}?`)) return
-                          del.mutate({ template: im.template, version: im.version })
-                        }}
-                      >
-                        <IconTrash />
-                      </Button>
-                    </TD>
-                  </TR>
-                )
-              })}
-            </TBody>
-          </Table>
-        )}
+        <BuiltImagesTable />
       </CardContent>
     </Card>
   )
