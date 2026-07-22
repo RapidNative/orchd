@@ -126,9 +126,15 @@ model). Each workload's assigned port is stable across restarts and surfaced as 
 **Local can differ from prod/staging** — it's all env: prod sets a base domain and leaves
 `ORCHD_PORT_BASE` unset.
 
-Drivers: `docker` runs real containers (runc, no gVisor needed); `mock` boots the whole control
-plane + admin with no Docker (workloads don't serve real traffic); `local` runs the tinbase binary
-directly. Any explicit `ORCHD_*` var still overrides the local defaults.
+Drivers:
+
+- `local` (default) — a **full no-Docker stack**: tinbase and the RapidNative dev apps
+  (web/api/app) each run as a real local process from a scaffolded source dir — **Vite** for web,
+  **Hono** for api, **Expo** for app — npm-installed on first boot (needs node/npm).
+- `docker` — the real container images (runc, no gVisor needed); needs Docker + local images.
+- `mock` — boots the whole control plane + admin with no Docker at all (workloads don't serve).
+
+Any explicit `ORCHD_*` var still overrides the local defaults.
 
 ---
 

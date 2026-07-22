@@ -138,10 +138,12 @@ app (api)    http://localhost:8102
         domain and leaves <M>ORCHD_PORT_BASE</M> unset.
       </P>
       <P>
-        <M>docker</M> runs real containers (runc, no gVisor needed); <M>mock</M> boots the whole
-        control plane and admin with no Docker (workloads don't serve real traffic); <M>local</M>{' '}
-        runs the tinbase binary directly. Any explicit <M>ORCHD_*</M> var still overrides the local
-        defaults.
+        <M>local</M> (default) is a <B>full no-Docker stack</B>: tinbase and the RapidNative dev
+        apps (web/api/app) each run as a real local process from a scaffolded source dir —{' '}
+        <B>Vite</B> for web, <B>Hono</B> for api, <B>Expo</B> for app — npm-installed on first boot
+        (needs node/npm). <M>docker</M> runs the real container images (runc, no gVisor needed);{' '}
+        <M>mock</M> boots the whole control plane and admin with no Docker at all (workloads don't
+        serve real traffic). Any explicit <M>ORCHD_*</M> var still overrides the local defaults.
       </P>
     </Section>
   )

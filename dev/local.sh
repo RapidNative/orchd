@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Run the whole stack locally on ports — no domain, no Caddy, no TLS.
 #
-#   dev/local.sh [driver]      driver: docker (default) | mock | local
+#   dev/local.sh [driver]      driver: local (default) | docker | mock
 #
 # Layout (override any with env vars of the same name):
 #   ORCHD API    :8090   control plane
@@ -16,16 +16,19 @@
 # subdomain (http://<key>.localhost:8091) still work as an alternative.
 #
 # Drivers:
+#   local   (default) full no-Docker stack: tinbase + the RapidNative dev apps
+#           (web/api/app) each run as a real local process from a scaffolded
+#           source dir (Vite/Hono/Expo), npm-installed on first boot.
+#           Needs node/npm; ORCHD_TINBASE_BIN for the tinbase workload.
 #   docker  real containers (runc, no gVisor needed) — needs Docker + local images
 #   mock    in-memory: exercises the whole control plane + admin with no Docker
 #           (workloads don't serve real traffic)
-#   local   runs the tinbase binary directly (needs ORCHD_TINBASE_BIN)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-DRIVER="${1:-docker}"
+DRIVER="${1:-local}"
 DATA="$ROOT/.localdev"
 KEYFILE="$DATA/dev.key"
 DEV_KEY="local-dev-key"

@@ -97,14 +97,14 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	}
 	d.mu.Unlock()
 
-	// The process driver only knows how to run tinbase. RapidNative dev apps
-	// (web/api/app) are container images with a dev server inside — they need the
-	// docker driver. Fail loudly rather than silently serving tinbase on their
-	// port.
-	if spec.Type != WorkloadTinbaseProject {
+	// Every workload kind runs as a local process via its recipe: tinbase
+	// directly, and the RapidNative dev apps (web/api/app) from a scaffolded
+	// source dir with their real dev servers (Vite/Hono/Expo). "" = no recipe.
+	kind := localKind(spec)
+	if kind == "" {
 		return nil, fmt.Errorf(
-			"local driver runs only tinbase workloads (got type %q, image %q) — use the docker driver for web/api/app",
-			spec.Type, spec.Image)
+			"local driver has no recipe for image %q (type %q) — use the docker driver",
+			spec.Image, spec.Type)
 	}
 
 	// A pinned HostPort gives stable port-per-workload addressing; otherwise pick
@@ -125,34 +125,56 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 		workDir = spec.DataDir
 	}
 
-	args := []string{
-		"start",
-		"--port", fmt.Sprint(port),
-		"--dir", workDir,
-		"--data-dir", filepath.Join(spec.DataDir, "db"),
-	}
-	if d.Engine != "" {
-		args = append(args, "--engine", d.Engine)
-	}
-
-	cmd := d.command(args)
-	cmd.Dir = workDir
-	cmd.Env = os.Environ()
-	for k, v := range spec.Env {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
 	// Capture output into a bounded ring buffer (for the Logs API) while still
 	// surfacing it on the orchestrator's stderr.
 	lw := &ringWriter{max: 64 * 1024}
-	cmd.Stdout = io.MultiWriter(os.Stderr, lw)
-	cmd.Stderr = cmd.Stdout
+	out := io.MultiWriter(os.Stderr, lw)
+
+	var cmd *exec.Cmd
+	if kind == "tinbase" {
+		args := []string{
+			"start",
+			"--port", fmt.Sprint(port),
+			"--dir", workDir,
+			"--data-dir", filepath.Join(spec.DataDir, "db"),
+		}
+		if d.Engine != "" {
+			args = append(args, "--engine", d.Engine)
+		}
+		cmd = d.command(args) // handles a .js tinbase binary via node
+	} else {
+		r, _ := recipeFor(kind)
+		if err := r.scaffold(workDir); err != nil {
+			return nil, fmt.Errorf("scaffold %s: %w", kind, err)
+		}
+		if err := ensureInstalled(workDir, r.install, out); err != nil {
+			return nil, fmt.Errorf("install %s: %w", kind, err)
+		}
+		argv, extraEnv := r.run(port)
+		cmd = exec.Command(argv[0], argv[1:]...)
+		cmd.Env = append(os.Environ(), extraEnv...)
+	}
+	cmd.Dir = workDir
+	if cmd.Env == nil {
+		cmd.Env = os.Environ()
+	}
+	for k, v := range spec.Env {
+		cmd.Env = append(cmd.Env, k+"="+v)
+	}
+	cmd.Stdout = out
+	cmd.Stderr = out
 
 	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start tinbase: %w", err)
+		return nil, fmt.Errorf("start %s: %w", kind, err)
 	}
 
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
-	if err := waitReady(ctx, addr, 30*time.Second); err != nil {
+	// Dev servers can be slow to first-serve (bundling); tinbase is quick.
+	readyTimeout := 30 * time.Second
+	if kind != "tinbase" {
+		readyTimeout = 120 * time.Second
+	}
+	if err := waitReady(ctx, addr, readyTimeout); err != nil {
 		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
@@ -235,6 +257,28 @@ func (d *LocalDriver) Status(ctx context.Context, ref string) (State, error) {
 		return StateStopped, nil
 	}
 	return p.state, nil
+}
+
+// ensureInstalled runs an app recipe's one-time setup (e.g. npm install) once
+// per workdir, streaming output to w. A marker file records success so an
+// install killed midway is retried next boot rather than skipped.
+func ensureInstalled(dir string, install []string, w io.Writer) error {
+	if len(install) == 0 {
+		return nil
+	}
+	marker := filepath.Join(dir, ".orchd-installed")
+	if _, err := os.Stat(marker); err == nil {
+		return nil
+	}
+	fmt.Fprintf(w, "\n[orchd] installing dependencies (%s) — first boot only…\n", strings.Join(install, " "))
+	cmd := exec.Command(install[0], install[1:]...)
+	cmd.Dir = dir
+	cmd.Stdout = w
+	cmd.Stderr = w
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return os.WriteFile(marker, []byte("ok\n"), 0o644)
 }
 
 // command builds the exec.Cmd, running .js binaries under node.
