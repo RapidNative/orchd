@@ -281,7 +281,7 @@ docker build -t my-runtime:dev .
 
 # then create a workload against it
 curl -X POST https://api.tinbase.dev/v1/projects/<id>/workloads \\
-  -H "Authorization: Bearer $TINBASE_KEY" \\
+  -H "Authorization: Bearer $ORCHD_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"type":"custom","image":"my-runtime:dev","port":3000,"memory_mb":512}'`}</Code>
       <P>

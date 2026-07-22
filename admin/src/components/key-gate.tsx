@@ -3,7 +3,7 @@ import { auth } from '@/lib/auth'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
-import { TinbaseLogo } from './icons'
+import { BrandLogo } from './icons'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
@@ -44,7 +44,7 @@ export function KeyGate() {
       <Card className="w-full max-w-md">
         <CardHeader>
           <div className="mb-1 flex items-center gap-2">
-            <TinbaseLogo className="text-2xl" />
+            <BrandLogo className="text-2xl" />
             <CardTitle>ORCHD · Admin</CardTitle>
           </div>
           <CardDescription>

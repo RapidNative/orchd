@@ -660,10 +660,10 @@ export function ApiReference() {
             <li>Missing/invalid key → 401. Over the per-key rate limit → 429 (Retry-After).</li>
           </ul>
           <Code title="Example">{`curl ${API_BASE}/v1/projects \\
-  -H "Authorization: Bearer $TINBASE_KEY"
+  -H "Authorization: Bearer $ORCHD_KEY"
 
 curl -X POST ${API_BASE}/v1/projects \\
-  -H "Authorization: Bearer $TINBASE_KEY" \\
+  -H "Authorization: Bearer $ORCHD_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{"workloads":[{"preset":"tinbase"}]}'`}</Code>
           <p className="mt-3">

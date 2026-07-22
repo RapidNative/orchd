@@ -7,7 +7,7 @@ export function DocsLayout() {
     <div>
       <PageHeader
         title="Documentation"
-        subtitle="What tinbase cloud is, how it fits together, and every API"
+        subtitle="What ORCHD is, how it fits together, and every API"
         actions={
           <a
             href="/docs.md"

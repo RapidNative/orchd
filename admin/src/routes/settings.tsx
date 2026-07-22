@@ -446,7 +446,7 @@ export function Settings() {
             <Input
               value={webhook}
               onChange={(e) => setWebhook(e.target.value)}
-              placeholder="https://example.com/hooks/tinbase"
+              placeholder="https://example.com/hooks/orchd"
             />
           </Field>
           <div className="flex items-center gap-3">

@@ -1,4 +1,4 @@
-// Command orchd is the tinbase-cloud orchestrator daemon. It runs two servers:
+// Command orchd is the ORCHD orchestration control-plane daemon. It runs two servers:
 //
 //	API      (control plane) — provision and manage projects
 //	Gateway  (data plane)     — route <ref>.<base-domain> to a project, waking it

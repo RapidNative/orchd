@@ -6,7 +6,7 @@ export const API_BASE = 'https://api.rnproject.dev'
 // Sections drive both the docs layout TOC and the router. `path` is relative to
 // /docs ('' = the index/About page).
 export const SECTIONS = [
-  { path: '', title: 'About tinbase cloud', short: 'About' },
+  { path: '', title: 'About ORCHD', short: 'About' },
   { path: 'repo', title: 'Repository & layout', short: 'Repository' },
   { path: 'templates', title: 'Templates', short: 'Templates' },
   { path: 'images', title: 'Images & presets', short: 'Images' },

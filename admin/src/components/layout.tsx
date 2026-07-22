@@ -16,7 +16,7 @@ import {
   IconProjects,
   IconSettings,
   IconTemplate,
-  TinbaseLogo,
+  BrandLogo,
 } from './icons'
 
 const nav = [
@@ -36,7 +36,7 @@ function Brand() {
   const name = info.data?.instance_name
   return (
     <div className="flex items-center gap-2 px-2">
-      <TinbaseLogo className="text-2xl" />
+      <BrandLogo className="text-2xl" />
       <div className="min-w-0 leading-tight">
         <div className="text-sm font-semibold">ORCHD</div>
         <div className="truncate text-xs text-muted-foreground">{name || 'unnamed instance'}</div>
@@ -105,7 +105,7 @@ export function RootLayout() {
           >
             <IconMenu />
           </button>
-          <TinbaseLogo className="text-xl" />
+          <BrandLogo className="text-xl" />
           <span className="text-sm font-semibold">ORCHD</span>
         </header>
 

@@ -83,7 +83,7 @@ export const IconActivity = (p: P) => (
     <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
   </S>
 )
-export const TinbaseLogo = (p: P) => (
+export const BrandLogo = (p: P) => (
   <svg viewBox="0 0 120 120" fill="none" width="1em" height="1em" {...p}>
     <defs>
       <linearGradient id="tinBody" x1="30" y1="30" x2="92" y2="102" gradientUnits="userSpaceOnUse">
