@@ -47,6 +47,15 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   return res.json() as Promise<T>
 }
 
+// reqText is like req but returns the raw response body as text (file content,
+// which is served as text/plain rather than JSON).
+async function reqText(path: string): Promise<string> {
+  const res = await fetch(BASE + path, { headers: { Authorization: 'Bearer ' + auth.get() } })
+  if (res.status === 401) throw new ApiError('unauthorized', 401)
+  if (!res.ok) throw new ApiError(res.statusText, res.status)
+  return res.text()
+}
+
 export const api = {
   info: () => req<Info>('/v1/info'),
   projects: () => req<Project[]>('/v1/projects'),
@@ -55,6 +64,8 @@ export const api = {
     name?: string
     region?: string
     template?: string
+    delta?: Record<string, string>
+    deleted?: string[]
     workloads?: WorkloadSpecReq[]
   }) => req<Project>('/v1/projects', { method: 'POST', body: JSON.stringify(body) }),
   templates: () => req<Record<string, string>>('/v1/templates'),
@@ -62,6 +73,26 @@ export const api = {
     req<Record<string, string>>('/v1/templates', {
       method: 'PUT',
       body: JSON.stringify({ name, path }),
+    }),
+  template: (name: string) =>
+    req<{ name: string; workloads: { name: string; kind: string; image?: string; dir?: string }[] }>(
+      '/v1/templates/' + encodeURIComponent(name),
+    ),
+  templateFiles: (name: string) => req<string[]>('/v1/templates/' + encodeURIComponent(name) + '/files'),
+  templateFile: (name: string, path: string) =>
+    reqText('/v1/templates/' + encodeURIComponent(name) + '/files?path=' + encodeURIComponent(path)),
+  templateBundleUrl: (name: string) => BASE + '/v1/templates/' + encodeURIComponent(name) + '/bundle',
+  workloadFiles: (id: string) => req<string[]>('/v1/workloads/' + id + '/fs'),
+  workloadFile: (id: string, path: string) =>
+    reqText('/v1/workloads/' + id + '/fs/file?path=' + encodeURIComponent(path)),
+  writeWorkloadFile: (id: string, path: string, content: string) =>
+    req<{ path: string; bytes: number }>(
+      '/v1/workloads/' + id + '/fs/file?path=' + encodeURIComponent(path),
+      { method: 'PUT', headers: { 'Content-Type': 'text/plain' }, body: content },
+    ),
+  deleteWorkloadFile: (id: string, path: string) =>
+    req<null>('/v1/workloads/' + id + '/fs/file?path=' + encodeURIComponent(path), {
+      method: 'DELETE',
     }),
   regions: () => req<Region[]>('/v1/regions'),
   createRegion: (name: string, docker_host?: string) =>

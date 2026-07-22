@@ -5,9 +5,10 @@ import { api } from '@/lib/api'
 import { PageHeader } from '@/components/bits'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
-import { IconPlus, IconRefresh } from '@/components/icons'
+import { IconPlus, IconRefresh, IconTrash } from '@/components/icons'
 import { Pager, SearchBox, usePaged } from '@/components/paged'
 import { Select } from '@/components/ui/select'
 import { relativeTime } from '@/lib/utils'
@@ -20,6 +21,7 @@ export function Projects() {
   const templates = useQuery({ queryKey: ['templates'], queryFn: api.templates })
   const [region, setRegion] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
+  const [createTmpl, setCreateTmpl] = useState<string | null>(null)
   const templateNames = Object.keys(templates.data ?? {})
 
   const create = useMutation({
@@ -84,7 +86,7 @@ export function Projects() {
                         className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-muted"
                         onClick={() => {
                           setMenuOpen(false)
-                          create.mutate({ template: t })
+                          setCreateTmpl(t)
                         }}
                       >
                         <span className="font-mono">{t}</span>
@@ -112,6 +114,15 @@ export function Projects() {
         <div className="mb-4 rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {(create.error as Error).message}
         </div>
+      )}
+
+      {createTmpl && (
+        <CreateDialog
+          template={createTmpl}
+          pending={create.isPending}
+          onCancel={() => setCreateTmpl(null)}
+          onCreate={(delta) => create.mutate({ template: createTmpl, delta })}
+        />
       )}
 
       <Card>
@@ -160,6 +171,87 @@ export function Projects() {
         )}
       </Card>
       <Pager page={paged.page} pageCount={paged.pageCount} total={paged.total} onPage={paged.setPage} />
+    </div>
+  )
+}
+
+// CreateDialog creates a project from a template, optionally overlaying a delta
+// (files patched on top of the base) — the same base+delta model RapidNative uses.
+function CreateDialog({
+  template,
+  pending,
+  onCancel,
+  onCreate,
+}: {
+  template: string
+  pending: boolean
+  onCancel: () => void
+  onCreate: (delta: Record<string, string>) => void
+}) {
+  const [rows, setRows] = useState<{ path: string; content: string }[]>([])
+  const buildDelta = () => {
+    const d: Record<string, string> = {}
+    for (const r of rows) if (r.path.trim()) d[r.path.trim()] = r.content
+    return d
+  }
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={onCancel}>
+      <Card className="w-full max-w-2xl" onClick={(e) => e.stopPropagation()}>
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle className="text-base">New project from “{template}”</CardTitle>
+          <Button size="sm" variant="ghost" onClick={onCancel}>
+            Close
+          </Button>
+        </CardHeader>
+        <CardContent>
+          <p className="mb-3 text-sm text-muted-foreground">
+            Optionally overlay files on the base (a delta). Leave empty for the plain template.
+          </p>
+          <div className="flex flex-col gap-3">
+            {rows.map((r, i) => (
+              <div key={i} className="rounded-md border border-border p-2">
+                <div className="flex items-center gap-2">
+                  <Input
+                    className="font-mono text-xs"
+                    placeholder="path e.g. api/index.js"
+                    value={r.path}
+                    onChange={(e) =>
+                      setRows((rs) => rs.map((x, j) => (j === i ? { ...x, path: e.target.value } : x)))
+                    }
+                  />
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                  >
+                    <IconTrash />
+                  </Button>
+                </div>
+                <textarea
+                  className="mt-2 h-24 w-full rounded-md border border-border bg-input p-2 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  placeholder="file content"
+                  value={r.content}
+                  onChange={(e) =>
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, content: e.target.value } : x)))
+                  }
+                />
+              </div>
+            ))}
+            <div className="flex items-center justify-between">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => setRows((rs) => [...rs, { path: '', content: '' }])}
+              >
+                <IconPlus /> Add file
+              </Button>
+              <Button disabled={pending} onClick={() => onCreate(buildDelta())}>
+                {pending ? 'Creating…' : 'Create'}
+              </Button>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

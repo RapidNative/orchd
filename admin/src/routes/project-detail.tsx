@@ -252,6 +252,77 @@ function WorkloadStats({ w }: { w: Workload }) {
   )
 }
 
+// FilesView browses + edits a workload's live filesystem. Saving writes into the
+// running tree, so the dev server's watcher picks it up (HMR).
+function FilesView({ id }: { id: string }) {
+  const qc = useQueryClient()
+  const files = useQuery({ queryKey: ['fs', id], queryFn: () => api.workloadFiles(id) })
+  const [sel, setSel] = useState<string | null>(null)
+  const [text, setText] = useState('')
+  const [dirty, setDirty] = useState(false)
+  const open = useMutation({
+    mutationFn: (p: string) => api.workloadFile(id, p),
+    onSuccess: (content, p) => {
+      setSel(p)
+      setText(content)
+      setDirty(false)
+    },
+  })
+  const save = useMutation({
+    mutationFn: () => api.writeWorkloadFile(id, sel as string, text),
+    onSuccess: () => {
+      setDirty(false)
+      qc.invalidateQueries({ queryKey: ['fs', id] })
+    },
+  })
+  return (
+    <div className="mt-3 grid gap-3 md:grid-cols-[260px_1fr]">
+      <div className="max-h-96 overflow-auto rounded-md border border-border">
+        {(files.data ?? []).map((f) => (
+          <button
+            key={f}
+            onClick={() => open.mutate(f)}
+            className={
+              'block w-full truncate px-2 py-1 text-left font-mono text-xs hover:bg-muted ' +
+              (sel === f ? 'bg-muted text-foreground' : 'text-muted-foreground')
+            }
+          >
+            {f}
+          </button>
+        ))}
+        {files.data?.length === 0 && (
+          <p className="p-2 text-xs text-muted-foreground">no files</p>
+        )}
+      </div>
+      <div className="min-w-0">
+        {sel ? (
+          <>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <span className="truncate font-mono text-xs text-muted-foreground">{sel}</span>
+              <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+                {save.isPending ? 'Saving…' : dirty ? 'Save' : 'Saved'}
+              </Button>
+            </div>
+            <textarea
+              className="h-96 w-full rounded-md border border-border bg-[#080b12] p-3 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              value={text}
+              spellCheck={false}
+              onChange={(e) => {
+                setText(e.target.value)
+                setDirty(true)
+              }}
+            />
+          </>
+        ) : (
+          <p className="grid h-96 place-items-center text-sm text-muted-foreground">
+            Select a file to view/edit. Saving updates the live workload.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function LogsView({ id }: { id: string }) {
   const q = useQuery({
     queryKey: ['logs', id],
@@ -517,6 +588,30 @@ export function ProjectDetail() {
 
       {workloads.length > 0 && !info.data?.port_addressing && (
         <DomainsCard workloads={workloads} onChange={invalidate} />
+      )}
+
+      {workloads.length > 0 && (
+        <Card className="mt-6">
+          <CardHeader>
+            <CardTitle className="text-base">Files</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Tabs defaultValue={workloads[0].id}>
+              <TabsList>
+                {workloads.map((w) => (
+                  <TabsTrigger key={w.id} value={w.id}>
+                    {w.name || 'primary'}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+              {workloads.map((w) => (
+                <TabsContent key={w.id} value={w.id}>
+                  <FilesView id={w.id} />
+                </TabsContent>
+              ))}
+            </Tabs>
+          </CardContent>
+        </Card>
       )}
 
       {workloads.length > 0 && (
