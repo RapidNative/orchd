@@ -23,6 +23,8 @@ export default defineConfig({
   resolve: {
     alias: { '@': path.resolve(import.meta.dirname, 'src') },
   },
-  server: { proxy },
-  preview: { proxy },
+  // Local wildcard domains (dev/domain.sh) reach this dev server through Caddy
+  // as admin.<something>.test, so those hosts have to be allowed through.
+  server: { proxy, allowedHosts: ['.test', '.localhost'] },
+  preview: { proxy, allowedHosts: ['.test', '.localhost'] },
 })

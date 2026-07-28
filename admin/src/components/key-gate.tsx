@@ -1,5 +1,5 @@
-import { useState } from 'react'
-import { auth } from '@/lib/auth'
+import { useEffect, useState } from 'react'
+import { auth, OPEN_KEY } from '@/lib/auth'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
@@ -7,10 +7,35 @@ import { BrandLogo } from './icons'
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
+// useOpenApi probes the control plane with no credentials. A 200 means it runs
+// without an API key (local dev), so there is nothing to gate on and we connect
+// straight through. Returns null while the probe is in flight.
+function useOpenApi() {
+  const [open, setOpen] = useState<boolean | null>(null)
+  useEffect(() => {
+    let live = true
+    fetch(BASE + '/v1/projects')
+      .then((r) => live && setOpen(r.ok))
+      .catch(() => live && setOpen(false))
+    return () => {
+      live = false
+    }
+  }, [])
+  return open
+}
+
 export function KeyGate() {
   const [val, setVal] = useState('')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
+  const openApi = useOpenApi()
+
+  // Unauthenticated control plane: skip the gate entirely.
+  useEffect(() => {
+    if (openApi) auth.set(OPEN_KEY)
+  }, [openApi])
+
+  if (openApi === null || openApi) return null
 
   async function connect() {
     const k = val.trim()

@@ -1,6 +1,10 @@
 import { useSyncExternalStore } from 'react'
 
 const LS = 'rnc_admin_key'
+
+// OPEN_KEY marks "the control plane needs no key" (local dev). It is a stored
+// key like any other so the app renders, but api.ts sends no Authorization for it.
+export const OPEN_KEY = '__open__'
 let key = localStorage.getItem(LS) || ''
 const subs = new Set<() => void>()
 const emit = () => subs.forEach((f) => f())

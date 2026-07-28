@@ -503,10 +503,16 @@ func (m *Manager) seedTemplates() {
 		if !e.IsDir() {
 			continue
 		}
-		if _, ok := existing[e.Name()]; ok {
-			continue // user-registered wins
-		}
 		dir := filepath.Join(m.cfg.TemplatesDir, e.Name())
+		if prev, ok := existing[e.Name()]; ok {
+			// A user-registered path wins — unless it no longer exists (the repo
+			// was moved or renamed), in which case a stale entry would fail every
+			// provision. Re-point it at the bundled copy.
+			if _, err := os.Stat(filepath.Join(prev, template.FileName)); err == nil {
+				continue
+			}
+			log.Printf("template %s: registered path is gone (%s), re-pointing", e.Name(), prev)
+		}
 		if _, err := os.Stat(filepath.Join(dir, template.FileName)); err != nil {
 			continue // not a template
 		}

@@ -146,7 +146,7 @@ durability is tiered (as Supabase itself does):
 ## Repository layout
 
 ```
-tinbase-cloud/
+orchd/
   orchestrator/            the Go control plane + gateway (orchd)
     cmd/orchd/             daemon entrypoint
     internal/runtime/      Runtime interface, Workload primitive, Local + Docker drivers
@@ -156,6 +156,11 @@ tinbase-cloud/
     internal/api/          control-plane API
     images/tinbase/        Dockerfile for the tinbase workload image
     README.md  ROADMAP.md  component docs + phased plan
+  admin/                   the admin panel (Vite + React SPA)
+  dev/                     local dev harness: local.sh (stack), domain.sh
+                           (wildcard *.test domains via dnsmasq + Caddy)
+  deploy/                  everything that runs on the box, tracked
+  template-examples/       bundled templates (rapidnative, tinbase)
   site/index.html          project overview page (served at cloud.rapidnative.com)
 ```
 
@@ -228,3 +233,35 @@ curl -X POST http://127.0.0.1:8080/v1/projects -d '{}'
 
 `*.lvh.me` resolves to `127.0.0.1`, so subdomain routing works locally with no
 hosts-file edits.
+
+### Full stack locally
+
+```bash
+dev/local.sh local          # ports: workloads on 8100, 8101, … (no domain)
+```
+
+### Full stack on a local wildcard domain (prod-shaped)
+
+Port mapping is one way to expose workloads; the other — the one prod uses — is
+Host-based routing through Caddy into the gateway's route table. That works
+locally too, via dnsmasq + a mkcert-issued wildcard cert:
+
+```bash
+dev/domain.sh setup                 # once: dnsmasq + caddy + trusted local CA
+dev/domain.sh add rnproject.test    # per base domain: DNS, cert, vhost
+DOMAIN=rnproject.test dev/local.sh local
+```
+
+Gives you `https://admin.rnproject.test`, `https://api.rnproject.test`, and
+`https://<key>.rnproject.test` for every workload — no host ports, the same
+Caddy → gateway → route-table path as production, with the admin panel gate-free
+(the control plane runs keyless in this mode). Any `*.<name>.test` works; one
+dnsmasq rule covers the whole TLD, so extra base domains need no DNS change.
+
+See **[dev/README.md](dev/README.md)** for both modes in full, how they map onto
+production, and troubleshooting; **[deploy/README.md](deploy/README.md)** for the
+box.
+
+Routes are minted at provision time from the base domain in effect, so projects
+created in port mode keep their `*.localhost` hosts. Re-provision (or wipe
+`.localdev/state`) after switching modes if you want everything on the domain.

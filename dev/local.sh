@@ -16,6 +16,14 @@
 # subdomain (http://<key>.localhost:8091) still work as an alternative.
 #
 # Drivers:
+# Domain mode (production-shaped routing, no port mapping):
+#   DOMAIN=rnproject.test dev/local.sh local
+# Registers nothing itself — run `dev/domain.sh setup` once and
+# `dev/domain.sh add rnproject.test` per domain first. In this mode workloads get
+# no host port; they are reached only at https://<key>.<DOMAIN> through Caddy ->
+# gateway -> route table, exactly as in prod.
+#
+# Drivers:
 #   local   (default) full no-Docker stack: tinbase + the RapidNative dev apps
 #           (web/api/app) each run as a real local process from a scaffolded
 #           source dir (Vite/Hono/Expo), npm-installed on first boot.
@@ -36,6 +44,28 @@ API_PORT="${API_PORT:-8090}"
 GW_PORT="${GW_PORT:-8091}"
 ADMIN_PORT="${ADMIN_PORT:-8092}"
 PORT_BASE="${PORT_BASE:-8100}"
+DOMAIN="${DOMAIN:-}"
+
+# Domain mode: drop port-per-workload addressing and route by Host through the
+# local Caddy (dev/domain.sh), the same way prod does. Keep the ports for admin,
+# API and gateway — Caddy proxies to them.
+DOMAIN_ENV=()
+if [ -n "$DOMAIN" ]; then
+  PORT_BASE=0
+  # No API key in domain mode: the control plane is open and the admin panel
+  # connects without a gate (local dev only — it binds to loopback).
+  KEYFILE=""
+  DEV_KEY="(none — open control plane)"
+  DOMAIN_ENV=(
+    ORCHD_BASE_DOMAIN="$DOMAIN"
+    ORCHD_PUBLIC_SCHEME=https
+    ORCHD_PUBLIC_URL="https://$DOMAIN"
+  )
+  if ! grep -qxF "$DOMAIN" "$ROOT/.localdev/domains/domains.txt" 2>/dev/null; then
+    echo "domain '$DOMAIN' is not registered — run: dev/domain.sh add $DOMAIN" >&2
+    exit 1
+  fi
+fi
 
 case "$DRIVER" in
   docker) RUNTIME_ENV=(ORCHD_DRIVER=docker ORCHD_DOCKER_RUNTIME=runc) ;;
@@ -47,14 +77,19 @@ esac
 say(){ printf '\n\033[1;32m==> %s\033[0m\n' "$*"; }
 
 mkdir -p "$DATA/state" "$DATA/backups"
-[ -f "$KEYFILE" ] || printf '%s' "$DEV_KEY" > "$KEYFILE"
+[ -z "$KEYFILE" ] || [ -f "$KEYFILE" ] || printf '%s' "$DEV_KEY" > "$KEYFILE"
 
 say "build orchd"
 ( cd orchestrator && go build -o "$DATA/orchd" ./cmd/orchd )
 
-say "start orchd ($DRIVER driver): api :$API_PORT · gateway :$GW_PORT · workloads :$PORT_BASE+"
+if [ -n "$DOMAIN" ]; then
+  say "start orchd ($DRIVER driver): api :$API_PORT · gateway :$GW_PORT · hosts *.$DOMAIN"
+else
+  say "start orchd ($DRIVER driver): api :$API_PORT · gateway :$GW_PORT · workloads :$PORT_BASE+"
+fi
 env ORCHD_LOCAL=1 \
     "${RUNTIME_ENV[@]}" \
+    ${DOMAIN_ENV[@]+"${DOMAIN_ENV[@]}"} \
     ORCHD_API_ADDR="127.0.0.1:$API_PORT" \
     ORCHD_GATEWAY_ADDR="127.0.0.1:$GW_PORT" \
     ORCHD_PORT_BASE="$PORT_BASE" \
@@ -77,6 +112,24 @@ done
 say "install admin deps (first run only)"
 [ -d admin/node_modules ] || ( cd admin && npm install )
 
+if [ -n "$DOMAIN" ]; then
+cat <<EOF
+
+  ┌──────────────────────────────────────────────────────────────┐
+  │  ORCHD — local (wildcard domain, Caddy, prod-shaped routing)   │
+  ├──────────────────────────────────────────────────────────────┤
+  │  Admin      https://admin.$DOMAIN
+  │  API        https://api.$DOMAIN
+  │  Workloads  https://<key>.$DOMAIN
+  │  API key    none — open control plane, admin connects with no gate
+  │  Driver     $DRIVER
+  └──────────────────────────────────────────────────────────────┘
+
+  No port mapping: every workload is reached by Host through the gateway's
+  route table, the same path prod takes. Ctrl-C to stop the stack (Caddy and
+  dnsmasq keep running — 'dev/domain.sh down' stops those).
+EOF
+else
 cat <<EOF
 
   ┌──────────────────────────────────────────────────────────────┐
@@ -93,6 +146,7 @@ cat <<EOF
   Each workload's own port shows as its "endpoint" in the panel/API.
   Ctrl-C to stop everything.
 EOF
+fi
 
 say "start admin (Vite) on :$ADMIN_PORT"
 cd admin

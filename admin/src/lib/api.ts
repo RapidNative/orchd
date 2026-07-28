@@ -1,4 +1,4 @@
-import { auth } from './auth'
+import { auth, OPEN_KEY } from './auth'
 import type {
   ApiKeyMeta,
   Backup,
@@ -18,6 +18,12 @@ import type {
 
 const BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
+// authHeaders is empty when the control plane runs without a key (local dev).
+function authHeaders(): Record<string, string> {
+  const k = auth.get()
+  return k && k !== OPEN_KEY ? { Authorization: 'Bearer ' + k } : {}
+}
+
 export class ApiError extends Error {
   status: number
   constructor(message: string, status: number) {
@@ -30,7 +36,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, {
     ...opts,
     headers: {
-      Authorization: 'Bearer ' + auth.get(),
+      ...authHeaders(),
       'Content-Type': 'application/json',
       ...(opts.headers ?? {}),
     },
@@ -52,7 +58,7 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
 // reqText is like req but returns the raw response body as text (file content,
 // which is served as text/plain rather than JSON).
 async function reqText(path: string): Promise<string> {
-  const res = await fetch(BASE + path, { headers: { Authorization: 'Bearer ' + auth.get() } })
+  const res = await fetch(BASE + path, { headers: authHeaders() })
   if (res.status === 401) throw new ApiError('unauthorized', 401)
   if (!res.ok) throw new ApiError(res.statusText, res.status)
   return res.text()
