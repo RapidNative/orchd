@@ -10,6 +10,7 @@ workload; the control plane, gateway and drivers are identical.
 | How it routes | one pinned host port per workload | Host header → Caddy → gateway → route table |
 | TLS | no | yes (mkcert local CA) |
 | API key | `local-dev-key`, pasted into the admin gate | none — open control plane, no gate |
+| Scale-to-zero | off (must be — see below) | on, `IDLE_TIMEOUT=5m` |
 | Matches prod | no (prod has no port mapping) | **yes**, same path as production |
 | Setup needed | none | `dev/domain.sh setup` once |
 
@@ -87,6 +88,35 @@ Domain mode runs the control plane with **no API key**, and the admin panel
 probes `/v1/projects` unauthenticated on load — a 200 means there is nothing to
 gate on, so it skips the key screen entirely. Port mode keeps the key file and
 the gate (`local-dev-key`).
+
+### Scale-to-zero
+
+Domain mode runs the reaper (`ORCHD_IDLE_TIMEOUT=5m` by default): a workload
+with no traffic for the timeout is suspended, and the next request through the
+gateway wakes it. This is the production lifecycle, and it only works because
+every request arrives by hostname — port mode keeps it disabled
+(`ORCHD_IDLE_TIMEOUT=0`), since direct-to-port requests bypass the gateway, so
+nothing would refresh idleness and nothing would wake a reaped workload.
+
+```bash
+IDLE_TIMEOUT=20s DOMAIN=rnproject.test dev/local.sh local   # fast feedback
+IDLE_TIMEOUT=0   DOMAIN=rnproject.test dev/local.sh local   # keep everything warm
+```
+
+The reaper ticks every 30s, so suspension lands within ~30s of the timeout. Wake
+is a fresh process boot: fast for tinbase and the static web app (sub-second),
+slower for Expo, which has to restart Metro. `npm install` is not repeated —
+it's marked done in the workload's data dir.
+
+Workloads run in their own process group and record their leader pid in
+`<data-dir>/.orchd.pid`. That's what makes suspend take the whole tree (tinbase
+plus its embedded postgres, Metro plus its jest workers) and what lets a
+restarted orchd reclaim processes the previous run left behind, instead of
+booting on top of them and colliding on the port and the postgres lock.
+
+Known wart: workloads started by a *previous* orchd process still read as
+`running` in the admin until something wakes them, because the in-memory
+liveness map starts empty. The first request reconciles it.
 
 ### Other commands
 

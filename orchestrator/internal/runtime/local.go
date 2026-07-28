@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -41,6 +44,8 @@ type localProc struct {
 	addr  string
 	state State
 	logs  *ringWriter // captured stdout+stderr (last ~64 KiB)
+	// dataDir is where this workload's pid file lives, so a stop can clear it.
+	dataDir string
 }
 
 // ringWriter is a thread-safe writer that keeps only the last max bytes, so a
@@ -110,6 +115,12 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 		return nil, fmt.Errorf("data dir: %w", err)
 	}
 
+	// An orchd restart leaves the previous run's workload processes alive (they
+	// are not our children any more). Booting on top of one collides: the port
+	// is taken, and tinbase's embedded postgres refuses to start against a
+	// pgdata whose lock file another postmaster still holds. Clear it first.
+	reclaimOrphan(spec.DataDir)
+
 	// Capture output into a bounded ring buffer (for the Logs API) while still
 	// surfacing it on the orchestrator's stderr.
 	lw := &ringWriter{max: 64 * 1024}
@@ -171,20 +182,23 @@ func (d *LocalDriver) boot(ctx context.Context, spec Spec) (*Instance, error) {
 	}
 	cmd.Stdout = out
 	cmd.Stderr = out
+	setProcAttr(cmd) // own process group, so kill takes the whole tree
 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start %s: %w", label, err)
 	}
+	writePidFile(spec.DataDir, cmd.Process.Pid)
 
 	// Dev servers / installs can be slow to first-serve; tinbase is quick.
 	addr := fmt.Sprintf("127.0.0.1:%d", port)
 	if err := waitReady(ctx, addr, 120*time.Second); err != nil {
-		_ = cmd.Process.Kill()
+		_ = signalTree(cmd.Process.Pid, syscall.SIGKILL)
+		removePidFile(spec.DataDir)
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
 
 	d.mu.Lock()
-	d.procs[spec.Ref] = &localProc{cmd: cmd, port: port, addr: addr, state: StateRunning, logs: lw}
+	d.procs[spec.Ref] = &localProc{cmd: cmd, port: port, addr: addr, state: StateRunning, logs: lw, dataDir: spec.DataDir}
 	d.mu.Unlock()
 
 	// Reap the process if it exits on its own so state does not go stale.
@@ -215,19 +229,73 @@ func (d *LocalDriver) kill(ref string, target State) error {
 	if !ok || p.cmd.Process == nil {
 		return nil
 	}
-	// Graceful stop; tinbase flushes and closes its data dir on SIGTERM.
-	_ = p.cmd.Process.Signal(os.Interrupt)
+	// Graceful stop of the whole group; tinbase flushes and closes its data dir
+	// on SIGINT, and its embedded postgres needs to go with it or the next boot
+	// finds a held lock file.
+	pid := p.cmd.Process.Pid
+	_ = signalTree(pid, syscall.SIGINT)
 	done := make(chan struct{})
 	go func() { p.cmd.Wait(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		_ = p.cmd.Process.Kill()
+		_ = signalTree(pid, syscall.SIGKILL)
 	}
+	// The leader is gone, but grandchildren that ignored SIGINT may not be.
+	if processAlive(pid) {
+		_ = signalTree(pid, syscall.SIGKILL)
+	}
+	removePidFile(p.dataDir)
 	d.mu.Lock()
 	p.state = target
 	d.mu.Unlock()
 	return nil
+}
+
+// pidFile is where a workload's leader pid is recorded, so a later orchd
+// process can clean up what this one left running.
+func pidFile(dataDir string) string { return filepath.Join(dataDir, ".orchd.pid") }
+
+func writePidFile(dataDir string, pid int) {
+	if dataDir == "" {
+		return
+	}
+	_ = os.WriteFile(pidFile(dataDir), []byte(strconv.Itoa(pid)), 0o600)
+}
+
+func removePidFile(dataDir string) {
+	if dataDir == "" {
+		return
+	}
+	_ = os.Remove(pidFile(dataDir))
+}
+
+// reclaimOrphan kills a workload process left over from a previous orchd run.
+// Safe to call when there is nothing to reclaim: a missing or stale pid file,
+// or a pid that has already exited, are all no-ops.
+func reclaimOrphan(dataDir string) {
+	if dataDir == "" {
+		return
+	}
+	b, err := os.ReadFile(pidFile(dataDir))
+	if err != nil {
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || !processAlive(pid) {
+		removePidFile(dataDir)
+		return
+	}
+	log.Printf("local: reclaiming orphaned workload process %d (%s)", pid, dataDir)
+	_ = signalTree(pid, syscall.SIGINT)
+	for i := 0; i < 50 && processAlive(pid); i++ {
+		time.Sleep(100 * time.Millisecond)
+	}
+	if processAlive(pid) {
+		_ = signalTree(pid, syscall.SIGKILL)
+		time.Sleep(200 * time.Millisecond)
+	}
+	removePidFile(dataDir)
 }
 
 // Stats is unsupported for the process driver (dev only); returns an empty snapshot.

@@ -13,8 +13,10 @@ Full reference: `dev/README.md`. This skill is the operating procedure.
   `http://localhost:8100+`. Admin gate wants the key `local-dev-key`.
 - **Domain mode** — `DOMAIN=<base> dev/local.sh local`. Matches production:
   Caddy in front, Host-based routing through the gateway's route table, real
-  TLS, no host ports, no API key. Use this whenever the task touches routing,
-  subdomains, TLS, the gateway, or "behaves like prod".
+  TLS, no host ports, no API key, and scale-to-zero on (`IDLE_TIMEOUT`, default
+  5m; set `0` to keep everything warm, `20s` to watch it work). Use this
+  whenever the task touches routing, subdomains, TLS, the gateway,
+  scale-to-zero, or "behaves like prod".
 
 Default to domain mode when the user names a domain; otherwise ask only if the
 distinction changes the outcome.
@@ -73,6 +75,7 @@ workload broken until its install has finished.
 | `template "x": open /old/path/orchd.json` | stale path in `.localdev/state/orchd.db`; orchd self-heals on restart against `ORCHD_TEMPLATES_DIR`, or `PUT /v1/templates` with `{"name","path"}` (field is `path`) |
 | workload `failed`, `exec: "tinbase"` | set `ORCHD_TINBASE_BIN` |
 | workload `failed` right after install | read `.localdev/stack.log`, then run `npm install` by hand in `.localdev/projects/<proj>/<wl>/<app>` to see the real npm error |
+| workload `suspended` | expected in domain mode after the idle timeout — one request wakes it |
 | routes still `*.localhost` | provisioned in port mode; re-provision or wipe `.localdev/state` |
 | cert warning | `mkcert -install`, restart browser |
 | DNS not resolving | `dig +short x.rnproject.test @127.0.0.1`; check `/etc/resolver/<tld>`; `sudo killall -HUP mDNSResponder` |

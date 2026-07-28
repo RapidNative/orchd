@@ -46,12 +46,20 @@ ADMIN_PORT="${ADMIN_PORT:-8092}"
 PORT_BASE="${PORT_BASE:-8100}"
 DOMAIN="${DOMAIN:-}"
 
+# Scale-to-zero needs every request to arrive through the gateway, which is what
+# refreshes idleness and wakes a reaped workload. Port mode talks to workloads
+# directly, so it must stay disabled there; domain mode routes by Host, so it
+# gets the real prod behaviour. Override with IDLE_TIMEOUT (0 disables).
+IDLE_TIMEOUT_SET="${IDLE_TIMEOUT+set}"
+IDLE_TIMEOUT="${IDLE_TIMEOUT:-0}"
+
 # Domain mode: drop port-per-workload addressing and route by Host through the
 # local Caddy (dev/domain.sh), the same way prod does. Keep the ports for admin,
 # API and gateway — Caddy proxies to them.
 DOMAIN_ENV=()
 if [ -n "$DOMAIN" ]; then
   PORT_BASE=0
+  [ -n "$IDLE_TIMEOUT_SET" ] || IDLE_TIMEOUT=5m
   # No API key in domain mode: the control plane is open and the admin panel
   # connects without a gate (local dev only — it binds to loopback).
   KEYFILE=""
@@ -98,7 +106,7 @@ env ORCHD_LOCAL=1 \
     ORCHD_STATE_SQLITE="$DATA/state/orchd.db" \
     ORCHD_BACKUP_DIR="$DATA/backups" \
     ORCHD_API_KEY_FILE="$KEYFILE" \
-    ORCHD_IDLE_TIMEOUT=0 \
+    ORCHD_IDLE_TIMEOUT="$IDLE_TIMEOUT" \
     "$DATA/orchd" &
 ORCHD_PID=$!
 trap 'kill $ORCHD_PID 2>/dev/null || true' EXIT INT TERM
@@ -122,6 +130,7 @@ cat <<EOF
   │  API        https://api.$DOMAIN
   │  Workloads  https://<key>.$DOMAIN
   │  API key    none — open control plane, admin connects with no gate
+  │  Idle       $IDLE_TIMEOUT — workloads scale to zero, gateway wakes them
   │  Driver     $DRIVER
   └──────────────────────────────────────────────────────────────┘
 
