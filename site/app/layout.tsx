@@ -3,6 +3,7 @@ import Link from 'next/link'
 import './globals.css'
 import { SiteHeader } from '@/components/site-header'
 import { GITHUB } from '@/components/nav'
+import { Related } from '@/components/related'
 
 export const metadata: Metadata = {
   title: {
@@ -32,7 +33,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <SiteHeader />
         {children}
-        <footer className="mt-20 border-t border-line bg-bg-soft">
+        <Related />
+        <footer className="border-t border-line bg-bg">
           <div className="mx-auto flex max-w-6xl flex-col gap-3 px-5 py-8 text-sm text-dim sm:flex-row sm:items-center">
             <div>
               <span className="text-muted">ORCHD</span> — one orchestrator, one box, many tenants.
