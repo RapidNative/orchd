@@ -1,0 +1,108 @@
+export const metadata = {
+  title: 'Project, workload, route',
+  description: 'The three records ORCHD is built from, plus states, volumes, env and placement.',
+}
+
+# Project, workload, route
+
+## Project
+
+A **project** is a grouping — a tenant, an environment, a customer, one generated app.
+It owns workloads, carries a name and a region, and is the unit you create and delete.
+Deleting a project stops and removes every workload it owns, their routes, and their
+on-disk data.
+
+A project's id is a short generated ref (`abc123`). That ref is also the routing key, so
+it shows up in hostnames.
+
+## Workload
+
+A **workload** is the thing that runs: one routable, independently scheduled,
+scale-to-zero instance. It is the unit the runtime lifecycle is keyed by, and it holds
+everything needed to boot:
+
+| Field | Meaning |
+| --- | --- |
+| `type` | the workload family (e.g. `tinbase-project`, `rapidnative-dev`, or your own) |
+| `name` | the role inside the project (`api`, `web`, `db`); empty means the primary |
+| `image` / `port` | what the container driver runs, and the port it listens on inside |
+| `memory_mb` / `cpus` | cgroup caps; defaults come from the type, per-workload overrides win |
+| `env` | environment variables, merged over the manifest defaults and platform vars |
+| `template` / `image_ver` / `workspace` | which template (or frozen image version) and which workspace this workload is |
+| `data_dir` | its volume, at `<data-root>/projects/<project>/<workload>` |
+| `host_port` | its stable local port, when port addressing is on |
+| `keep_warm` | exempt from scale-to-zero |
+| `state` | see below |
+
+A project with one workload and one route is the simple case. A project with `db`, `api`
+and `web` workloads is three isolated instances, three routes, one delete.
+
+### States
+
+```
+provisioning ──► running ──► suspended ──► running ──► …
+     │              │            (idle)      (woken by a request)
+     │              ├──► stopped   (deliberately halted)
+     └──► failed    └──► running   (restart)
+```
+
+- **provisioning** — first boot: an image pull, a dependency install, a database
+  `initdb`. Creating a workload returns immediately in this state and the boot continues
+  in the background, so a slow first install never blocks the API call.
+- **running** — serving.
+- **suspended** — scaled to zero. The instance is gone, the volume is not. The next
+  request through the gateway brings it back.
+- **stopped** — halted on purpose (`POST /v1/workloads/{id}/stop`). Not woken by traffic.
+- **failed** — provisioning or boot failed. Logs are available via
+  `GET /v1/workloads/{id}/logs`.
+
+### Volumes
+
+Every workload has a data directory that is **decoupled from the instance lifecycle**.
+Suspend, wake, restart, env change and restore all leave it in place; only deleting the
+workload removes it (guarded to stay inside the data root). For the container driver it
+is a bind mount; for the process driver it is the working directory; for a future microVM
+driver it becomes a block device. That decoupling is what makes scale-to-zero safe.
+
+### Environment variables
+
+Three layers, later ones winning:
+
+1. the workload's `env` in the template manifest (`orchd.json`),
+2. `env` passed on the create or workload API,
+3. the env editor on the project page (`PUT /v1/workloads/{id}/env`).
+
+Platform variables (for instance a database workload's JWT secret) are injected too, and
+your keys can override them. Setting env **reboots** the workload, because that is the
+only honest way to apply it.
+
+## Route
+
+A **route** maps a hostname to a workload. Resolution is an **exact-match table**, which
+is the reason one mechanism covers every addressing style: a default subdomain, a
+customer's domain, and a path subroute are all just rows.
+
+- Default: `<ref>.<base-domain>` for a project's primary workload,
+  `<ref>-<name>.<base-domain>` for named ones.
+- Custom: attach any hostname with `POST /v1/workloads/{id}/routes`; detach with
+  `DELETE /v1/routes?host=…`.
+- Subroute: the same key is reachable at `<public-url>/w/<key>`, which needs no DNS at
+  all.
+
+A workload can have many routes; a route points at exactly one workload. There is no
+load balancing across replicas — see [Goals & non-goals](/docs/goals).
+
+Details, including certificates, in [Routing & TLS](/docs/routing).
+
+## Region
+
+A **region** is a placement target carrying a `docker_host`. Empty means the local
+daemon; a `tcp://…` value points at a worker node. Projects land in the default region
+unless one is chosen at create time. See [Regions](/docs/regions).
+
+## Where the state lives
+
+Projects, workloads, routes, regions, keys, templates, images and settings are all in one
+control-plane store — a JSON file by default, SQLite or Postgres if you point it at one.
+It is small, high-value, and backed up off-box on the same schedule as tenant data. See
+[Adaptors](/docs/adaptors) and [Backups](/docs/backups).

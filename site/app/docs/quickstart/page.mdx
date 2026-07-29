@@ -1,0 +1,80 @@
+export const metadata = {
+  title: 'Quickstart',
+  description: 'Build the daemon, provision a project, and hit the endpoint.',
+}
+
+# Quickstart
+
+Two paths. The first runs the whole platform on your machine — control plane, gateway,
+admin panel, real workloads as host processes, no Docker. The second is the raw daemon,
+if you would rather see the moving parts.
+
+## The full stack, locally
+
+```bash
+git clone https://github.com/RapidNative/orchd
+cd orchd
+dev/local.sh local
+```
+
+That builds `orchd`, starts it with local defaults, builds and serves the admin panel,
+and prints the URLs plus a development API key:
+
+```
+ORCHD API    http://localhost:8090
+Gateway      http://localhost:8091
+Admin        http://localhost:8092
+```
+
+Open the admin panel, create a project from a bundled template, and each workload comes
+up on its own stable port (`8100`, `8101`, …) shown as its endpoint. The bundled
+templates in `template-examples/` are auto-registered on startup, so a fresh clone has
+something to provision.
+
+Three drivers are available — `local` (host processes, no Docker), `docker` (the real
+container images), and `mock` (control plane and panel only, workloads do not serve).
+See [Local development](/docs/local-dev), including how to run on a real wildcard
+`*.test` domain with trusted TLS instead of ports.
+
+## The daemon on its own
+
+```bash
+cd orchestrator
+go build -o /tmp/orchd ./cmd/orchd
+
+ORCHD_DATA_ROOT=$PWD/.data /tmp/orchd
+```
+
+The control API listens on `127.0.0.1:8080` and the gateway on `127.0.0.1:8081`. With
+no key file configured the API is open, which is fine on a laptop and never right on a
+box — see [Keys & access](/docs/keys).
+
+Create a project:
+
+```bash
+curl -X POST http://127.0.0.1:8080/v1/projects \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"demo","workloads":[{"preset":"vite"}]}'
+```
+
+The response carries the project `id` and, per workload, its `state`, `routes` and
+`endpoints`. Routes are minted as `<project-id>.<base>` for the primary workload and
+`<project-id>-<name>.<base>` for named ones — the `vite` preset names its workload
+`web`. The default base domain is `lvh.me`, which resolves `*.lvh.me` to `127.0.0.1`,
+so subdomain routing works with no `/etc/hosts` edit:
+
+```bash
+# take the host from the workload's routes[] in the response
+curl -H 'Host: abc123-web.lvh.me' http://127.0.0.1:8081/
+```
+
+That request goes through the gateway: `Host` → route table → workload → wake if
+suspended → proxy. Leave it alone for the idle timeout and the workload suspends; the
+next request brings it back.
+
+## Then
+
+- **[Concepts](/docs/concepts)** — what a project, workload and route actually are.
+- **[Templates](/docs/templates)** — describe a whole project in one `orchd.json`.
+- **[The orchd CLI](/docs/cli)** — run that same file with no control plane at all.
+- **[Deploying](/docs/deploy)** — the production box, Caddy, systemd, env reference.

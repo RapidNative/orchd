@@ -1,0 +1,117 @@
+export const metadata = {
+  title: 'Local development',
+  description:
+    'Two ways to run the whole stack on your machine: stable ports with zero setup, or a real wildcard *.test domain that matches production.',
+}
+
+# Local development
+
+The whole platform runs on a laptop — control plane, gateway, admin panel, real workloads.
+There are two ways to reach a workload, and they differ **only** in how a request finds it.
+Everything else, including the drivers, is identical.
+
+| | Port mode | Domain mode |
+| --- | --- | --- |
+| Command | `dev/local.sh local` | `DOMAIN=myproject.test dev/local.sh local` |
+| Workload URL | `http://localhost:8100`, `:8101`, … | `https://<key>.myproject.test` |
+| How it routes | one pinned host port per workload | Host header → Caddy → gateway → route table |
+| TLS | no | yes, via a trusted local CA (mkcert) |
+| Control-plane key | a dev key, pasted into the admin gate | none — open, no gate |
+| Scale-to-zero | off (it has to be) | on, 5 min by default |
+| Matches production | no | **yes**, the same path |
+| Setup | none | `dev/domain.sh setup` once |
+
+Port mode is the zero-setup option. Domain mode is the one to use when you care that local
+behaves like the box.
+
+## Drivers
+
+```bash
+dev/local.sh [local|docker|mock]
+```
+
+- **`local`** (default) — no Docker at all. Workloads run as real OS processes from a
+  scaffolded or template-copied source dir, dependency-installed on first boot. Needs
+  node/npm.
+- **`docker`** — the real container images under `runc` (gVisor is not needed locally). Needs
+  Docker and the images present.
+- **`mock`** — the control plane and panel with no substrate; workloads do not serve traffic.
+  Useful for UI and API work.
+
+Any explicit `ORCHD_*` variable still overrides the mode's defaults.
+
+## Port mode
+
+```
+ORCHD API    http://localhost:8090
+Gateway      http://localhost:8091
+Admin        http://localhost:8092
+
+# each workload gets its own stable port, shown as its endpoint
+db           http://localhost:8100
+api          http://localhost:8101
+web          http://localhost:8102
+```
+
+Ports are overridable (`API_PORT`, `GW_PORT`, `ADMIN_PORT`, `PORT_BASE`), and a workload's
+assigned port is stable across restarts. The gateway routes still work in parallel —
+`http://localhost:8091/w/<key>` and `http://<key>.localhost:8091`.
+
+Scale-to-zero is **off** in this mode and must be: direct-to-port requests bypass the
+gateway, so nothing would refresh the idle timer and a reaped workload would never be woken.
+
+## Domain mode
+
+```bash
+dev/domain.sh setup                  # once: dnsmasq, Caddy, the mkcert local CA
+dev/domain.sh add myproject.test     # per base domain: DNS, cert, vhost
+DOMAIN=myproject.test dev/local.sh local
+```
+
+You get:
+
+| | |
+| --- | --- |
+| `https://admin.myproject.test` | the admin panel behind Caddy |
+| `https://api.myproject.test` | the control-plane API |
+| `https://<key>.myproject.test` | any workload, resolved by the route table |
+
+`dev/domain.sh add` points the whole `.test` TLD at `127.0.0.1` (dnsmasq plus
+`/etc/resolver/test`), issues a certificate for the domain and its wildcard from the mkcert
+CA so browsers trust it with no warning, and regenerates the local Caddyfile. One DNS rule
+covers the entire TLD, so a second base domain needs no DNS work. `.test` is reserved by
+RFC 6761, so it can never collide with a real domain.
+
+Workloads get **no host port** here, exactly as in production: the only way in is the `Host`
+header. A project `abc123` from a four-workload template lands on `abc123.myproject.test`
+plus `abc123-api`, `abc123-web`, `abc123-mobile`.
+
+Scale-to-zero runs, so this is where you exercise the real lifecycle:
+
+```bash
+IDLE_TIMEOUT=20s DOMAIN=myproject.test dev/local.sh local   # fast feedback
+IDLE_TIMEOUT=0   DOMAIN=myproject.test dev/local.sh local   # keep everything warm
+```
+
+The reaper ticks every 30 s, so suspension lands within about 30 s of the timeout. Wake is a
+fresh process boot — sub-second for small workloads, slower for anything that restarts a
+bundler. Dependency installs are not repeated: they are marked done in the workload's data
+dir.
+
+## Process hygiene
+
+Workloads run in their own process group and record the leader pid in
+`<data-dir>/.orchd.pid`. That is what makes a suspend take the whole tree (a database plus
+its embedded server, a bundler plus its workers), and what lets a restarted daemon reclaim
+processes a previous run left behind instead of booting on top of them and colliding on the
+port.
+
+One known wart: workloads started by a *previous* daemon still read as `running` in the panel
+until something touches them, because the in-memory liveness map starts empty. The first
+request reconciles it.
+
+## Routes are minted at create time
+
+A route is minted from the base domain **in effect when the workload is created**. Projects
+created in port mode keep their `*.localhost` hosts. After switching modes, re-provision (or
+wipe the local state directory) if you want everything on the new domain.

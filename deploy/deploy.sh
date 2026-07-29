@@ -24,13 +24,17 @@ say "build orchd (linux/amd64)"
 say "build admin UI (vite)"
 ( cd admin && npm run build )
 
+say "build public site + docs (next, static export at the domain root)"
+( cd site && npm ci --silent && SITE_BASE_PATH= npm run build )
+
 say "ensure dirs on $HOST"
 ssh "$HOST" 'mkdir -p /opt/tinbase-cloud/admin /opt/tinbase-cloud/site \
   /opt/tinbase-cloud/images/tinbase /opt/tinbase-cloud/images/rn-api \
   /opt/tinbase-cloud/images/rn-vite /opt/tinbase-cloud/images/rn-expo'
 
 say "sync static + image sources"
-scp -q site/index.html  "$HOST:/opt/tinbase-cloud/site/index.html"
+ssh "$HOST" 'rm -rf /opt/tinbase-cloud/site/*'
+scp -qr site/out/. "$HOST:/opt/tinbase-cloud/site/"
 ssh "$HOST" 'rm -rf /opt/tinbase-cloud/admin/*'
 scp -qr admin/dist/. "$HOST:/opt/tinbase-cloud/admin/"
 for i in tinbase rn-api rn-vite rn-expo; do

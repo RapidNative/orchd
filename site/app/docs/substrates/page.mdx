@@ -1,0 +1,111 @@
+export const metadata = {
+  title: 'Substrates & isolation',
+  description:
+    'Why the runtime is an interface, what the process and Docker+gVisor drivers do, and how tenants are capped.',
+}
+
+# Substrates &amp; isolation
+
+## Why the runtime is an interface
+
+The control plane never talks to a container engine or a hypervisor. It talks to a
+`Runtime` interface: start a workload from a spec, report its status, suspend it, remove
+it, give me stats and logs, and (optionally) manage images. Everything above that
+interface — provisioning, routing, waking, backups, keys, the API — is substrate-agnostic.
+
+That seam buys three things:
+
+1. **The whole system runs on a laptop.** The process driver has no Docker dependency, so
+   the control loop, the gateway, wake sequencing and the backup path are developed and
+   tested on macOS, then run unchanged in production against a different driver.
+2. **Isolation is a deployment decision.** The same fleet can run under `runc` or under
+   gVisor by changing one environment variable.
+3. **The next latency win is drop-in.** Firecracker with snapshot/restore is a new
+   implementation of the same interface, not a rewrite.
+
+## The drivers
+
+| Driver | Runs a workload as | Isolation | Suspend / start | Status |
+| --- | --- | --- | --- | --- |
+| `local` | an OS process on the host | process boundary only | kill / relaunch (~0.3 s) | built — development |
+| `docker` | a container | `runc`, or **gVisor (`runsc`)** | `docker stop` / `start` (~0.9 s) | built — production |
+| `mock` | nothing (records state) | n/a | instant | built — for UI and API work |
+| `firecracker` | a microVM | microVM + jailer | snapshot restore, target sub-second | planned, needs bare metal |
+
+Select with `ORCHD_DRIVER`. The gVisor runtime is `ORCHD_DOCKER_RUNTIME=runsc` (the
+default); set it empty to use plain `runc`.
+
+### The process driver
+
+Each workload is an ordinary child process with its own data directory and assigned port.
+For a database workload that is the database binary; for a template workload it is that
+workspace's own command (`npm run dev`, a bundler, a Node server), installed once on
+first boot. This is a **real** stack, not a mock — the local mode of ORCHD runs the same
+dev servers you would run by hand, and the same control plane manages them.
+
+What it does not give you is isolation: a host process shares the host kernel and, apart
+from being a separate process, is not contained. It is a development substrate.
+
+### The Docker driver, under gVisor
+
+In production a workload is a container started from an image with a published port, a
+bind-mounted volume, and cgroup caps. The point of interest is the runtime:
+**gVisor (`runsc`)** intercepts the container's syscalls and services them in a userspace
+kernel, so a tenant's kernel attack surface is a Go program, not your host kernel.
+
+The reason it matters here specifically is that gVisor's `systrap` platform needs **no
+nested virtualization**: it runs on an ordinary cloud VM. Firecracker and Kata need
+`/dev/kvm`, which means dedicated bare metal — a better speed tier, and a hardware
+purchase. gVisor covers the isolation requirement today on hardware you can rent by the
+hour.
+
+The trade is syscall overhead: gVisor costs measurably on syscall-heavy and IO-heavy
+work. For the workloads ORCHD targets — mostly idle dev servers and small backends —
+that has been the right trade.
+
+### Resource caps
+
+Every container gets:
+
+- a **memory** limit and a **CPU** quota, defaulted per workload type
+  (`ORCHD_TINBASE_MEM_MB`/`_CPUS`, `ORCHD_DEV_MEM_MB`/`_CPUS`) and overridable per
+  workload on the create call;
+- a **pid limit** (`ORCHD_PIDS_LIMIT`, default 512) as a fork-bomb backstop.
+
+One tenant therefore cannot starve the box, and packing stays predictable: the ceiling is
+arithmetic over concurrently warm workloads.
+
+Caps are applied when the container is created. Containers created before a cap change
+keep their old configuration until they are recreated.
+
+## Why not just run Docker yourself
+
+Because Docker is the substrate, not the system. `docker run` does not resolve a hostname
+to a container, hold a request while a stopped container boots, notice that nothing has
+asked for a container in five minutes, mint a tenant's credentials, keep a durable index
+of who owns what, or snapshot a volume to S3 minus the derived files. That list is ORCHD,
+and the reason the gateway and the lifecycle live in one process is that wake-on-request
+needs both at once.
+
+The longer version of that argument, including Kubernetes and PaaS comparisons, is in
+[Why it exists](/docs/why).
+
+## Custom images
+
+A workload is an image, a port and a volume, so any image works, with two requirements:
+
+- it must **listen on `0.0.0.0`** at the port you declare — not `127.0.0.1`, which is
+  unreachable from outside the container;
+- it must **run in the foreground** as PID 1's child, not daemonize.
+
+```bash
+docker build -t my-runtime:dev .
+
+curl -X POST https://api.example.com/v1/projects/<id>/workloads \
+  -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"type":"custom","image":"my-runtime:dev","port":3000,"memory_mb":512}'
+```
+
+To make an image a first-class named preset (so it appears in `GET /v1/presets` and the
+create dropdown), add it to the preset catalog in `orchestrator/internal/manager` and
+redeploy. See [Images](/docs/images).

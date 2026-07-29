@@ -1,0 +1,137 @@
+export const metadata = {
+  title: 'The orchd CLI',
+  description:
+    'orchd is an npm package that runs the workloads described by an orchd.json — on a host, in CI, or inside a sandbox — with no control plane involved.',
+}
+
+# The orchd CLI
+
+There is a second, much smaller way to use `orchd.json`: a standalone npm package that reads
+the manifest and runs the workloads directly, with **no control plane, no daemon and no
+Docker**.
+
+```bash
+npx orchd up          # or: npm install -g orchd
+```
+
+It exists because the manifest travels *with* the project — inside a repo, a tarball, a
+snapshot or a container image — so whatever boots the project can read one file instead of
+being handed a command line. The orchestrator reads it to provision a hosted project; the CLI
+reads it to run the same project on your machine.
+
+> The CLI is published from a separate repository today and may move into this one. It is
+> versioned independently of the daemon.
+
+## Commands
+
+```
+orchd list                            list workloads in the manifest
+orchd resolve [options]               print the resolved command line
+orchd run [options]                   resolve, then run it
+orchd up [options]                    start every workload, each on its own port
+
+  -w, --workload <name>   workload to act on (default: the only one, if unambiguous)
+  -p, --port <n>          port to bind; substituted for $PORT (default: $PORT env)
+      --profile <name>    profile to merge (default: none on a host)
+  -c, --config <path>     manifest path (default: ./orchd.json, then /orchd.json)
+      --all               (resolve) the whole project, not one workload
+      --json              (resolve) emit {cwd, argv, env, install} instead of a line
+      --port-base <n>     first port to assign (default: 8080)
+      --no-install        skip the install step even if node_modules is missing
+```
+
+## `up` — the whole project at once
+
+On a host, `up` supervises every workload in the foreground the way `docker compose up` does:
+interleaved output under a per-workload prefix, and Ctrl-C stops the set. If any one workload
+exits, the rest are brought down and `up` exits with that workload's code — a half-booted
+project is not a useful state to be left in.
+
+```console
+$ npx orchd up
+orchd: api -> PORT=3000 npm run dev (cwd /work/demo/api)
+orchd: web -> API_URL=http://localhost:3000 PORT=3001 npm run dev (cwd /work/demo/web)
+api | api dev server on 3000
+web | web dev server on 3001
+^C
+orchd: stopping…
+```
+
+Each workload gets its declared `port`, or one counting up from `--port-base`.
+
+## Cross-workload addressing
+
+Workloads refer to each other **by name**, and the port is filled in at resolve time:
+
+```jsonc
+{
+  "name": "mobile",
+  "env": { "EXPO_PUBLIC_API_URL": "${url:api}" }   // -> http://localhost:3000
+}
+```
+
+`${url:<name>}` and `${port:<name>}` are the cross-workload forms, alongside `$PORT` /
+`${PORT}` for the workload's own port. In a hosted deployment those siblings are separate
+hostnames; on one machine everything shares localhost, so the manifest names them and the
+runner resolves the addresses.
+
+## Profiles
+
+The command a workload should run depends on what is executing it. A host wants the project's
+real command; a browser-based sandbox may want a different bundler entirely. One manifest, one
+override block:
+
+```jsonc
+{
+  "workloads": [{
+    "name": "mobile",
+    "kind": "node",
+    "dir": "mobile",
+    "install": ["npm", "install"],
+    "run": ["npx", "expo", "start", "--web", "--port", "$PORT"],
+    "profiles": {
+      "lifo": { "run": ["browser-metro", ".", "--port", "$PORT"] }
+    }
+  }]
+}
+```
+
+**No profile is applied unless a runner asks for one**, so the plain `run` is what you get on a
+host. `run`, `install` and `dir` replace wholesale when a profile overrides them; `env` merges
+key-wise, so a profile can add one variable without restating the rest.
+
+## `resolve` is the machine interface
+
+For anything long-running, prefer `resolve --json` and run the command yourself — you keep your
+own streaming, logging and cancellation:
+
+```console
+$ orchd resolve --workload mobile --port 8082 --json
+{"workload":"mobile","cwd":"/mobile","argv":["npx","expo","start","--web","--port","8082"],
+ "env":{},"install":["npm","install"]}
+```
+
+`resolve --all --json` gives the whole project. `run` is a convenience for interactive and
+one-shot use.
+
+## Two runners, one resolution layer
+
+The package ships the `orchd` bin for hosts and CI, plus a command that registers inside a
+[Lifo](https://lifo.sh) sandbox, where a workload becomes a shell job instead of a child
+process. Both sit on the same pure resolution layer, so `resolve` answers identically in either
+place — only execution differs.
+
+## How it relates to the daemon
+
+|  | `orchd` CLI | ORCHD daemon |
+| --- | --- | --- |
+| Reads `orchd.json` | yes | yes |
+| Runs workloads | as child processes / sandbox jobs | via a runtime driver |
+| Multi-tenant | no | yes |
+| Routing, TLS, wake, backups, keys | no | yes |
+| Needs a server | no | yes |
+
+Same manifest, two consumers. Note that the CLI understands `profiles` and the
+`${url:…}`/`${port:…}` forms; the daemon's manifest reader supports the core fields documented
+under [Templates](/docs/templates), so keep profile-only behaviour out of what the hosted path
+depends on.

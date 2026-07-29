@@ -1,0 +1,362 @@
+export const metadata = {
+  title: 'API reference',
+  description: 'Every ORCHD control-plane endpoint, its required role, request and response.',
+}
+
+# API reference
+
+Base URL is your instance's control API (`https://api.<your-domain>`, or
+`http://127.0.0.1:8080` locally). Every `/v1/*` endpoint needs a key — see
+[Keys & access](/docs/keys) — presented as `Authorization: Bearer <key>` or `X-API-Key: <key>`.
+
+**Roles below:** *open* = no key · *any key* = a readonly key suffices · *admin* = admin only
+(every `POST`, `PUT` and `DELETE`).
+
+Errors are `{ "error": "…" }` with the [status codes listed here](/docs/keys#error-codes).
+
+## Health
+
+### `GET /healthz` — *open*
+
+Liveness. The only endpoint that never requires a key.
+
+```json
+{ "status": "ok", "auth": true }
+```
+
+## Projects
+
+### `POST /v1/projects` — *admin*
+
+Create a project and its workloads. Three mutually exclusive ways to say what to create:
+explicit `workloads`, a registered `template`, or a frozen `image` (`"template@version"`). An
+empty body creates one primary database workload. `region` defaults to the default region.
+
+```jsonc
+{
+  "name": "acme",                    // optional
+  "region": "local",                 // optional
+  "template": "acme",                // optional — create from a template
+  "image": "acme@v3",                // optional — create from a frozen image
+  "delta": { "web/index.html": "…" }, // optional — files overlaid on the base
+  "deleted": ["web/old.html"],        // optional — base paths to remove
+  "workloads": [                     // optional (default: one primary db workload)
+    { "preset": "vite" },
+    { "preset": "api" }
+  ]
+}
+```
+
+Response `201` — the project with its workloads, each carrying `state`, `routes`, `endpoints`,
+`subroutes`, resource caps and (for database workloads) `anon_key` / `service_role_key`.
+Workloads start in `provisioning`; poll or watch events for `running`.
+
+### `GET /v1/projects` — *any key*
+All projects with their workloads.
+
+### `GET /v1/projects/{id}` — *any key*
+One project.
+
+### `DELETE /v1/projects/{id}` — *admin*
+Stop and remove the project, every workload, their routes and their on-disk data. `204`.
+Destructive.
+
+### `POST /v1/projects/{id}/start` · `/stop` · `/restart` — *admin*
+Lifecycle for every workload in the project.
+
+### `PUT /v1/projects/{id}/env` — *admin*
+Set environment variables on every workload in the project. Reboots them.
+
+```jsonc
+{ "env": { "LOG_LEVEL": "debug" } }
+```
+
+## Workloads
+
+### `POST /v1/projects/{id}/workloads` — *admin*
+
+Add a workload. Use a `preset`, or set the fields explicitly (explicit wins).
+
+```jsonc
+{
+  "preset": "vite",          // or omit and set type/image/port
+  "type": "rapidnative-dev",
+  "name": "web",             // role; also the route suffix
+  "image": "rn-vite:dev",
+  "port": 8080,              // the port inside the container
+  "memory_mb": 512,
+  "cpus": 1.0,
+  "env": { "NODE_ENV": "development" }
+}
+```
+
+### `GET /v1/workloads/{id}` — *any key*
+One workload: state, caps, keys, routes, endpoints, `last_seen`.
+
+### `DELETE /v1/workloads/{id}` — *admin*
+Stop and remove the workload, its routes and its data. `204`.
+
+### `POST /v1/workloads/{id}/start` · `/stop` · `/restart` — *admin*
+Boot, halt or reboot one workload. A stopped workload is not woken by traffic.
+
+### `PUT /v1/workloads/{id}/env` — *admin*
+Replace the workload's environment variables. Reboots it to apply.
+
+### `POST /v1/workloads/{id}/keepwarm` — *admin*
+Toggle always-on. Enabling boots it now and exempts it from scale-to-zero.
+
+```jsonc
+{ "enabled": true }   // -> { "keep_warm": true }
+```
+
+### `GET /v1/workloads/{id}/stats` — *any key*
+Live memory and CPU. Empty when not running.
+
+```json
+{ "mem_usage": "76.2MiB / 384MiB", "mem_perc": "19.8%", "cpu_perc": "1.0%" }
+```
+
+### `GET /v1/workloads/{id}/logs` — *any key*
+Recent stdout + stderr. Params: `tail=<n>` (default 200).
+
+```json
+{ "logs": "…last N lines…" }
+```
+
+### Workload files
+
+| | | |
+| --- | --- | --- |
+| `GET` | `/v1/workloads/{id}/fs` | *any key* — list files in the workload's tree |
+| `GET` | `/v1/workloads/{id}/fs/file?path=…` | *any key* — file contents as `text/plain` |
+| `PUT` | `/v1/workloads/{id}/fs/file?path=…` | *admin* — write a file (raw body, 16 MiB cap) |
+| `DELETE` | `/v1/workloads/{id}/fs/file?path=…` | *admin* — delete a file. `204` |
+
+## Routes (domains)
+
+### `POST /v1/workloads/{id}/routes` — *admin*
+Attach a hostname. Point the DNS at the gateway first; a certificate is issued on the first
+HTTPS request.
+
+```jsonc
+{ "host": "app.customer.com" }
+```
+
+### `DELETE /v1/routes?host=…` — *admin*
+Detach a hostname. `204`.
+
+## Templates
+
+### `GET /v1/templates` — *any key*
+Registered templates as `{ name: path }`.
+
+### `PUT /v1/templates` — *admin*
+Register (or re-point) a template.
+
+```jsonc
+{ "name": "acme", "path": "/srv/templates/acme" }
+```
+
+### `GET /v1/templates/{name}` — *any key*
+The parsed `orchd.json` manifest.
+
+### `GET /v1/templates/{name}/files` — *any key*
+File list, or one file's contents with `?path=…`.
+
+### `GET /v1/templates/{name}/bundle` — *any key*
+`tar.gz` of the template tree, minus derived paths.
+
+### `POST /v1/templates/{name}/build` — *admin*
+Freeze the template into a new auto-incremented version. Returns `201` with the image record
+(tarball path, per-workspace docker tags, workload shape). See [Images](/docs/images).
+
+## Built images
+
+Versioned freezes of a template.
+
+| | | |
+| --- | --- | --- |
+| `GET` | `/v1/built-images` | *any key* — list |
+| `GET` | `/v1/built-images/{name}/{version}/bundle` | *any key* — download the base tarball |
+| `POST` | `/v1/built-images/{name}/{version}/push` | *admin* — re-tag and push to the configured registry → `{ "registry": { workspace: ref } }` |
+| `GET` | `/v1/built-images/{name}/{version}/spec` | *any key* — the self-contained import spec |
+| `POST` | `/v1/built-images/import` | *admin* — record an image from another instance (post the spec) |
+| `DELETE` | `/v1/built-images/{name}/{version}` | *admin* — delete the record and tarball. `204` |
+
+## Docker images
+
+Tags on a region's Docker daemon. Requires the Docker driver; the process driver answers `501`.
+`region` is optional everywhere (empty = default region).
+
+### `GET /v1/images` — *any key*
+List, excluding dangling layers. `digest` is the stable identity to pin against.
+
+```json
+[{ "repository": "rn-vite", "tag": "dev", "ref": "rn-vite:dev", "id": "a1b2c3d4e5f6",
+   "digest": "sha256:9f86d081…", "size": "412MB", "created_at": "2 days ago" }]
+```
+
+### `POST /v1/images/pull` — *admin*
+Pull a ref. Blocks until the pull finishes and returns the CLI output.
+
+```jsonc
+{ "ref": "ghcr.io/acme/app:1.2.0", "region": "" }
+```
+
+### `DELETE /v1/images?ref=…` — *admin*
+Remove by ref or id. Fails if a container uses it unless `force=true`. `204`.
+
+## Backups
+
+### `POST /v1/workloads/{id}/backups` — *admin*
+Snapshot one workload now.
+
+```json
+{ "id": "wid__20260719T…", "workload_id": "wid", "created_at": "…", "size_bytes": 4797652 }
+```
+
+### `POST /v1/projects/{id}/backups` — *admin*
+Snapshot every workload in a project. Returns an array.
+
+### `GET /v1/backups` — *any key*
+All backups, newest first.
+
+### `GET /v1/workloads/{id}/backups` — *any key*
+Backups for one workload.
+
+### `POST /v1/workloads/{id}/restore` — *admin*
+Replace the workload's data with a backup, then reboot it.
+
+```jsonc
+{ "backup_id": "wid__20260719T…" }   // -> { "status": "restored" }
+```
+
+### `DELETE /v1/backups/{id}` — *admin*
+Delete a backup. `204`.
+
+### `POST /v1/system/backup` — *admin*
+Snapshot the control-plane state off-box under the reserved key `_control-plane`. Runs on the
+backup schedule too.
+
+## Regions
+
+### `GET /v1/regions` — *any key*
+
+```json
+[{ "id": "local", "name": "local", "docker_host": "", "is_default": true, "created_at": "…" }]
+```
+
+### `POST /v1/regions` — *admin*
+Create one; the id is a slug of the name.
+
+```jsonc
+{ "name": "EU West", "docker_host": "tcp://node2:2375" }
+```
+
+### `DELETE /v1/regions/{id}` — *admin*
+Delete (never the default — set another first). `204`.
+
+### `POST /v1/regions/{id}/default` — *admin*
+Make it the default. → `{ "default": "eu-west" }`
+
+## API keys
+
+### `GET /v1/keys` — *any key*
+Metadata only, never secrets.
+
+### `POST /v1/keys` — *admin*
+Mint a key; the plaintext is returned exactly once.
+
+```jsonc
+{ "name": "ci-bot", "role": "readonly" }
+```
+
+### `DELETE /v1/keys/{id}` — *admin*
+Revoke. `204`.
+
+## Settings
+
+Runtime configuration. Secrets are stored server-side and never returned.
+
+### `GET /v1/settings` — *any key*
+
+```json
+{
+  "instance_name": "acme cloud",
+  "backup": { "type": "s3", "endpoint": "…", "bucket": "…", "region": "…", "access_key": "…" },
+  "backup_secret_set": true,
+  "webhook": { "url": "" },
+  "metrics": { "type": "nop" },
+  "registry": "ghcr.io/acme"
+}
+```
+
+### `PUT /v1/settings/name` — *admin*
+Name this deployment (shown in the panel). `{ "instance_name": "acme cloud" }`
+
+### `PUT /v1/settings/registry` — *admin*
+The registry prefix built images are pushed under. `{ "registry": "ghcr.io/acme" }`
+
+### `PUT /v1/settings/backup` — *admin*
+The backup destination. Leave `secret_key` blank on an s3 target to keep the existing secret.
+
+```jsonc
+{
+  "type": "s3",                 // "local" | "s3"
+  "endpoint": "https://<account>.r2.cloudflarestorage.com",
+  "bucket": "backups", "region": "auto", "prefix": "backups",
+  "access_key": "…", "secret_key": "…"
+}
+```
+
+### `PUT /v1/settings/webhook` — *admin*
+Event webhook URL; blank disables it. `{ "url": "https://example.com/hooks" }`
+
+### `PUT /v1/settings/metrics` — *admin*
+Metrics sink. `{ "type": "http", "url": "https://collector/metrics" }` — `type` is `nop`,
+`log` or `http`.
+
+## Metrics, events, metadata
+
+### `GET /v1/metrics` — *any key*
+Live fleet snapshot.
+
+```json
+{ "time": "…", "projects": 3, "workloads": 6, "running": 2, "suspended": 4,
+  "mem_mb_allocated": 768 }
+```
+
+### `GET /v1/events` — *any key*
+Recent control-plane events, newest first. Params: `limit=<n>` (default 100).
+
+```json
+[{ "id": "…", "time": "…", "type": "project.created", "project_id": "abc123", "message": "" }]
+```
+
+### `GET /v1/presets` — *any key*
+Preset names available on this instance.
+
+### `GET /v1/info` — *any key*
+What this instance is running — the fastest way to confirm a deployment.
+
+```json
+{
+  "instance_name": "acme cloud",
+  "driver": "docker+runsc", "region": "local", "base_domain": "example.com",
+  "public_url": "https://example.com",
+  "idle_timeout": "5m0s", "image": "tinbase:0.10.0", "rate_limit_per_min": 600,
+  "limits": { "tinbase_mem_mb": 384, "tinbase_cpus": 0.5,
+              "dev_mem_mb": 512, "dev_cpus": 1, "pids_limit": 512 },
+  "backups": { "enabled": true, "interval": "24h0m0s", "retain": 7 },
+  "images_supported": true,
+  "metrics": { "type": "nop" },
+  "presets": ["api", "expo", "tinbase", "vite"]
+}
+```
+
+## Internal
+
+### `GET /internal/tls-allow?domain=…` — *open*
+Caddy's on-demand-TLS gate: `200` for `admin`/`api` on a configured base domain and for any
+host in the route table, `403` otherwise. Not for general clients — see
+[Routing & TLS](/docs/routing#on-demand-tls-gated).

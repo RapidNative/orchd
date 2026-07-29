@@ -1,0 +1,124 @@
+export const metadata = {
+  title: 'Templates',
+  description:
+    'orchd.json describes a multi-workload project once, and the same file works locally, in an image, and in a sandbox.',
+}
+
+# Templates
+
+A **template** is a project folder — usually a monorepo — with an `orchd.json` at its
+root. That file is ORCHD's own descriptor, independent of any framework's manifest, and it
+lists the **workloads** a project made from this template should run.
+
+One template is one project. Each entry in the manifest becomes one workload: a workspace
+running on its own port locally, or its own container in production.
+
+```jsonc
+{
+  "name": "acme",
+  "backup_exclude": ["node_modules", ".git", "dist", ".expo", "build"],
+  "workloads": [
+    { "name": "db",  "kind": "tinbase" },
+
+    { "name": "api", "kind": "node", "dir": "api",
+      "install": ["npm", "install"],
+      "run": ["node", "--watch", "index.js"],
+      "port_env": "PORT",
+      "env": { "NODE_ENV": "development" },
+      "image": "acme-api:dev" },
+
+    { "name": "web", "kind": "static", "dir": "web",
+      "image": "acme-web:dev" },
+
+    { "name": "mobile", "kind": "node", "dir": "mobile",
+      "install": ["npm", "install"],
+      "run": ["npx", "expo", "start", "--web", "--port", "$PORT"],
+      "image": "acme-mobile:dev" }
+  ]
+}
+```
+
+## Fields
+
+| Field | Meaning |
+| --- | --- |
+| `name` | template name |
+| `backup_exclude` | paths that are derived, not authored — excluded from backups and from the frozen tarball |
+| `workloads[].name` | the workload's role; also its route suffix (`<ref>-api.<base>`) and its workspace id |
+| `workloads[].kind` | `tinbase`, `node` or `static` (below) |
+| `workloads[].dir` | subdirectory, relative to the template root |
+| `workloads[].install` | one-time setup argv, run in `dir` on first boot |
+| `workloads[].run` | run argv; `$PORT` is substituted with the assigned port |
+| `workloads[].port_env` | pass the port as this environment variable instead of in argv |
+| `workloads[].env` | default environment variables for this workload |
+| `workloads[].image` | the container tag production runs for this workspace |
+
+### Kinds
+
+- **`tinbase`** — a database backend. No `dir`, `run` or `install`: the driver knows how to
+  boot it, and platform variables (a JWT secret, minted anon and service keys) are injected.
+- **`node`** — install once, then run, in `dir`, with the assigned port. The general case.
+- **`static`** — serve `dir` over HTTP on the assigned port. Locally this is a built-in
+  zero-dependency server; in an image it is nginx.
+
+A manifest is validated on load: every workload needs a unique name, a known kind, and —
+for `node` — a `run` command.
+
+## Registering and creating
+
+Bundled examples under `template-examples/` are **auto-registered on startup** via
+`ORCHD_TEMPLATES_DIR`, so a fresh clone has something to provision. Add your own in
+**Settings → Templates** (a name and a local path) or with `PUT /v1/templates`.
+
+Then create a project from it — **New project → &lt;template&gt;** in the panel, or:
+
+```bash
+curl -X POST https://api.example.com/v1/projects \
+  -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"name":"acme","template":"acme"}'
+```
+
+One workload per manifest entry. **Provisioning is asynchronous**: the call returns
+immediately with every workload in `provisioning`, and each flips to `running` or `failed`
+as it boots. A heavy first `npm install` therefore never blocks the API.
+
+You can also pass a **delta** at create time — files to overlay on the template copy, and
+files to delete — which is how a generated project ships its own source on top of a stock
+template.
+
+## The same template, three ways
+
+| Where | What happens |
+| --- | --- |
+| **Local** | the template is copied into the workload's data dir (minus derived paths), the delta is overlaid, dependencies install, and the workspace's own command runs on its port |
+| **Production** | the workspace's `image` runs as a container, with the tenant's files on the mounted volume |
+| **Frozen image** | an immutable version of the template — a tarball plus per-workspace container images — is restored or pulled instead of reading the live folder (see [Images](/docs/images)) |
+
+The manifest is the single source of truth for all three, which is the point: nothing about
+"how do I run this project" lives in a script, a CI config or somebody's shell history.
+
+## Inspecting a template
+
+```
+GET /v1/templates                    # registered templates
+GET /v1/templates/{name}             # the parsed manifest
+GET /v1/templates/{name}/files       # file list
+GET /v1/templates/{name}/bundle      # tar.gz of the tree, minus derived paths
+```
+
+The same file APIs exist per workload (`/v1/workloads/{id}/fs`), so the panel can browse
+and edit a running project's tree.
+
+## Backups are the delta
+
+A backup captures only what was **authored**: `backup_exclude` keeps `node_modules`,
+`.git`, build output and caches out of it, because dependencies come from an install or an
+image, never from a backup. Small snapshots, and the same rule locally and in production.
+See [Backups](/docs/backups).
+
+## Running a manifest with no control plane
+
+`orchd.json` is also readable by a standalone CLI — `npx orchd up` boots every workload on
+your machine, resolving cross-workload URLs and ports. That is how the same file that
+describes a hosted project also describes a plain checkout. See
+[The orchd CLI](/docs/cli).

@@ -1,0 +1,46 @@
+# Build site/ (Next.js static export) and publish it to the gh-pages branch,
+# which GitHub Pages serves at https://rapidnative.github.io/orchd.
+name: Publish site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+        env:
+          SITE_BASE_PATH: /orchd
+
+      # _next/* would be dropped by Jekyll.
+      - run: touch site/out/.nojekyll
+
+      - uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: site/out
+          publish_branch: gh-pages
+          commit_message: 'Publish site from ${{ github.sha }}'

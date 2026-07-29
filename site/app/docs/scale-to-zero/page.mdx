@@ -1,0 +1,97 @@
+export const metadata = {
+  title: 'Scale-to-zero',
+  description:
+    'How ORCHD suspends idle workloads, how the gateway wakes them on the next request, and when to pin one warm.',
+}
+
+# Scale-to-zero
+
+Scale-to-zero is the reason ORCHD exists, so it is worth being precise about how it
+works and where it does not apply.
+
+## The two halves
+
+**The reaper** runs in the daemon on a 30-second tick. For every live workload it
+compares "last request served" against the idle timeout (`ORCHD_IDLE_TIMEOUT`, default
+5 minutes) and suspends whatever is over. Suspend means the container is stopped (or the
+process killed) — the instance is gone, its memory is returned, its volume is untouched.
+A workload marked `keep_warm` is skipped.
+
+**The wake** happens on the gateway's hot path. A request arrives, its `Host` is resolved
+against the route table to a workload, and then:
+
+1. if that workload is live and the runtime still reports it running, its address is
+   returned and the request is proxied immediately;
+2. otherwise the runtime is asked to start it, the store is updated to `running`, and
+   **the request that triggered the wake is the request that gets served** — it waits for
+   the boot rather than failing.
+
+Wakes are serialized per workload, so ten simultaneous requests to a sleeping workload
+produce one boot and ten served responses, not ten boots.
+
+Every proxied request refreshes the workload's last-seen timestamp, which is what the
+reaper reads. `GET /v1/workloads/{id}` exposes it as `last_seen`.
+
+## What it costs
+
+Measured on a Hetzner Cloud VM, Docker + gVisor, with the database workload (the
+heaviest case, since it includes a Postgres boot):
+
+| | |
+| --- | --- |
+| Cold provision, including `initdb` | ~2.8 s |
+| Wake from suspended | ~0.9 s |
+| Memory while running (incl. the gVisor kernel) | ~75–85 MB |
+| Memory while idle | 0 |
+| Data across suspend/resume | preserved on the volume |
+
+Locally, with the process driver, suspend and wake are a kill and a relaunch — around
+0.3 s for a small workload.
+
+The sub-second-and-better tier is a substrate question, not a control-plane one: microVM
+snapshot/restore is where the next factor comes from, behind the same
+[`Runtime` interface](/docs/substrates).
+
+## Consequences you should design for
+
+**The first request after idleness is slow.** Roughly a second for a container, more for
+a workload with a heavy boot. For a preview environment or a dev runner that is
+invisible; for a synchronous API on a customer's critical path it is not, which is what
+`keep_warm` is for.
+
+**A wake can fail.** If the runtime cannot start the workload, the waking request gets an
+error and the workload goes `failed`. Check `GET /v1/workloads/{id}/logs`.
+
+**Wall-clock timers inside a workload do not survive.** A suspended workload is not
+running, so cron-like work inside it does not happen. Anything that must fire on a
+schedule belongs outside the workload, or in a `keep_warm` one.
+
+**In-memory state is lost on suspend.** Sessions, caches, and any un-flushed work. Write
+to the volume.
+
+**Long-lived connections drop.** A WebSocket held open counts as activity while it is
+open; once the last request is old enough, the reaper suspends the workload and the
+connection ends. Clients should reconnect.
+
+## keep_warm
+
+```bash
+curl -X POST https://api.example.com/v1/workloads/<id>/keepwarm \
+  -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"enabled":true}'
+```
+
+Enabling boots the workload immediately and exempts it from the reaper. All `keep_warm`
+workloads are also woken when the daemon starts, so a restart does not leave them
+waiting for a first request. It is the always-on primitive: use it for anything
+production-facing, and remember that a warm workload costs its memory.
+
+## Turning it off
+
+Setting `ORCHD_IDLE_TIMEOUT=0` disables the reaper entirely — everything stays warm.
+
+This is **required** when workloads are addressed by their own host port rather than
+through the gateway (the local port mode). Those requests never reach the gateway, so
+nothing refreshes the idle timer and nothing would wake a reaped workload: it would be
+suspended for good. Host-routed setups — production, and the local wildcard-domain mode
+— run the reaper normally, and `dev/local.sh` sets this for you per mode.

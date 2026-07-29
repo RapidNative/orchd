@@ -9,33 +9,9 @@ import { System } from './routes/system'
 import { Settings } from './routes/settings'
 import { Templates } from './routes/templates'
 import { Images } from './routes/images'
-import { DocsLayout } from './routes/docs/layout'
-import {
-  About,
-  Adaptors,
-  ImagesDoc,
-  Regions,
-  Repo,
-  Templates as TemplatesDoc,
-} from './routes/docs/sections'
-import { ApiReference } from './routes/docs/api'
 
 const rootRoute = createRootRoute({ component: RootLayout })
 
-const docsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: '/docs',
-  component: DocsLayout,
-})
-const docsRoutes = docsRoute.addChildren([
-  createRoute({ getParentRoute: () => docsRoute, path: '/', component: About }),
-  createRoute({ getParentRoute: () => docsRoute, path: 'repo', component: Repo }),
-  createRoute({ getParentRoute: () => docsRoute, path: 'templates', component: TemplatesDoc }),
-  createRoute({ getParentRoute: () => docsRoute, path: 'images', component: ImagesDoc }),
-  createRoute({ getParentRoute: () => docsRoute, path: 'regions', component: Regions }),
-  createRoute({ getParentRoute: () => docsRoute, path: 'adaptors', component: Adaptors }),
-  createRoute({ getParentRoute: () => docsRoute, path: 'api', component: ApiReference }),
-])
 
 const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/', component: Dashboard }),
@@ -47,7 +23,6 @@ const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/images', component: Images }),
   createRoute({ getParentRoute: () => rootRoute, path: '/system', component: System }),
   createRoute({ getParentRoute: () => rootRoute, path: '/settings', component: Settings }),
-  docsRoutes,
 ])
 
 export const router = createRouter({ routeTree })

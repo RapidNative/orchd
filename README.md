@@ -1,45 +1,47 @@
-# RapidNative Cloud
+# ORCHD
 
-One multi-tenant **workload orchestrator**, in a single codebase, powering two
-products:
+A multi-tenant **workload orchestrator**: one Go daemon that provisions per-tenant
+workloads, gives each a hostname, caps and isolates it, suspends it when nobody is
+using it, and wakes it on the next request in about a second. No cluster, no YAML.
 
-1. **tinbase-cloud** — hosted, Supabase-compatible backends. A cheaper, faster,
-   HA-capable alternative to Supabase Cloud.
-2. **RapidNative dev environments** — the per-project runners behind
-   [RapidNative](https://rapidnative.com) (a web/expo runner, a web/react runner,
-   a dev tinbase, an api server), each on its own subdomain.
+**Docs: [rapidnative.github.io/orchd](https://rapidnative.github.io/orchd/docs/)** — what it
+is, why it exists, goals and non-goals, concepts, templates, images, the CLI, local
+development, deployment and the full API reference. Source in [`site/`](site/).
 
-Both are just **workloads** to the orchestrator: containers it provisions, routes
-by hostname, isolates with gVisor, and scales to zero when idle. The only
-difference between them is the image and the routing. Build the substrate once,
-run both.
-
-> Status: early. The control plane, gateway, scale-to-zero lifecycle, the
-> Docker + gVisor substrate, and multi-domain routing all work and are verified
-> on real hardware. The tinbase workload runs today; the RapidNative runner
-> images, plus HA, connection pooling, backups, and the Firecracker tier, are on
-> the roadmap.
+> Status: early but real. The control plane, gateway, scale-to-zero lifecycle, the
+> Docker + gVisor substrate, templates, images, backups, keys and multi-domain routing
+> all work and are verified on real hardware. A scheduler across many nodes, an HA
+> control plane and the Firecracker tier are on the roadmap.
 
 ---
 
 ## Why this exists
 
-Both products need the same thing: run many small, per-tenant workloads cheaply,
-give each one a subdomain, wake it fast, put it to sleep when idle, and isolate
-it well enough to run untrusted user code. Rather than build that twice, it is
-one orchestrator with a generic `Workload` primitive.
+Preview environments, per-customer backends, per-project dev servers, agent sandboxes:
+many small workloads, each needing its own URL and its own data, almost all of them idle
+almost all of the time. A process manager does not route, wake, isolate or reclaim;
+Kubernetes costs more to operate than the fleet it manages; a PaaS prices per app and
+does not let you choose the packing density or the isolation boundary.
 
-**tinbase-cloud.** tinbase speaks the Supabase wire protocol, so the official
-`@supabase/supabase-js` SDK works against it unchanged (REST, Auth, Storage,
-Realtime), but it is one ~66 MB process instead of a Docker Compose stack. Hosting
-a fleet of those, coupled one-per-project like Supabase Cloud, is the whole
-cost advantage.
+The bet is that wake latency has become cheap enough to make idleness free. If a
+suspended workload comes back in about a second, "stopped" is an acceptable default
+state, and the cost of a tenant collapses from its running memory to its disk.
 
-**RapidNative dev environments.** Each generated project needs a set of runners on
-demand, and most sit idle. That is exactly what scale-to-zero is for, and because
-those runners execute untrusted user code, VM-grade isolation is not optional. The
-same orchestrator, the same gateway, the same scale-to-zero, a different workload
-type.
+Full reasoning: [Why it exists](https://rapidnative.github.io/orchd/docs/why/) and
+[Goals & non-goals](https://rapidnative.github.io/orchd/docs/goals/).
+
+## Adopters
+
+ORCHD is standalone and has no opinion about what it runs. Two products are being built
+on it, as **users** of it, not parts of it:
+
+- **tinbase cloud** — hosted, Supabase-compatible backends, one per project.
+- **RapidNative dev environments** — the per-project runners behind
+  [RapidNative](https://rapidnative.com): a web runner, a mobile runner, an API server
+  and a dev database, each on its own subdomain.
+
+They are the reason the `tinbase` workload kind and the runner presets exist; neither is
+privileged. A workload is an image, a port and a volume.
 
 ## Architecture
 
@@ -161,7 +163,8 @@ orchd/
                            (wildcard *.test domains via dnsmasq + Caddy)
   deploy/                  everything that runs on the box, tracked
   template-examples/       bundled templates (rapidnative, tinbase)
-  site/index.html          project overview page (served at cloud.rapidnative.com)
+  site/                    public site + docs (Next.js static export)
+                           -> rapidnative.github.io/orchd, and the box's root page
 ```
 
 See [orchestrator/README.md](orchestrator/README.md) for the component detail and

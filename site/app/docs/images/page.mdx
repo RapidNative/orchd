@@ -1,0 +1,120 @@
+export const metadata = {
+  title: 'Images',
+  description:
+    'Two different things are called an image: a versioned freeze of a template, and a container image tag on a region. Both are managed here.',
+}
+
+# Images
+
+The word "image" means two different things in ORCHD, and conflating them is the main
+source of confusion — so they are separated here.
+
+| | **Built image** | **Docker image** |
+| --- | --- | --- |
+| What it is | an immutable, versioned freeze of a template | a container tag on a region's Docker daemon |
+| Identity | `template@v3` | `ghcr.io/acme/app:1.2.0` |
+| Contains | a tarball of the tree **plus** a container image per workspace | one container image |
+| Created by | ORCHD, from a template | you, or a registry you pull from |
+| API | `/v1/built-images` | `/v1/images` |
+
+## Built images: freezing a template
+
+A template is live, mutable source. A **built image** is a version of it that will never
+change again, so a project provisioned from `acme@v3` boots exactly what `v3` was.
+
+```bash
+curl -X POST https://api.example.com/v1/templates/acme/build \
+  -H "Authorization: Bearer $ORCHD_KEY"
+```
+
+or **Images → Build image → &lt;template&gt;** in the panel. The version auto-increments
+(`v1`, `v2`, …). Two artifacts come out:
+
+1. **A tarball** of the template tree, minus `backup_exclude` paths. Always written. This
+   is what the process driver restores from, and it means a box with no Docker still
+   produces a usable image.
+2. **A container image per `node`/`static` workspace**, built from a generated Dockerfile
+   that mirrors the manifest (`FROM node:20-slim`, copy the workspace, run `install`,
+   `CMD` the `run` command; nginx for `static`). Tagged
+   `orchd-<template>-<workspace>:<version>`. Best-effort — if Docker is not present the
+   build is skipped and logged, and the image is tarball-only. Database workloads are not
+   built per template; they run the platform image.
+
+### Booting from one
+
+Create a project with `{"image":"acme@v3"}` — or **New project → From image** — and the
+driver picks the right artifact with no flag from you: the process driver restores the
+tarball, the Docker driver runs the versioned tags. A create-time delta still overlays on
+top, so the base-plus-delta model is identical whether you boot from a live template or a
+frozen version.
+
+### Moving one to another instance
+
+```bash
+# 1. set a registry once (Settings, or PUT /v1/settings/registry)
+# 2. push: re-tags each workspace image under the registry and pushes it
+curl -X POST .../v1/built-images/acme/v3/push -H "Authorization: Bearer $ORCHD_KEY"
+
+# 3. copy the import spec — a self-contained descriptor
+curl .../v1/built-images/acme/v3/spec -H "Authorization: Bearer $ORCHD_KEY"
+
+# 4. on the target instance
+curl -X POST .../v1/built-images/import -H "Authorization: Bearer $ORCHD_KEY" \
+  -d @spec.json
+```
+
+The **import spec** carries the template name, the version, the registry ref per workspace,
+and the workload shape — everything needed to run the image without the tarball or the
+template folder. An imported image is docker-only: the driver pulls the refs on boot. The
+panel has buttons for the push, the spec copy and the tarball download.
+
+```
+GET    /v1/built-images                          list
+GET    /v1/built-images/{name}/{version}/bundle  download the tarball
+POST   /v1/built-images/{name}/{version}/push    push to the configured registry
+GET    /v1/built-images/{name}/{version}/spec    the import spec
+POST   /v1/built-images/import                   record an image from another instance
+DELETE /v1/built-images/{name}/{version}         delete (removes the tarball, leaves docker tags)
+```
+
+## Docker images: what a region can launch
+
+The other sense of the word is a plain tag on a region's Docker daemon. A workload is a
+container started from one, with a port and caps — there is no custom image format.
+
+```
+GET    /v1/images?region=<id>        list (dangling layers excluded)
+POST   /v1/images/pull               pull a ref onto that region's daemon
+DELETE /v1/images?ref=<ref|id>       remove (add force=true if a container holds it)
+```
+
+These require the Docker driver; the process driver answers `501`. Each region has its own
+daemon, so an image must exist **on every region you intend to place work in** — the panel's
+Images page takes a region selector for exactly that reason.
+
+`digest` in the listing is the **stable content identity** to pin against: the registry
+manifest digest, or the config digest for locally built images. It is driver-neutral, so a
+future registry-backed runtime reports the same thing. `ref` and `id` are the mutable,
+human-readable pointers.
+
+Building an arbitrary image is not an ORCHD operation — there is no build-context upload
+endpoint. Build it on the box (or in CI, and push), then reference the tag; no redeploy is
+needed. Requirements for a custom image are in [Substrates](/docs/substrates#custom-images).
+
+## Presets
+
+A **preset** is a friendly name that expands to a type, an image, a port and default caps,
+so a create call does not have to remember them. `GET /v1/presets` lists what this instance
+has.
+
+```jsonc
+// via preset
+{ "preset": "vite" }
+
+// the same thing, explicitly
+{ "type": "rapidnative-dev", "image": "rn-vite:dev", "port": 8080,
+  "memory_mb": 512, "cpus": 1.0 }
+```
+
+Presets are a convenience over the image fields, never a requirement — anything a preset
+sets, you can pass yourself, and explicit fields win.

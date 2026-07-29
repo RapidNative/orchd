@@ -20,7 +20,7 @@ Top MCP Servers:
 ## Your Setup Checklist
 
 ### Codebases
-- [ ] cloud (orchd) — https://github.com/RapidNative/cloud
+- [ ] orchd — https://github.com/RapidNative/orchd
 
 ### MCP Servers to Activate
 - [ ] _None required for this repo._

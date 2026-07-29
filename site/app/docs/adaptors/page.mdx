@@ -1,0 +1,75 @@
+export const metadata = {
+  title: 'Adaptors',
+  description:
+    'Every replaceable subsystem in ORCHD, its implementations, and whether it switches from settings or at deploy.',
+}
+
+# Adaptors
+
+Every pluggable subsystem is an interface with more than one implementation. That is what
+keeps the platform portable: a JSON file becomes Postgres, local backups become R2, Docker
+becomes microVMs — none of it touching the API surface.
+
+| Adaptor | Implementations | Switch via |
+| --- | --- | --- |
+| Runtime driver | Local (processes) · Docker (gVisor `runsc` / `runc`) · Mock · Firecracker (planned) | `ORCHD_DRIVER` |
+| State store | JSON file · SQLite (WAL) · Postgres (pgx) · in-memory | deploy env |
+| Backup target | Local directory · S3 / R2 (SigV4) | Settings |
+| Event sink | Memory · Webhook · Multi (fan-out) | Settings |
+| Metrics sink | Nop · Log · HTTP collector | Settings |
+
+The ones marked **Settings** change at runtime from the admin panel or a `PUT /v1/settings/*`
+call, with no redeploy. The rest are chosen when the daemon starts.
+
+## Runtime driver
+
+Covered in [Substrates & isolation](/docs/substrates).
+
+## State store
+
+The project / workload / route index has three durable backends:
+
+- **JSON file** (default) — one file, trivially inspectable. Good for a laptop and a small
+  box.
+- **SQLite in WAL mode** — `ORCHD_STATE_SQLITE=/var/lib/orchd/orchd.db`. The recommendation
+  for a single-box control plane: atomic, crash-safe, incremental writes, and a real `.db`
+  file. Switching auto-migrates an existing `projects.json` sitting next to it on first boot.
+- **Postgres** — `ORCHD_STATE_DSN=postgres://…` (pgx, no ORM). The seam for a distributed
+  control plane.
+
+The store is reached through one interface plus a `Persister`, so the manager and API depend
+on neither the format nor the engine. The index is backed up off-box on the backup schedule —
+see [Backups](/docs/backups).
+
+## Event sink
+
+Control-plane actions emit events (`project.created`, `workload.created`,
+`workload.keepwarm`, `image.built`, `image.pushed`, `image.imported`, …). The sink is
+pluggable:
+
+- **Memory** — a bounded recent feed, read with `GET /v1/events` and shown on the panel's
+  Activity page;
+- **Webhook** — each event POSTed as JSON to a URL you set (`PUT /v1/settings/webhook`,
+  blank to disable);
+- **Multi** — fan-out, which is how the memory feed and the webhook both receive everything.
+
+This is the hook for audit logging, for billing, or for reacting to lifecycle changes
+elsewhere.
+
+## Metrics sink
+
+A periodic fleet snapshot — projects, workloads, running, suspended, allocated memory —
+published every `ORCHD_METRICS_INTERVAL`:
+
+- **Nop** (default), **Log** (to the daemon's log), or **HTTP** (POSTed to a collector URL).
+
+`GET /v1/metrics` returns the live snapshot regardless of sink. Prometheus and statsd sinks
+are not built.
+
+## Per-workload observability
+
+`GET /v1/workloads/{id}/stats` gives live memory and CPU from the runtime, and
+`GET /v1/workloads/{id}/logs?tail=n` gives the instance's recent stdout/stderr. Both are
+driver-implemented: the process driver keeps a bounded ring buffer per process, the Docker
+driver reads `docker logs` and `docker stats`. Structured per-workload log shipping is on the
+[roadmap](/docs/roadmap).

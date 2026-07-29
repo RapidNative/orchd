@@ -19,6 +19,9 @@ import {
   BrandLogo,
 } from './icons'
 
+// The documentation is a separate static site (built from site/ in this repo).
+const DOCS_URL = 'https://rapidnative.github.io/orchd/docs/'
+
 const nav = [
   { to: '/', label: 'Dashboard', Icon: IconDashboard, exact: true },
   { to: '/projects', label: 'Projects', Icon: IconProjects, exact: false },
@@ -28,7 +31,6 @@ const nav = [
   { to: '/activity', label: 'Activity', Icon: IconActivity, exact: false },
   { to: '/system', label: 'System', Icon: IconDatabase, exact: false },
   { to: '/settings', label: 'Settings', Icon: IconSettings, exact: false },
-  { to: '/docs', label: 'Docs', Icon: IconDocs, exact: false },
 ]
 
 function Brand() {
@@ -62,6 +64,16 @@ function SidebarBody({ onNavigate }: { onNavigate?: () => void }) {
             <Icon /> {label}
           </Link>
         ))}
+        {/* Docs live on the public site, not in the panel. */}
+        <a
+          href={DOCS_URL}
+          target="_blank"
+          rel="noreferrer"
+          onClick={onNavigate}
+          className="flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <IconDocs /> Docs <span className="text-xs">↗</span>
+        </a>
       </nav>
       <button
         onClick={() => auth.clear()}

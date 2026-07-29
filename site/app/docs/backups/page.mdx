@@ -1,0 +1,88 @@
+export const metadata = {
+  title: 'Backups',
+  description:
+    'Byte-exact volume snapshots, local or S3/R2 targets, retention, restore, and the control-plane index.',
+}
+
+# Backups
+
+## What a backup is
+
+A backup is a **byte-exact snapshot of a workload's volume** — a gzipped tar, taken with
+the instance briefly suspended so a database on disk is consistent. It is per-workload; a
+project backup fans out over the project's workloads.
+
+What is *not* in it: everything derived. `node_modules`, `.git`, build output, caches — the
+paths a template declares in `backup_exclude`. Dependencies come from an install step or an
+image, never from a backup. That keeps snapshots small enough to take often, and it is the
+same rule locally and in production.
+
+## Taking and restoring
+
+```bash
+# one workload
+curl -X POST .../v1/workloads/<id>/backups -H "Authorization: Bearer $ORCHD_KEY"
+
+# every workload in a project
+curl -X POST .../v1/projects/<id>/backups -H "Authorization: Bearer $ORCHD_KEY"
+
+# list
+curl .../v1/backups -H "Authorization: Bearer $ORCHD_KEY"
+curl .../v1/workloads/<id>/backups -H "Authorization: Bearer $ORCHD_KEY"
+
+# restore: replaces the workload's current data, then reboots it
+curl -X POST .../v1/workloads/<id>/restore -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"backup_id":"<id>__20260719T…"}'
+```
+
+Restore is destructive by definition — the volume is replaced with the snapshot's contents,
+so anything written since is gone. The workload is rebooted afterwards.
+
+Scheduled backups run on `ORCHD_BACKUP_INTERVAL` (0 disables the schedule; on-demand still
+works), keeping `ORCHD_BACKUP_RETAIN` per workload.
+
+## Where they go
+
+The target is an adaptor, switchable at runtime from **Settings** (no redeploy):
+
+| Target | Notes |
+| --- | --- |
+| **Local directory** | `ORCHD_BACKUP_DIR`, default `<data-root>/backups`. Fine for development; on one box it is not off-box durability. |
+| **S3 / R2** | Endpoint, bucket, region, prefix and credentials. SigV4 is hand-rolled with no SDK, so it works against S3, R2, B2 and MinIO alike. |
+
+```bash
+curl -X PUT .../v1/settings/backup -H "Authorization: Bearer $ORCHD_KEY" -d '{
+  "type": "s3",
+  "endpoint": "https://<account>.r2.cloudflarestorage.com",
+  "bucket": "backups", "region": "auto", "prefix": "backups",
+  "access_key": "…", "secret_key": "…"
+}'
+```
+
+The secret is stored server-side and never returned — `GET /v1/settings` reports
+`backup_secret_set` instead. Leave `secret_key` blank on an update to keep the existing one.
+
+## The control-plane index
+
+The project/workload index is small and irreplaceable, so it is backed up too — on the same
+schedule, and on demand:
+
+```bash
+curl -X POST .../v1/system/backup -H "Authorization: Bearer $ORCHD_KEY"
+```
+
+It is stored under the reserved key `_control-plane`. With the SQLite store the WAL is
+checkpointed first so the snapshot is consistent. Restoring it is a deliberate manual
+operation (fetch and extract) rather than an endpoint, because it re-seeds the entire
+control plane.
+
+## Limits worth knowing
+
+- **The brief suspend.** A consistent snapshot currently means pausing the workload for the
+  duration of the tar. Hot / WAL-based backups that remove the pause are on the
+  [roadmap](/docs/roadmap).
+- **No point-in-time recovery.** You restore to a snapshot, not to a timestamp.
+- **Backups do not survive a project delete.** Deleting a project reclaims its data;
+  keeping snapshots around as an undo buffer is future work.
+- **One target for the instance.** Per-region backup targets are part of the multi-node
+  milestone, not today.

@@ -1,0 +1,168 @@
+export const metadata = {
+  title: 'Deploying',
+  description:
+    'What runs on the box, how Caddy and systemd are wired, the deploy scripts, and the full environment variable reference.',
+}
+
+# Deploying
+
+## The shape of a deployment
+
+One Linux box:
+
+```
+                    DNS: wildcard A record  *.example.com  ->  box
+                                    |
+   +-------------------------------- Caddy (:80/:443) --------------------------------+
+   |  admin.example.com   -> static admin panel  (+ same-origin /api proxy)           |
+   |  api.example.com     -> control API :8080   (API key required)                   |
+   |  *.example.com       -> gateway :8081       (Host -> route table -> workload)    |
+   |  /w/<key>            -> gateway :8081       (subroute fallback, no DNS needed)   |
+   +---------------------------------------------------------------------------------+
+                                    |
+                        orchd (systemd) + Docker + gVisor
+```
+
+The control API and the gateway both bind to **loopback**; Caddy is the only listener on a
+public port. That keeps TLS, HTTP/2 and certificate storage out of the orchestrator, and means
+a misconfigured firewall cannot expose the control plane directly.
+
+Everything that runs on the box is tracked in the repository under `deploy/` — the Caddyfile,
+both systemd units, and the scripts — so the server holds no untracked code. The only things
+that live *only* on the box are the API key file and the tenant data.
+
+## What is where
+
+| On the box | From the repo | What |
+| --- | --- | --- |
+| `/etc/caddy/Caddyfile` | `deploy/Caddyfile` | front door: TLS and routing |
+| `/etc/systemd/system/orchd.service` | `deploy/orchd.service` | the daemon unit |
+| `/etc/systemd/system/caddy.service` | `deploy/caddy.service` | Caddy unit |
+| `<app>/orchd` | built from `orchestrator/` | the binary (build artifact) |
+| `<app>/admin/` | `admin/` (`dist/` deployed) | the panel, static |
+| `<app>/images/*/Dockerfile` | `orchestrator/images/*` | workload image sources |
+| `<app>/secrets/admin.key` | **never tracked** | the bootstrap API key |
+| `<app>/data/` | **never tracked** | per-workload volumes plus control-plane state |
+
+Docker, gVisor (`runsc`) and the Caddy binary are installed by the bootstrap script from
+upstream, not tracked as files.
+
+## Provisioning a fresh box
+
+```bash
+# 1. sync files up (the daemon may not start yet — expected)
+deploy/deploy.sh root@HOST || true
+
+# 2. install Docker, gVisor and Caddy; generate the key; build images; start services
+ssh root@HOST 'bash -s' < deploy/bootstrap.sh
+```
+
+Then point DNS at the box — one wildcard `A` record covers every workload subdomain — and the
+first HTTPS request to each host triggers certificate issuance, gated by
+[`/internal/tls-allow`](/docs/routing#on-demand-tls-gated).
+
+`deploy/preflight.sh` checks a box's prerequisites before you commit to it.
+
+## Deploying updates
+
+```bash
+deploy/deploy.sh root@HOST
+```
+
+Builds the daemon for `linux/amd64`, syncs configs, static files and image sources, restarts
+the daemon, and reloads Caddy in place. **Tenant containers keep running** across a restart and
+are re-attached — a deploy is not a fleet-wide outage.
+
+It does **not** rebuild workload images. If a Dockerfile changed, rebuild it on the box (or
+build in CI and push to a registry, then pull from the Images page).
+
+`deploy/build-template.sh <path> [--push]` builds a template's per-workspace images from its
+manifest — the scripted equivalent of the [built image](/docs/images) flow.
+
+## Recommended production settings
+
+- **State store:** `ORCHD_STATE_SQLITE=<data>/orchd.db`. Atomic and crash-safe; the JSON file
+  default is fine for development but SQLite is the right answer for a single box. An existing
+  `projects.json` beside it is migrated on first boot.
+- **Backups:** point the target at S3/R2 from Settings, and set `ORCHD_BACKUP_INTERVAL`.
+  On-box backups are not off-box durability.
+- **API key:** always set `ORCHD_API_KEY_FILE`. With no key the API is open.
+- **Rate limit:** set `ORCHD_RATE_LIMIT` to something finite.
+- **Isolation:** leave `ORCHD_DOCKER_RUNTIME=runsc` unless you have measured that you need
+  `runc`'s syscall performance more than you need the boundary.
+- **Idle timeout:** the default 5 minutes is a reasonable start; workloads that must not
+  cold-start get `keep_warm`.
+
+## Environment reference
+
+Every setting is an environment variable; there is no config file.
+
+### Listeners and addressing
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ORCHD_API_ADDR` | `127.0.0.1:8080` | control-plane API listen address |
+| `ORCHD_GATEWAY_ADDR` | `127.0.0.1:8081` | gateway listen address |
+| `ORCHD_BASE_DOMAIN` | `lvh.me` | suffix new routes are minted under, and stripped from an incoming `Host` |
+| `ORCHD_ALT_DOMAINS` | — | comma-separated additional base domains this server fronts |
+| `ORCHD_PUBLIC_URL` | — | externally reachable base, used to build `/w/<key>` subroute endpoints |
+| `ORCHD_PUBLIC_SCHEME` | `http` | `https` behind Caddy; displayed endpoints then omit the port |
+| `ORCHD_PORT_BASE` | `0` (off) | enable port-per-workload addressing, counting up from here |
+| `ORCHD_LOCAL` | — | turnkey local defaults (`localhost` base domain, local public URL) |
+
+### Substrate
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ORCHD_DRIVER` | `local` | `local`, `docker` or `mock` |
+| `ORCHD_IMAGE` | `tinbase:0.10.0` | default container image for the Docker driver |
+| `ORCHD_DOCKER_RUNTIME` | `runsc` | container runtime; empty means `runc` |
+| `ORCHD_DOCKER_HOST` | local daemon | point the Docker client at a remote daemon |
+| `ORCHD_TINBASE_BIN` | `tinbase` | the database executable the process driver spawns |
+| `ORCHD_ENGINE` | driver default | database engine selector for the process driver |
+| `ORCHD_REGION` | `local` | the region id this daemon serves |
+
+### Lifecycle and limits
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ORCHD_IDLE_TIMEOUT` | `5m` | idle time before scale-to-zero; `0` disables the reaper |
+| `ORCHD_TINBASE_MEM_MB` / `ORCHD_TINBASE_CPUS` | `384` / `0.5` | default caps for database workloads |
+| `ORCHD_DEV_MEM_MB` / `ORCHD_DEV_CPUS` | `512` / `1.0` | default caps for dev/runner workloads |
+| `ORCHD_PIDS_LIMIT` | `512` | max processes per container |
+| `ORCHD_RATE_LIMIT` | `0` (off) | control-API requests per key per minute |
+
+### State, data and templates
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ORCHD_DATA_ROOT` | `~/.tinbase-cloud` | per-workload volumes and control-plane state |
+| `ORCHD_STATE_SQLITE` | — | path to a SQLite database for control-plane state (WAL) |
+| `ORCHD_STATE_DSN` | — | Postgres DSN for control-plane state (takes precedence) |
+| `ORCHD_TEMPLATES_DIR` | — | scanned at startup; every subdir with an `orchd.json` is auto-registered |
+| `ORCHD_API_KEY_FILE` | — | file holding the bootstrap API key; unset means the API is **open** |
+
+### Backups and telemetry
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ORCHD_BACKUP_DIR` | `<data-root>/backups` | local backup store root |
+| `ORCHD_BACKUP_INTERVAL` | `0` (off) | scheduled backup interval, e.g. `24h` |
+| `ORCHD_BACKUP_RETAIN` | `5` | snapshots kept per workload |
+| `ORCHD_METRICS_INTERVAL` | `60s` | how often the fleet snapshot is published |
+
+Backup target, event webhook, metrics sink, registry prefix, instance name and templates are
+**runtime** settings, changed from the panel or `PUT /v1/settings/*` with no redeploy. See
+[Adaptors](/docs/adaptors).
+
+## Operating notes
+
+- **Health:** `GET /healthz` is the only unauthenticated status endpoint and never requires a
+  key.
+- **Fleet snapshot:** `GET /v1/info` reports the driver, region, base domain, idle timeout,
+  default limits, rate limit, backup and metrics status, and the preset list — the fastest way
+  to confirm what a box is actually running.
+- **Instance name:** `PUT /v1/settings/name` names the deployment in the panel. ORCHD is the
+  engine; the name is per instance.
+- **Upgrades:** the daemon restarting does not stop tenant containers, so a rolling
+  `deploy.sh` is safe. Changing resource caps applies to containers created afterwards.

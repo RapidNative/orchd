@@ -13,7 +13,6 @@ test('sidebar navigates across all sections', async ({ page }) => {
     ['Activity', 'Activity'],
     ['System', 'System'],
     ['Settings', 'Settings'],
-    ['Docs', 'Documentation'],
   ]
   for (const [link, heading] of dests) {
     await page.getByRole('link', { name: link, exact: true }).click()

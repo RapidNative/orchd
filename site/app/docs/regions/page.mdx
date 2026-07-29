@@ -1,0 +1,58 @@
+export const metadata = {
+  title: 'Regions',
+  description: 'Placement targets that point the runtime at a Docker daemon, and the seam to multi-node.',
+}
+
+# Regions
+
+## What a region is
+
+A region is a **placement target**. It carries a `docker_host` that tells the runtime driver
+which Docker daemon to use: empty means the local daemon on the control-plane box, and a
+`tcp://…` or `ssh://…` value points at a separate worker node.
+
+New projects land in the **default** region unless one is chosen at create time. The region
+`local` is seeded on first boot.
+
+## Why they exist
+
+Regions are the seam for growing past one box without changing the model:
+
+- put workers near users, to cut latency;
+- keep a tenant's data in a required jurisdiction;
+- get past a single box's memory and disk ceiling.
+
+The control plane stays central. Only *where containers run* moves.
+
+## Adding one
+
+```bash
+curl -X POST .../v1/regions -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"name":"EU West","docker_host":"tcp://node2:2375"}'
+# -> { "id": "eu-west", … }   (the id is a slug of the name)
+```
+
+1. **Expose the worker's Docker daemon** to the control-plane box over a **private network** —
+   a TLS socket, or an SSH tunnel. Never the public internet: an open Docker socket is root
+   on that machine.
+2. **Create the region** (above, or **System → Regions** in the panel).
+3. **Make sure the images exist there.** Each region's daemon needs the tags you will run —
+   pull them from the Images page with that region selected. See [Images](/docs/images).
+4. **Place work** — pass `region` when creating a project, or
+   `POST /v1/regions/{id}/default` to change the default.
+
+The driver remembers which host each workload was placed on for later operations, publishes
+remotely-placed containers so the gateway can reach them across nodes, and addresses them by
+the node host.
+
+You cannot delete the default region: set another default first.
+
+## What is not there yet
+
+- **Data locality.** A remotely-placed workload's volume and backups live on the worker. A
+  per-region backup target is part of the same milestone.
+- **A scheduler.** Placement exists; a bin-packing policy across many nodes does not. You
+  choose the region, ORCHD does not choose for you — see
+  [Goals & non-goals](/docs/goals).
+- **Traffic routing per region.** No geo-DNS or anycast. Regions affect placement, not
+  ingress.

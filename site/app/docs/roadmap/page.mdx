@@ -1,0 +1,87 @@
+export const metadata = {
+  title: 'Roadmap',
+  description: 'What is built and verified, what is next, and what is deliberately deferred.',
+}
+
+# Roadmap
+
+## Built and verified
+
+The control loop, end to end, on real hardware:
+
+- **The `Runtime` seam** with three implementations — host processes, Docker (`runc` or gVisor
+  `runsc`), and a mock.
+- **Control-plane API** — projects, workloads, routes, regions, keys, templates, images,
+  backups, settings, events, metrics.
+- **Project → Workload → Route** with an exact-match route table: convention subdomains,
+  custom domains and `/w/<key>` subroutes resolved by one mechanism.
+- **Scale-to-zero and wake-on-request** — an idle reaper plus a gateway that holds the waking
+  request. ~2.8 s cold provision and ~0.9 s wake under gVisor on a cloud VM.
+- **keep-warm / always-on** per workload, woken at daemon startup.
+- **Wildcard TLS and gated on-demand certificates** via `/internal/tls-allow`.
+- **Per-container caps** — memory, CPU and pid limits, defaulted per workload type and
+  overridable per workload.
+- **Templates** — `orchd.json`, async provisioning, create-time deltas, per-workload env.
+- **Built images** — versioned freezes (tarball plus per-workspace container images), registry
+  push, import spec, boot-from-image with driver auto-selection.
+- **Backups** — per workload and per project, local or S3/R2 via hand-rolled SigV4, retention,
+  verified restore, plus off-box snapshots of the control-plane index.
+- **State store adaptors** — JSON file, SQLite (WAL, with auto-migration from the JSON file),
+  Postgres.
+- **Auth** — a bootstrap file key, minted keys stored hashed with admin/readonly roles, and a
+  per-key rate limiter.
+- **Events and metrics** — pluggable sinks (memory / webhook / multi, and nop / log / http).
+- **Regions** — CRUD, default selection, and placement onto a remote Docker daemon.
+- **Local development** — a full no-Docker stack, and a production-shaped wildcard `*.test`
+  domain mode with trusted TLS.
+- **Admin panel** — a UI over the whole API.
+- **Deployment** — everything the box runs is tracked: bootstrap, deploy, Caddyfile, systemd
+  units.
+
+## Next
+
+**Structured per-workload logs and metrics.** Today logs are the instance's recent
+stdout/stderr through the driver. Per-workload log shipping and Prometheus/statsd metrics sinks
+are the gap.
+
+**A scheduler.** Placement across regions exists; a bin-packing policy that *chooses* the node
+does not.
+
+**Hot backups.** Removing the brief suspend a consistent snapshot currently needs, and keeping
+snapshots as an undo buffer after a project delete.
+
+**Data locality for multi-node.** A remotely-placed workload's volume and backups live on the
+worker; per-region backup targets and a private control↔worker network are the same milestone.
+
+**Image builds from the API.** Building an arbitrary image needs a build-context upload
+endpoint; today ORCHD builds template images and you build the rest.
+
+**DNS provider adaptor** (manual / Cloudflare / Vercel) so attaching a custom domain can create
+the record, not just the route.
+
+## Later
+
+**The Firecracker driver.** The same `Runtime` interface over microVMs with per-workload
+snapshot/restore — the path to sub-second wake and a hardware isolation boundary. It needs
+`/dev/kvm`, so it needs bare metal; gVisor covers isolation until then. Work involved: a
+rootfs and guest-kernel pipeline, the driver itself with `jailer`, tap/bridge networking wired
+to the gateway, and snapshot resume (net/MAC, clock and entropy reconfiguration).
+
+**A highly available control plane.** The store interface already admits Postgres; making the
+daemon itself multi-writer with leader election is a separate step.
+
+**Multi-region traffic.** Geo or anycast routing and control-plane federation. Regions affect
+placement only today.
+
+## Deliberately not planned
+
+Replica scheduling, traffic splitting, a service mesh, a build service, an identity provider,
+billing. Each is explained in [Goals & non-goals](/docs/goals) — they are refusals, not gaps.
+
+## Adopters
+
+ORCHD is a standalone orchestrator. Two products are being built on it and are its first users:
+hosted Supabase-compatible database backends, and per-project dev environments for generated
+apps. Their own roadmaps — connection pooling, a high-availability data tier, point-in-time
+recovery, per-tenant tiering — live with those products, because they are workload concerns, not
+orchestration ones.

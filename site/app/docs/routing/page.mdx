@@ -1,0 +1,97 @@
+export const metadata = {
+  title: 'Routing & TLS',
+  description:
+    'The route table, default subdomains, custom domains, subroutes, port addressing, and on-demand certificates.',
+}
+
+# Routing &amp; TLS
+
+## One table, every addressing style
+
+The gateway resolves a request by **exact match** on the route table. That single
+mechanism covers:
+
+| Shape | Example | When |
+| --- | --- | --- |
+| Default subdomain | `abc123-web.example.com` | always minted at create |
+| Custom domain | `app.customer.com` | attached by you or a tenant |
+| Path subroute | `https://example.com/w/abc123-web` | no DNS needed; the prefix is stripped before proxying |
+| Host port | `http://localhost:8101` | local development, bypasses the gateway entirely |
+
+The routing **key** is `<project-ref>` for a project's primary workload and
+`<project-ref>-<name>` for named ones. It drives both the subdomain and the subroute, so
+the two never disagree.
+
+## The request path
+
+```
+client ──► Caddy ──► gateway :8081 ──► route table ──► workload
+             │                              │
+        TLS, HTTP/2                    wake if suspended,
+        on-demand certs                then reverse-proxy
+```
+
+The gateway proxies everything the workload speaks — ordinary HTTP, streaming responses,
+and WebSocket upgrades — and refreshes the workload's idle timer on each request. A
+suspended workload is booted on the way through; see [Scale-to-zero](/docs/scale-to-zero).
+
+Both the control API and the gateway bind to loopback. **Caddy is the front door**, which
+keeps TLS, HTTP/2 and certificate storage out of the orchestrator.
+
+## Custom domains
+
+```bash
+curl -X POST https://api.example.com/v1/workloads/<id>/routes \
+  -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"host":"app.customer.com"}'
+```
+
+Point the domain at the box (A or CNAME), attach it, and the first HTTPS request issues a
+certificate. Detach with `DELETE /v1/routes?host=app.customer.com`.
+
+## On-demand TLS, gated
+
+A wildcard certificate covers `*.example.com`, but a customer's domain cannot be known in
+advance — so Caddy is configured for **on-demand** issuance, which by itself would let
+anyone point a hostname at your box and make you request a certificate for it. ORCHD
+closes that:
+
+```
+GET /internal/tls-allow?domain=<hostname>   ->  200 or 403
+```
+
+Caddy asks before every issuance. The daemon answers `200` only for `admin`/`api` on a
+configured base domain and for hosts that are actually in the route table; everything else
+gets `403`. Certificates therefore exist only for hosts that resolve to a real workload.
+It is the only unauthenticated endpoint besides `/healthz`, and it returns nothing but a
+status code.
+
+## Base domains and alternates
+
+`ORCHD_BASE_DOMAIN` is the suffix new routes are minted under, and the one stripped from
+an incoming `Host` to recover a key. `ORCHD_ALT_DOMAINS` is a comma-separated list of
+additional base domains the same server fronts — useful when migrating from an old domain,
+since `admin.<alt>` and `api.<alt>` stay permitted through the TLS gate while existing
+workload hostnames keep working through the route table.
+
+Routes are minted from the base domain **in effect at create time**. Changing the base
+domain does not rewrite existing routes; re-provision (or attach new routes) if you want
+everything moved.
+
+## Port addressing (local)
+
+With `ORCHD_PORT_BASE` set (the local mode sets `8100`), every workload is also assigned a
+**stable host port** counting up from that base, and its `endpoint` is
+`http://localhost:<port>`. No DNS, no TLS, no proxy — you hit the workload directly. The
+port survives restarts.
+
+Two caveats:
+
+- direct port requests **bypass the gateway**, so they neither wake a suspended workload
+  nor refresh its idle timer. That is why port mode disables the reaper
+  (`ORCHD_IDLE_TIMEOUT=0`);
+- the gateway routes still work in parallel: `http://localhost:8091/w/<key>` and
+  `http://<key>.localhost:8091` both resolve, and those *do* wake.
+
+In production `ORCHD_PORT_BASE` is unset and the gateway/subdomain model is the only one.
+See [Local development](/docs/local-dev).

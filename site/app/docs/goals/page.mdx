@@ -1,0 +1,107 @@
+export const metadata = {
+  title: 'Goals & non-goals',
+  description:
+    'What ORCHD promises, what it deliberately refuses to do, and the design rules that follow.',
+}
+
+# Goals &amp; non-goals
+
+## Goals
+
+**1. Density through idleness.** The cost of an existing-but-unused tenant should be
+its disk, not its RAM. Idle workloads are suspended; the number that matters is how
+many are warm at once.
+
+**2. Wake fast enough not to notice.** A suspended workload must come back within
+roughly a second, with the request that woke it served rather than dropped.
+
+**3. One box, honestly.** A single machine with no external dependencies is the
+baseline deployment: one binary, a state file, a container runtime, a reverse proxy.
+Multi-node is an extension, not a prerequisite.
+
+**4. Isolation strong enough for other people's code.** Tenants get a syscall boundary
+(gVisor today) plus memory, CPU and pid caps, on hardware that does not need nested
+virtualization.
+
+**5. Every URL shape a tenant might need.** A default subdomain, a customer's own
+domain with a certificate issued on demand, a path subroute, or a plain localhost port
+in development — all resolved by the same route table.
+
+**6. Data outlives instances.** The volume is decoupled from the instance lifecycle, so
+suspend, wake, restart, re-image and restore never touch it by accident. Backups
+capture the tenant's files, not the derived ones.
+
+**7. Replaceable parts, stable surface.** The runtime driver, state store, backup
+target, event sink and metrics sink are interfaces with multiple implementations. You
+should be able to move from a JSON file to Postgres, or from local disk to R2, or from
+Docker to microVMs, without the API changing.
+
+**8. Legible.** Standard library where possible, no framework, no code generation, one
+process. The whole control plane is readable in a sitting, because that is what makes
+it operable by the person who deployed it.
+
+**9. The same system locally.** The control loop you run on a laptop — provisioning,
+routing, waking, backing up — is the one that runs in production, with a different
+driver and a different base domain. Local mode is not a mock.
+
+## Non-goals
+
+**Not a general scheduler.** ORCHD places a workload in a region and runs it there.
+There is no bin-packing policy, no preemption, no affinity or spread rules, no
+autoscaling of replicas. One workload is one instance.
+
+**Not a cluster.** There is no consensus, no leader election, no gossip. Multiple
+worker nodes are supported by pointing a region at a remote Docker daemon; the control
+plane stays a single process. Making the control plane itself highly available is
+future work, not a current claim.
+
+**Not a build service.** ORCHD builds container images from a template's manifest as a
+convenience, but it is not a CI system, has no build queue, no cache management and no
+context-upload endpoint. Arbitrary images are built by you and referenced by tag.
+
+**Not a load balancer.** A route resolves to exactly one workload. There is no
+round-robin across replicas, no health-check-driven failover, no canary or traffic
+splitting.
+
+**Not a service mesh.** No sidecars, no mTLS between workloads, no service discovery
+beyond the route table. Workloads reach each other over ordinary URLs.
+
+**Not multi-region-aware traffic routing.** Regions are placement targets. There is no
+geo-DNS, no anycast, no cross-region replication in the orchestrator.
+
+**Not an identity provider.** Control-plane auth is bearer keys with two roles. There
+is no user model, no SSO, no per-project RBAC, no tenant-facing auth — a workload's own
+auth is the workload's business.
+
+**Not a billing system.** Events and metrics are emitted so something else can meter.
+
+**Not tied to any workload.** The `tinbase` workload kind exists because it was the
+first adopter, and the runner presets because the second one needed them. Neither is
+privileged: a workload is an image, a port and a volume.
+
+**Not a Windows or macOS production target.** Production means Linux with a container
+runtime. macOS is a development substrate via host processes.
+
+## Rules that follow
+
+These are the load-bearing decisions. Each one is a consequence of the goals above,
+and each one is documented where it bites:
+
+| Rule | Why | Where |
+| --- | --- | --- |
+| The gateway owns the wake | only the thing holding the request can wait for a boot | [Scale-to-zero](/docs/scale-to-zero) |
+| The runtime is an interface | the next win in wake latency is a different substrate | [Substrates](/docs/substrates) |
+| Volumes are decoupled from instances | instances are disposable by design | [Concepts](/docs/concepts) |
+| Routes are exact-match | one table answers subdomains, custom domains and subroutes alike | [Routing](/docs/routing) |
+| One manifest describes a project | the same file must work locally, in an image and in a sandbox | [Templates](/docs/templates) |
+| Provisioning is async | a first `npm install` must not block an API call | [Templates](/docs/templates) |
+| Backups exclude derived files | dependencies come from an install or an image, never a backup | [Backups](/docs/backups) |
+| Secrets live in files, never in state | a leaked state file must not be a leaked fleet | [Keys](/docs/keys) |
+
+## The honest trade
+
+Density, high availability and scale-to-zero cannot all be true for the same workload
+at the same time. A suspended workload has no replica, and a workload with a standby is
+not saving you memory. ORCHD's answer is to make the choice explicit per workload
+(`keep_warm` today, tiers above it in the products) rather than to pretend the tension
+away.

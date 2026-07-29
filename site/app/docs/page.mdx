@@ -1,0 +1,73 @@
+export const metadata = {
+  title: 'What ORCHD is',
+  description:
+    'ORCHD is a single Go daemon that provisions per-tenant workloads, routes them by hostname, isolates them, and scales them to zero when idle.',
+}
+
+# What ORCHD is
+
+ORCHD is a **multi-tenant workload orchestrator**: one Go daemon that takes "run this
+small app for this tenant, give it a URL, keep its data, and stop paying for it when
+nobody is using it" and makes it an API call.
+
+It is deliberately small. One binary holds the control plane and the gateway; a
+single-file store holds the state; the substrate underneath is one interface with
+several implementations. There is no cluster to join, no scheduler to tune, no YAML
+to render, and nothing to install on the box beyond a container runtime.
+
+## What it actually does
+
+| | |
+| --- | --- |
+| **Provisions** | creates a workload from a preset, an image or a template, with its own volume, env and resource caps |
+| **Addresses** | mints a hostname per workload, accepts custom domains, or assigns a stable local port |
+| **Routes** | resolves the request `Host` against an exact-match route table and reverse-proxies (including WebSockets) |
+| **Sleeps** | suspends anything that has not served a request within the idle timeout — idle RAM goes to zero |
+| **Wakes** | boots a suspended workload on the next request, in about a second, and serves it |
+| **Isolates** | runs tenants under gVisor with memory / CPU / pid caps, so untrusted code is survivable |
+| **Protects** | bearer-key auth with roles, per-key rate limits, an audit event stream |
+| **Backs up** | byte-exact volume snapshots to a local dir or S3/R2, plus the control-plane index itself |
+
+## The three records
+
+Everything above is expressed with three records, and no others:
+
+- **Project** — a grouping. A tenant, an environment, a customer. Deleting it cascades.
+- **Workload** — the unit that runs. Routable, independently scheduled, scale-to-zero,
+  with a volume that outlives any single instance of it.
+- **Route** — a hostname pointing at a workload. A workload may have many.
+
+[Concepts](/docs/concepts) covers the model in full, including states and placement.
+
+## What it runs on
+
+| Substrate | Isolation | Where it is used |
+| --- | --- | --- |
+| Host processes | OS process | your laptop, CI — no Docker required |
+| Docker + gVisor (`runsc`) | userspace kernel, VM-grade, no `/dev/kvm` | the production box today |
+| Firecracker microVM | microVM + jailer, snapshot/restore | planned, needs bare metal |
+
+The control plane never talks to a runtime directly — it talks to a `Runtime`
+interface — which is why the same control loop, gateway and wake sequencing you
+exercise on macOS is the one that runs in production. See
+[Substrates & isolation](/docs/substrates).
+
+## Where to go next
+
+- **[Why it exists](/docs/why)** — the reasoning, and what was rejected.
+- **[Goals & non-goals](/docs/goals)** — the promises, and the deliberate refusals.
+- **[Quickstart](/docs/quickstart)** — a running project in a few minutes.
+- **[API reference](/docs/api)** — every endpoint.
+
+## Status
+
+The control plane, gateway, scale-to-zero lifecycle, templates, images, backups,
+multi-domain routing, keys and the admin panel all work and are verified on real
+hardware. Connection pooling for the database workload, an HA tier, a scheduler
+across many nodes and the Firecracker driver are not built — see the
+[roadmap](/docs/roadmap).
+
+ORCHD is a standalone project. Two products are being built on top of it — hosted
+Supabase-compatible backends, and per-project dev environments — but they are
+**users** of ORCHD, not part of it, and nothing in the orchestrator is specific to
+either.

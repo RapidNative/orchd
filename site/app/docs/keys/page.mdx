@@ -1,0 +1,95 @@
+export const metadata = {
+  title: 'Keys & access',
+  description:
+    'The bootstrap key, minted keys with roles, rate limits, and the error codes the control plane returns.',
+}
+
+# Keys &amp; access
+
+Every `/v1/*` endpoint is behind an API key. `/healthz` and `/internal/*` are the
+exceptions — see [the TLS gate](/docs/routing#on-demand-tls-gated).
+
+## Presenting a key
+
+Either header works:
+
+```bash
+curl https://api.example.com/v1/projects -H "Authorization: Bearer $ORCHD_KEY"
+curl https://api.example.com/v1/projects -H "X-API-Key: $ORCHD_KEY"
+```
+
+## The bootstrap key
+
+The root key is read from a **file on the box** (`ORCHD_API_KEY_FILE`). It is never in the
+repository, never in the state store, never logged, and it is always **admin**. That is
+deliberate: a leaked state file must not be a leaked fleet, and the key that can mint other
+keys should be recoverable by whoever has shell access and nobody else.
+
+With **no key file configured the API is open.** That is right for a laptop and never right
+for a box — the deploy scripts generate one during bootstrap.
+
+## Minted keys and roles
+
+Beyond the bootstrap key you can mint named keys:
+
+```bash
+curl -X POST https://api.example.com/v1/keys \
+  -H "Authorization: Bearer $ORCHD_KEY" \
+  -d '{"name":"ci-bot","role":"readonly"}'
+# -> { "key": "…", "meta": { "id": "…", "name": "ci-bot", "role": "readonly" } }
+```
+
+The plaintext is returned **exactly once**; only a SHA-256 hash is stored. There is no
+recovery — revoke and mint a new one.
+
+| Role | Can do |
+| --- | --- |
+| `readonly` | every `GET` / `HEAD` |
+| `admin` | everything, including `POST` / `PUT` / `DELETE` |
+
+A readonly key on a mutating call gets `403`. This is intentionally a two-role model:
+ORCHD is not an identity provider, and per-project RBAC is a non-goal — see
+[Goals & non-goals](/docs/goals).
+
+`GET /v1/keys` lists metadata (never secrets); `DELETE /v1/keys/{id}` revokes.
+
+## Rate limiting
+
+`ORCHD_RATE_LIMIT` sets a per-key token bucket in requests per minute (0 = off). Buckets are
+**per key**, so a runaway client cannot starve another one. Over the limit returns `429`
+with `Retry-After`.
+
+## Error codes
+
+Errors are JSON — `{ "error": "…" }` — with these statuses:
+
+| Code | Means |
+| --- | --- |
+| `200` / `201` / `204` | ok / created / no content |
+| `400` | bad request (malformed body, e.g. an image ref without `@version`) |
+| `401` | missing or invalid key |
+| `403` | role forbids it (readonly key on a mutating call) |
+| `404` | no such project, workload, route, image or backup |
+| `409` | conflict |
+| `429` | over the per-key rate limit |
+| `501` | capability not available on this driver (e.g. Docker image management on the process driver) |
+
+## Workload credentials are a separate thing
+
+Do not confuse control-plane keys with the credentials a workload has. A database workload
+gets its own JWT secret and minted anon / service-role keys at provision time, returned on
+the project view. Those are the tenant's keys for talking to their own backend; they grant
+nothing on the control plane.
+
+## Audit trail
+
+Control-plane actions emit events — `project.created`, `workload.keepwarm`, `image.pushed`
+and so on — to a pluggable sink: an in-memory feed the panel shows under Activity, and
+optionally a webhook that receives them as JSON. `GET /v1/events?limit=n` reads the recent
+feed. See [Adaptors](/docs/adaptors).
+
+## CORS
+
+The API sends permissive CORS headers so the admin panel can call it from a browser with a
+key. Treat the key as a secret accordingly: it belongs in the operator's browser session or
+a server-side caller, never in a shipped client bundle.

@@ -1,6 +1,16 @@
-# Artifacts and substrates
+export const metadata = {
+  title: 'Design note: artifacts & substrates',
+  description:
+    'Separating where a workload’s bits come from (artifact) from what executes them (substrate).',
+}
 
-**Status:** design, not built. Decisions marked ✅ are settled; ❓ are open.
+> **Design note, not documentation of built behaviour.** This is a working design
+> for splitting the artifact/substrate axes. Decisions marked ✅ are settled; ❓ are
+> open. It references specific adopters (a database workload, a browser sandbox
+> runtime) because that is where the design pressure came from.
+
+
+# Artifacts and substrates
 
 ## The model
 
