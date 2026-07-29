@@ -268,3 +268,19 @@ box.
 Routes are minted at provision time from the base domain in effect, so projects
 created in port mode keep their `*.localhost` hosts. Re-provision (or wipe
 `.localdev/state`) after switching modes if you want everything on the domain.
+
+## Related projects
+
+ORCHD is built by the team behind **[RapidNative](https://rapidnative.com)** — AI that
+generates production-ready React Native apps and UIs from a prompt — and is part of the same
+family of open-source tools:
+
+| Project | What it is |
+| --- | --- |
+| [RapidNative](https://rapidnative.com) | AI that generates production-ready React Native apps and UIs from a prompt |
+| [tinbase](https://tinbase.dev) | A Supabase-compatible backend without Docker — one process, real Postgres, runs in the browser |
+| [Lifo](https://lifo.sh) | Linux APIs in the browser — real dev tooling with no VM and no container |
+| [jetplane](https://sanketsahu.github.io/jetplane) | A Metro plugin and a thin dev server for Expo — many dev environments per machine |
+| [ORCHD](https://rapidnative.github.io/orchd) | this repo — a multi-tenant workload orchestrator |
+
+See them all on [rapidnative.com/open-source](https://www.rapidnative.com/open-source).
