@@ -1,0 +1,6 @@
+title: orchd
+description: One multi-tenant workload orchestrator for tinbase-cloud and RapidNative dev environments
+theme: jekyll-theme-primer
+baseurl: /orchd
+url: https://rapidnative.github.io
+exclude: [Gemfile, Gemfile.lock, vendor]

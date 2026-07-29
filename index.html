@@ -1,0 +1,386 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RapidNative Cloud</title>
+<style>
+  :root{
+    --bg:#0b0e14; --panel:#111624; --panel2:#161d2e; --line:#232c42;
+    --ink:#e6ebf5; --muted:#9aa7c0; --dim:#6b7896;
+    --accent:#5ec8a8; --accent2:#7aa2ff; --warn:#e0a44a; --bad:#e06a6a;
+    --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;font-size:16px}
+  a{color:var(--accent2);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:1040px;margin:0 auto;padding:0 22px}
+  code,kbd{font-family:var(--mono);font-size:.88em;background:#0d1220;
+    border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:#cdd8f0}
+  h1,h2,h3{line-height:1.25;font-weight:650;letter-spacing:-.01em}
+  h2{font-size:1.55rem;margin:0 0 6px}
+  h3{font-size:1.08rem;margin:26px 0 8px;color:#cdd8f0}
+  p{color:var(--muted);margin:10px 0}
+  section{padding:46px 0;border-top:1px solid var(--line)}
+  .lead{font-size:1.12rem;color:#c4cfe6}
+  .eyebrow{font-family:var(--mono);font-size:.72rem;letter-spacing:.16em;
+    text-transform:uppercase;color:var(--accent);margin:0 0 10px}
+
+  /* hero */
+  header{padding:74px 0 54px;background:
+    radial-gradient(900px 380px at 18% -8%,rgba(94,200,168,.14),transparent 60%),
+    radial-gradient(760px 360px at 96% 0%,rgba(122,162,255,.12),transparent 55%)}
+  .logo{display:flex;align-items:center;gap:12px;font-weight:700;font-size:1.05rem}
+  .dot{width:11px;height:11px;border-radius:50%;background:var(--accent);
+    box-shadow:0 0 0 4px rgba(94,200,168,.18)}
+  .htitle{font-size:clamp(2.1rem,5.4vw,3.5rem);margin:26px 0 12px;font-weight:720;
+    letter-spacing:-.02em;line-height:1.05}
+  .htitle b{color:var(--accent)}
+  .hsub{font-size:1.2rem;color:#c4cfe6;max-width:720px}
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:24px}
+  .badge{font-family:var(--mono);font-size:.74rem;color:var(--muted);
+    background:var(--panel);border:1px solid var(--line);border-radius:999px;
+    padding:5px 12px}
+  .badge b{color:var(--accent)}
+
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(200px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px}
+  .stat{grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+  .stat .card{text-align:left}
+  .num{font-size:1.9rem;font-weight:700;color:var(--accent);letter-spacing:-.02em;
+    font-family:var(--mono)}
+  .num.blue{color:var(--accent2)}
+  .cap{font-size:.82rem;color:var(--dim);margin-top:4px}
+
+  ul{color:var(--muted);padding-left:20px;margin:10px 0}
+  li{margin:6px 0}
+  b.k{color:#dce4f5;font-weight:600}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:.92rem;
+    display:block;overflow-x:auto}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);
+    vertical-align:top}
+  th{color:var(--dim);font-weight:600;font-size:.78rem;text-transform:uppercase;
+    letter-spacing:.05em;white-space:nowrap}
+  td{color:var(--muted)}
+  td b{color:#dce4f5;font-weight:600}
+  .mono{font-family:var(--mono);font-size:.85rem}
+
+  .callout{background:linear-gradient(180deg,var(--panel2),var(--panel));
+    border:1px solid var(--line);border-left:3px solid var(--accent);
+    border-radius:10px;padding:16px 18px;margin:18px 0}
+  .callout.warn{border-left-color:var(--warn)}
+  .callout .t{font-weight:650;color:#e6ebf5;margin-bottom:4px}
+
+  figure{margin:18px 0;background:var(--panel);border:1px solid var(--line);
+    border-radius:12px;padding:14px;overflow-x:auto}
+  figcaption{color:var(--dim);font-size:.8rem;margin-top:8px;text-align:center}
+  svg{display:block;margin:0 auto;max-width:100%;height:auto}
+
+  .steps{counter-reset:s;list-style:none;padding:0}
+  .steps li{position:relative;padding:12px 12px 12px 52px;background:var(--panel);
+    border:1px solid var(--line);border-radius:10px;margin:10px 0;color:var(--muted)}
+  .steps li::before{counter-increment:s;content:counter(s);position:absolute;
+    left:14px;top:12px;width:26px;height:26px;border-radius:50%;
+    background:rgba(94,200,168,.14);color:var(--accent);font-family:var(--mono);
+    font-weight:700;display:grid;place-items:center;font-size:.85rem}
+  .steps li b{color:#dce4f5}
+
+  .pill{font-family:var(--mono);font-size:.72rem;padding:2px 8px;border-radius:999px;
+    border:1px solid var(--line)}
+  .ok{color:var(--accent);border-color:rgba(94,200,168,.4)}
+  .plan{color:var(--dim)}
+
+  footer{border-top:1px solid var(--line);padding:34px 0 60px;color:var(--dim);
+    font-size:.85rem}
+  footer a{color:var(--muted)}
+  .tag{color:var(--dim);font-family:var(--mono);font-size:.78rem}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="logo"><span class="dot"></span> RapidNative Cloud
+      <span style="flex:1"></span>
+      <a href="docs/" style="font-weight:500;font-size:.9rem">Docs</a>
+      <a href="https://github.com/RapidNative/orchd" style="font-weight:500;font-size:.9rem">GitHub</a>
+    </div>
+    <div class="htitle">One orchestrator,<br><b>two products</b>, one codebase</div>
+    <p class="hsub">A multi-tenant workload orchestrator that powers both
+      <b style="color:#e6ebf5">tinbase-cloud</b> (hosted, Supabase-compatible
+      backends) and <b style="color:#e6ebf5">RapidNative dev environments</b>
+      (per-project runners). Both are just workloads: containers it provisions,
+      routes by subdomain, isolates with gVisor, and scales to zero when idle.</p>
+    <div class="badges">
+      <span class="badge">Powers: <b>tinbase-cloud + RapidNative</b></span>
+      <span class="badge">Isolation: <b>gVisor</b></span>
+      <span class="badge">Wake: <b>~0.9 s</b></span>
+      <span class="badge">Idle RAM: <b>0</b></span>
+      <span class="badge">Control plane: <b>Go</b></span>
+    </div>
+  </div>
+</header>
+
+<main class="wrap">
+
+  <section style="border-top:none">
+    <p class="eyebrow">What it is</p>
+    <h2>One substrate, two products</h2>
+    <p class="lead">Both products need the same thing: run many small, per-tenant
+      workloads cheaply, give each a subdomain, wake it fast, sleep it when idle,
+      and isolate it well enough to run untrusted user code. So it is one
+      orchestrator with a generic <code>Workload</code> primitive, not two.</p>
+    <div class="grid cards" style="margin-top:16px">
+      <div class="card">
+        <h3 style="margin-top:0">tinbase-cloud</h3>
+        <p>Hosted, Supabase-compatible backends. <a href="https://tinbase.dev">tinbase</a>
+          speaks the Supabase wire protocol, so <code>@supabase/supabase-js</code>
+          works unchanged, but it is one ~66 MB process instead of a twelve-container
+          stack. Coupled one-per-project like Supabase Cloud, at a fraction of the
+          footprint. That density is the cost advantage.</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">RapidNative dev environments</h3>
+        <p>The per-project runners behind <a href="https://rapidnative.com">RapidNative</a>:
+          a web/expo runner, a web/react runner, a dev tinbase, an api server, each
+          on its own subdomain. They run untrusted user code and mostly sit idle,
+          which is exactly what gVisor isolation and scale-to-zero are for.</p>
+      </div>
+    </div>
+    <p style="margin-top:16px">The only difference between the two is the image and
+      the routing. Everything else, provisioning, subdomains, waking, sleeping,
+      isolation, is shared.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Architecture</p>
+    <h2>Control plane, gateway, data plane</h2>
+    <figure>
+      <svg viewBox="0 0 900 500" role="img" aria-label="tinbase-cloud architecture diagram">
+        <defs>
+          <marker id="arw" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0,0 L9,4.5 L0,9 z" fill="#4a5878"/>
+          </marker>
+          <style>
+            .lbl{fill:#e6ebf5;font:600 14px system-ui}
+            .sub{fill:#9aa7c0;font:12px ui-monospace,monospace}
+            .edge{stroke:#4a5878;stroke-width:1.6;fill:none;marker-end:url(#arw)}
+            .zone{fill:#0e1422;stroke:#232c42;stroke-width:1;stroke-dasharray:4 4;rx:12}
+            .ztext{fill:#6b7896;font:600 11px ui-monospace,monospace;letter-spacing:1px}
+          </style>
+        </defs>
+
+        <!-- client -->
+        <rect x="330" y="18" width="240" height="46" rx="10" fill="#111624" stroke="#2c3958"/>
+        <text x="450" y="40" text-anchor="middle" class="lbl">supabase-js / browser</text>
+        <text x="450" y="56" text-anchor="middle" class="sub">*.cloud.rapidnative.com</text>
+
+        <!-- cloudflare -->
+        <rect x="335" y="92" width="230" height="40" rx="10" fill="#111624" stroke="#2c3958"/>
+        <text x="450" y="117" text-anchor="middle" class="sub">Cloudflare edge TLS</text>
+
+        <!-- gateway -->
+        <rect x="315" y="160" width="270" height="58" rx="10" fill="#14212b" stroke="#3a6f5f"/>
+        <text x="450" y="184" text-anchor="middle" class="lbl">Gateway  ·  :8081</text>
+        <text x="450" y="203" text-anchor="middle" class="sub">host to route to workload, wake, proxy</text>
+
+        <!-- control plane API + store -->
+        <rect x="650" y="160" width="220" height="58" rx="10" fill="#111624" stroke="#2c3958"/>
+        <text x="760" y="184" text-anchor="middle" class="lbl">Control API  ·  :8080</text>
+        <text x="760" y="203" text-anchor="middle" class="sub">provision · keys · lifecycle</text>
+        <rect x="675" y="250" width="170" height="40" rx="10" fill="#111624" stroke="#2c3958"/>
+        <text x="760" y="275" text-anchor="middle" class="sub">store (projects/…)</text>
+
+        <!-- data plane zone -->
+        <rect x="30" y="300" width="840" height="120" class="zone"/>
+        <text x="46" y="322" class="ztext">DATA PLANE · one tinbase instance per workload · scale-to-zero</text>
+
+        <g>
+          <rect x="60" y="336" width="150" height="64" rx="10" fill="#161d2e" stroke="#2c3958"/>
+          <text x="135" y="362" text-anchor="middle" class="lbl">tinbase</text>
+          <text x="135" y="380" text-anchor="middle" class="sub">+ volume</text>
+        </g>
+        <g>
+          <rect x="245" y="336" width="150" height="64" rx="10" fill="#161d2e" stroke="#2c3958"/>
+          <text x="320" y="362" text-anchor="middle" class="lbl">tinbase</text>
+          <text x="320" y="380" text-anchor="middle" class="sub">+ volume</text>
+        </g>
+        <g>
+          <rect x="430" y="336" width="150" height="64" rx="10" fill="#161d2e" stroke="#2c3958"/>
+          <text x="505" y="362" text-anchor="middle" class="lbl">tinbase</text>
+          <text x="505" y="380" text-anchor="middle" class="sub">+ volume</text>
+        </g>
+        <g>
+          <rect x="615" y="336" width="150" height="64" rx="10" fill="#0f1626" stroke="#232c42" stroke-dasharray="4 4"/>
+          <text x="690" y="362" text-anchor="middle" class="sub">suspended</text>
+          <text x="690" y="380" text-anchor="middle" class="sub">(0 RAM)</text>
+        </g>
+
+        <!-- runtime driver band -->
+        <rect x="30" y="440" width="840" height="42" rx="10" fill="#111624" stroke="#2c3958"/>
+        <text x="450" y="466" text-anchor="middle" class="sub">Runtime driver: Local (dev) · Docker + gVisor (today) · Firecracker (planned)</text>
+
+        <!-- edges -->
+        <path class="edge" d="M450,64 L450,90"/>
+        <path class="edge" d="M450,132 L450,158"/>
+        <path class="edge" d="M585,189 L648,189"/>
+        <path class="edge" d="M760,218 L760,248"/>
+        <path class="edge" d="M420,218 L200,334"/>
+        <path class="edge" d="M450,218 L360,334"/>
+        <path class="edge" d="M480,218 L520,334"/>
+      </svg>
+      <figcaption>orchd is one Go daemon running the control API and the gateway; the data plane is a fleet of tinbase instances.</figcaption>
+    </figure>
+    <p>Everything above the runtime driver is substrate-agnostic. The control
+      plane never talks to a VMM directly, it talks to a <code>Runtime</code>
+      interface, so the substrate is swappable without touching anything above it.</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Data model</p>
+    <h2>Project &rarr; Workload &rarr; Route</h2>
+    <div class="grid cards">
+      <div class="card"><h3 style="margin-top:0">Project</h3>
+        <p>A logical grouping / tenant. Ownership and, later, billing live here.</p></div>
+      <div class="card"><h3 style="margin-top:0">Workload</h3>
+        <p>The routable, independently-scheduled, scale-to-zero unit. The runtime
+          lifecycle is keyed by workload id.</p></div>
+      <div class="card"><h3 style="margin-top:0">Route</h3>
+        <p>A hostname mapped to a workload via an exact-match route table.
+          Convention subdomains and custom domains resolve the same way; a
+          workload can have many routes.</p></div>
+    </div>
+    <p>A plain tinbase project is one project, one primary workload, one route
+      <code>&lt;ref&gt;.&lt;base&gt;</code>. A RapidNative project is one project
+      with many workloads, each its own isolated instance on its own subdomain:</p>
+    <table>
+      <tr><th>Workload</th><th>Route</th><th>Instance</th></tr>
+      <tr><td><b>app</b> (expo web runner)</td><td class="mono">&lt;id&gt;-app.rapidnative.app</td><td>isolated</td></tr>
+      <tr><td><b>web</b> (react web runner)</td><td class="mono">&lt;id&gt;-web.rapidnative.app</td><td>isolated</td></tr>
+      <tr><td><b>tinbase</b> (dev backend)</td><td class="mono">&lt;id&gt;-tinbase.rapidnative.app</td><td>isolated</td></tr>
+      <tr><td><b>api</b> (api server)</td><td class="mono">&lt;id&gt;-api.rapidnative.app</td><td>isolated</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <p class="eyebrow">Substrate</p>
+    <h2>The runtime driver seam</h2>
+    <table>
+      <tr><th>Driver</th><th>Runs</th><th>Isolation</th><th>Where</th><th></th></tr>
+      <tr><td><b>LocalDriver</b></td><td>tinbase as an OS process</td><td>process</td><td>macOS dev</td><td><span class="pill ok">live</span></td></tr>
+      <tr><td><b>DockerDriver</b></td><td>tinbase as a container</td><td>gVisor (<span class="mono">runsc</span>), VM-grade, no KVM</td><td>Linux box</td><td><span class="pill ok">live</span></td></tr>
+      <tr><td><b>FirecrackerDriver</b></td><td>tinbase in a microVM</td><td>microVM + jailer, snapshot/restore</td><td>bare metal</td><td><span class="pill plan">planned</span></td></tr>
+    </table>
+    <div class="callout">
+      <div class="t">Why gVisor</div>
+      It gives VM-grade isolation for untrusted code <b>without nested
+      virtualization</b>, so it runs on a plain Cloud VM. A tenant container runs
+      a gVisor userspace kernel, not the host kernel. Firecracker and Kata need
+      <code>/dev/kvm</code> and therefore a dedicated bare-metal box, which is the
+      future speed tier: per-project memory snapshot and sub-second resume.
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Lifecycle</p>
+    <h2>Scale to zero, wake on request</h2>
+    <ol class="steps">
+      <li><b>Provision.</b> The control plane mints a JWT secret and anon/service keys, allocates a volume, assigns a route, and boots the instance.</li>
+      <li><b>Serve.</b> Requests to the workload's hostname are proxied straight through to the running instance.</li>
+      <li><b>Idle.</b> After an idle timeout the instance is suspended (its container stopped): memory is freed, the volume stays at rest.</li>
+      <li><b>Wake.</b> The next request hits the gateway, which resumes the instance, then proxies. Data is exactly where it was.</li>
+    </ol>
+    <div class="grid stat" style="margin-top:18px">
+      <div class="card"><div class="num">2.8s</div><div class="cap">cold provision, incl. initdb, under gVisor</div></div>
+      <div class="card"><div class="num blue">0.9s</div><div class="cap">wake from scale-to-zero</div></div>
+      <div class="card"><div class="num">75-85<span style="font-size:1rem"> MB</span></div><div class="cap">RAM per running instance</div></div>
+      <div class="card"><div class="num">0</div><div class="cap">RAM per idle instance</div></div>
+    </div>
+    <p class="tag">Measured on the deployment box (Docker + gVisor, native Postgres engine).</p>
+  </section>
+
+  <section>
+    <p class="eyebrow">Scale</p>
+    <h2>Cost tracks warm projects, not total projects</h2>
+    <div class="grid cards">
+      <div class="card">
+        <h3 style="margin-top:0">Disk</h3>
+        <p>The workload image (cache baked in) is content-addressed and layer-shared
+          by Docker's overlay2, so it is stored <b class="k">once</b> no matter how
+          many containers run it. Per-project disk is just the data volume
+          (~40 MB fresh). Long-idle data can be tiered to object storage and
+          restored on wake.</p>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0">Memory</h3>
+        <p>Scale-to-zero means an idle project holds a stopped container and 0 RAM.
+          Runtime memory tracks <b class="k">concurrently warm</b> instances.
+          Per-container cgroup limits keep packing predictable; add nodes when the
+          concurrency ceiling is hit.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <p class="eyebrow">Control plane</p>
+    <h2>Service API</h2>
+    <table>
+      <tr><th>Method</th><th>Path</th><th>Purpose</th></tr>
+      <tr><td class="mono">POST</td><td class="mono">/v1/projects</td><td>create a project + workloads (empty body: one primary tinbase workload)</td></tr>
+      <tr><td class="mono">GET</td><td class="mono">/v1/projects</td><td>list projects with their workloads</td></tr>
+      <tr><td class="mono">GET</td><td class="mono">/v1/projects/{id}</td><td>project detail: workloads, routes, endpoints, keys</td></tr>
+      <tr><td class="mono">DELETE</td><td class="mono">/v1/projects/{id}</td><td>stop and remove a project and all its workloads/routes</td></tr>
+      <tr><td class="mono">POST</td><td class="mono">/v1/projects/{id}/workloads</td><td>add a workload</td></tr>
+      <tr><td class="mono">GET</td><td class="mono">/v1/workloads/{id}</td><td>get one workload</td></tr>
+      <tr><td class="mono">DELETE</td><td class="mono">/v1/workloads/{id}</td><td>stop and remove one workload</td></tr>
+      <tr><td class="mono">POST</td><td class="mono">/v1/workloads/{id}/routes</td><td>attach an extra hostname to a workload</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <p class="eyebrow">Durability</p>
+    <h2>HA is a tier, not a baseline</h2>
+    <p>HA, rock-bottom cost, and scale-to-zero cannot all be true for the same
+      tier, so durability is tiered, as Supabase itself does it.</p>
+    <table>
+      <tr><th>Tier</th><th>Compute</th><th>Durability</th><th>Audience</th></tr>
+      <tr><td><b>Free / preview</b></td><td>scale-to-zero, densely packed</td><td>nightly + WAL to object storage</td><td>RapidNative apps, hobby</td></tr>
+      <tr><td><b>Pro</b></td><td>always-on, kept warm</td><td>PITR</td><td>production apps</td></tr>
+      <tr><td><b>Team / Enterprise</b></td><td>primary + standby, auto-failover</td><td>true HA + read replicas</td><td>the HA-replacement tier</td></tr>
+    </table>
+  </section>
+
+  <section>
+    <p class="eyebrow">Roadmap</p>
+    <h2>Where it is and where it is going</h2>
+    <table>
+      <tr><th>Phase</th><th>Scope</th><th>Status</th></tr>
+      <tr><td>0</td><td>Control loop: provision, gateway, scale-to-zero, wake (LocalDriver)</td><td><span class="pill ok">done</span></td></tr>
+      <tr><td>1.2</td><td>Multi-domain: Project &rarr; Workload &rarr; Route, route table</td><td><span class="pill ok">done</span></td></tr>
+      <tr><td>1.5</td><td>Docker + gVisor substrate on a Linux box</td><td><span class="pill ok">done</span></td></tr>
+      <tr><td>1.6</td><td>RapidNative runner images (expo, vite, hono api) + subroute (/w) routing + admin UI</td><td><span class="pill ok">done</span></td></tr>
+      <tr><td>1.7</td><td>API-key auth on the control plane</td><td><span class="pill ok">done</span></td></tr>
+      <tr><td>1</td><td>Connection pooling, backups, cgroup limits, wildcard subdomains + TLS</td><td><span class="pill plan">next</span></td></tr>
+      <tr><td>2</td><td>Firecracker driver on bare metal, snapshot resume</td><td><span class="pill plan">planned</span></td></tr>
+      <tr><td>3</td><td>Multi-node, one region; store on managed Postgres</td><td><span class="pill plan">planned</span></td></tr>
+      <tr><td>4</td><td>HA tier and multi-region: replication, failover, geo routing</td><td><span class="pill plan">planned</span></td></tr>
+    </table>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <div>RapidNative Cloud &middot; one orchestrator for <a href="https://tinbase.dev">tinbase-cloud</a> and <a href="https://rapidnative.com">RapidNative</a> dev environments</div>
+    <div class="tag" style="margin-top:8px">Generic Workload primitive, gVisor isolation, scale-to-zero. Early and evolving.</div>
+  </div>
+</footer>
+
+</body>
+</html>

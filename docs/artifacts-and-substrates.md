@@ -1,0 +1,330 @@
+---
+layout: default
+title: Artifacts and substrates
+---
+
+# Artifacts and substrates
+
+**Status:** design, not built. Decisions marked ✅ are settled; ❓ are open.
+
+## The model
+
+Two axes that are currently conflated in `Spec.TemplateSrc` + driver choice:
+
+- **Artifact** — where the bits come from: template dir, source tarball, warm
+  tarball (with `node_modules`), docker image, lifo snapshot.
+- **Substrate** — what executes them: host process, container, lifo sandbox
+  (Node), lifo sandbox (browser).
+
+Separating them is the whole design. An *image version* becomes one logical
+thing carrying N artifacts, and each driver declares which artifacts it can
+boot. `store.Image` already anticipates this (`Tarball` plus `Dockers`/`Registry`
+keyed by workspace); lifo becomes a third artifact kind, not a new concept.
+
+| Artifact | `node_modules` | Boots on | Built by |
+| --- | --- | --- | --- |
+| `tarball` | no | local, docker (build-on-boot) | tar of the working tree |
+| `deps` | yes | local, lifo | tar including `node_modules` |
+| `docker` | yes (in image) | docker | `docker build` per workspace |
+| `lifo` | yes | lifo (Node + browser) | `exportVfsSnapshot` |
+
+### Support matrix
+
+tinbase runs fine on lifo via its non-native engines — `--engine pgmem` (and
+wasm) need no native postgres. lifo's own bench proves the whole path:
+`bench/test-tinbase-cli.mjs` runs `npx tinbase --engine pgmem` in a sandbox and
+serves Supabase REST + Studio. orchd already plumbs this as `ORCHD_ENGINE`
+(`internal/runtime/local.go:33`), so a lifo artifact just needs the engine
+pinned in its profile:
+
+```jsonc
+{ "name": "db", "kind": "tinbase",
+  "profiles": { "lifo": { "engine": "pgmem" } } }
+```
+
+Artifact support is still declared **per workload** — some workloads may
+legitimately skip a kind — but no workload class is excluded by construction.
+
+## `orchd.json` schema
+
+Additive; existing templates keep working.
+
+```jsonc
+{
+  "name": "rapidnative",
+  "workloads": [{
+    "name": "mobile",
+    "kind": "node",
+    "dir": "mobile",
+    "install": ["npm", "install"],
+    "run": ["npx", "expo", "start", "--web", "--port", "$PORT"],
+
+    // ✅ Overrides keyed by ARTIFACT KIND. Merged over the base above.
+    "profiles": {
+      "lifo":   { "run": ["browser-metro", "--port", "$PORT"] },
+      "docker": { "run": ["npx", "expo", "start", "--web", "--port", "$PORT"] }
+    },
+
+    // Measured: Expo on lifo does not want node_modules; docker does.
+    "artifacts": ["docker", "lifo"]
+  }],
+
+  "artifacts": {
+    "tarball": { "exclude": ["node_modules", ".git", ".expo", "dist", "build"] },
+    "deps":    { "exclude": [".git"] },
+    // lifo + browser-metro reads no node_modules — 58 MB of dead weight.
+    "docker":  { "workdir": "/app" },
+    "lifo":    { "exclude": [".git"], "workdir": "/home/user/app" }
+  }
+}
+```
+
+**Resolution order:** workload base → artifact profile → instance override →
+per-project delta. Same precedence everywhere, one place to look.
+
+**Why artifact-kind and not environment** (✅ decided): the override exists
+because `browser-metro` is correct *when lifo is executing it* — that is a fact
+about the substrate, not a deployment choice. Keying on environment would make
+it a convention the caller must remember. If per-environment overrides are
+needed later, add them as a second, explicitly-selected layer.
+
+## Build pipeline
+
+One build, one installed tree, N artifacts. ✅ Requested kinds are per-build
+(`POST /v1/templates/{name}/build {"artifacts": ["docker","lifo"]}`), so a
+template can be built docker-only today and lifo tomorrow without an edit.
+
+1. **Materialize** template → scratch workdir.
+2. **Install** — the workload's `install`.
+3. **Pack** each requested artifact from that one tree, honouring its excludes.
+4. **Record** — one `store.Image` row, `Artifacts` map extended alongside the
+   existing `Tarball`/`Dockers`/`Registry`.
+
+### Measured: is the warm step worth it?
+
+Benchmarked on the lifo substrate against `@lifo-sh/core` (scripts:
+`bench-snapshots.mjs`, `bench-expo.mjs`). Three variants of the same app —
+**A cold** (no `node_modules`), **B deps** (`node_modules`, dev server never
+run), **C warm** (`node_modules` + dev server run once to prime caches).
+
+**Vite + React + supabase-js**
+
+| variant | snapshot | import | install on boot | dev ready | total |
+| --- | --- | --- | --- | --- | --- |
+| A cold | 0.01 MB | 3 ms | 3105 ms | 240 ms | **3348 ms** |
+| B deps | 6.17 MB | 138 ms | — | 227 ms | **366 ms** |
+| C warm | 7.06 MB | 179 ms | — | 214 ms | **394 ms** |
+
+**Expo, served by `browser-metro`** (the `profiles.lifo` command)
+
+| variant | snapshot | import | port bound | bundle served | bundle |
+| --- | --- | --- | --- | --- | --- |
+| A cold | 0.01 MB | 2 ms | 957 ms | 2 ms | 2.00 MB |
+| B deps | 58.01 MB | 896 ms | 723 ms | 1 ms | 2.00 MB |
+| C warm | 58.01 MB | 900 ms | 702 ms | 2 ms | 2.00 MB |
+
+Three conclusions, one of which reverses an earlier decision:
+
+1. **Priming buys nothing.** C is never faster than B — it is 28 ms *slower*
+   for Vite (a bigger snapshot to import) and identical for Expo, where the
+   warm and deps snapshots are byte-for-byte the same size: whatever
+   `browser-metro` caches does not land in the VFS. ❌ **Drop the `warm`
+   command from the schema.** Install-and-pack is the whole win.
+2. **For Vite, `node_modules` is the entire story** — 9× (3348 → 366 ms). Ship
+   deps in the artifact.
+3. **For Expo on lifo, `node_modules` is dead weight**: 58 MB that makes boot
+   *slower* (959 ms cold vs 1620 ms deps) for a byte-identical bundle, because
+   `browser-metro` fetches npm packages pre-bundled from a hosted server and
+   never reads `node_modules`.
+
+So the right artifact is a property of **(workload × substrate)**, which is
+exactly what artifact-keyed profiles express. The `mobile` workload wants a
+source-only snapshot for lifo and a deps-bearing image for docker — one
+template, two pack rules.
+
+**Caveats.** These are the lifo substrate only; docker and the local driver are
+unmeasured. The apps are small — the real rapidnative mobile template is 1251
+packages, so cold install there costs far more than 3.1 s (it was ~60 s on the
+host). And the Expo cold path depends on `esm.reactnative.run` being reachable
+and warm; an offline or cold-cache boot would look different. Worth re-running
+against the real template before locking pack rules in.
+
+### What the image model does today
+
+`BuildImage` (`internal/manager/image.go:76`) produces exactly two kinds:
+
+1. **tarball, always** — `template.Bundle(base, man.BackupExclude, f)`. Because
+   rapidnative's `backup_exclude` drops `node_modules`, this is already the
+   *cold* artifact from the bench above.
+2. **docker tags per node/static workspace**, best-effort; skipped when the
+   docker CLI is missing.
+
+Push and import understand docker only (`ImportSpec.Dockers`). `store.Image`
+has `Tarball string` plus `Dockers`/`Registry` maps — no third slot. So: **no,
+there are no lifo images today.**
+
+### …but the existing tarball already IS a lifo artifact
+
+Measured, not assumed (`bench/image-to-lifo.mjs`). orchd's `base.tar.gz` is a
+plain gzipped tar with relative paths and no `lifo-snapshot.json`;
+`importVfsSnapshot` accepts it, returns `meta=null`, and lands the tree at the
+VFS root (`/mobile`, `/api`, `/orchd.json`).
+
+Full flow on the **real** rapidnative mobile workspace (expo-router, nativewind,
+reanimated, gifted-charts):
+
+| step | time |
+| --- | --- |
+| sandbox create | 3 ms |
+| import 24.3 KB orchd image | 5 ms |
+| `browser-metro /mobile --port 8082` → port bound | 21857 ms |
+| `GET /index.bundle` → 200, 7.04 MB | 5 ms |
+| **total, image → serving bundle** | **21.9 s** |
+
+No `npm install`, no lifo-specific artifact, and `orchd.json` is read straight
+out of the VFS — exactly the `lifo-pkg-orchd` contract. The 21.9 s is dominated
+by browser-metro's first bundle (fetching pre-bundled deps from the hosted
+server); a warm CDN cache should cut it sharply, and it already compares well
+against ~60 s of `npm install` for that workspace on the host.
+
+**Consequence for the design:** a distinct `lifo` artifact kind only earns its
+place for **deps-bearing** snapshots — the Vite-style workloads that run a real
+dev server in-VM and need `node_modules` (9× there). For the browser-metro path
+the cold tarball is the artifact. What actually has to change in the image model
+is smaller than it first looked:
+
+- `store.Image`: an artifacts map (or a `Lifo` field) **only if** deps snapshots
+  ship; the cold path needs nothing.
+- `ImportSpec`: carry non-docker artifacts so cross-instance import works for
+  lifo — the `/built-images/{name}/{version}/bundle` download URL is already the
+  mechanism.
+- Build API: accept the requested-kinds list.
+
+Two small asks land on the lifo side: an import **path prefix** (so a tree can
+land under `/home/user/app` instead of `/`), and a non-interactive way to
+snapshot a directory — today `lifo snapshot save` only snapshots a *running
+daemon*.
+
+## Inversion of control: how a workload boots
+
+Today `Runtime` drivers each assume their own source. Introduce an explicit
+source on the spec:
+
+```go
+type Source struct {
+    Kind string // "template" | "tarball" | "warm" | "docker" | "lifo"
+    Ref  string // template name, image ID, registry ref, snapshot path
+}
+```
+
+- `Runtime` gains `Supports(Source) bool`; the manager picks a driver by
+  (region, source) instead of a global `ORCHD_DRIVER`.
+- Materialization becomes a **hydrator** step, already half-present as
+  `template.MaterializeFromTar`.
+- New `LifoDriver`: hydrate nothing (the snapshot *is* the filesystem), hand off
+  to the lifo runner, wait for the port, return the addr. Suspend/stop kill the
+  runner — same contract as the local driver, which after the process-group work
+  is already the right shape.
+
+## `lifo-pkg-orchd` (✅ chosen approach)
+
+An `orchd` command living in the lifo repo, reading `orchd.json` from cwd and
+running the right workload. The config travels *inside* the snapshot, so orchd
+passes almost nothing: which workload, which port.
+
+```
+orchd run --workload mobile --port 8081
+orchd run --workload mobile --port 8081 --profile lifo   # default: lifo
+```
+
+This is the sanctioned extension shape — the convention is real and enforced in
+code: `commands/system/lifo.ts:62` forces `lifo-pkg-` prefixes, and
+`npm create lifo-pkg <name>` scaffolds it
+(`packages/create-lifo-pkg/src/templates.ts:23`). A package declares:
+
+```jsonc
+"lifo": { "commands": { "orchd": "./dist/index.js" } }
+```
+
+and default-exports `(ctx: CommandContext, lifo: LifoAPI) => Promise<number>`
+(`pkg/lifo-runtime.ts:264`).
+
+### The constraint that shapes the implementation
+
+A package command loaded through `createLifoCommand` receives **only
+`(ctx, lifo)` — no kernel handle**, so it cannot touch `kernel.portRegistry`
+directly (`pkg/lifo-runtime.ts:144`). Two consequences:
+
+1. To bind a port from inside the package, go through the node-compat `http`
+   module, which is wired to the port registry for you
+   (`node-compat/http.ts:511`). For a dev server this means the command runs the
+   underlying tool (e.g. `browser-metro`, registered at `Sandbox.ts:182`) rather
+   than binding sockets itself.
+2. Stay alive the way `browser-metro` does: register, then await `ctx.signal`
+   abort, then tear down (`commands/system/browser-metro.ts:487-496`). There is
+   no POSIX spawn on `CommandContext`; a long-running command *is* a promise
+   that doesn't resolve.
+
+Host reaches it via `sandbox.waitForPort(port, {timeout})` then
+`sandbox.fetch()` / `sandbox.connect()` in-browser, or on a Node host
+`exposePort(kernel.portRegistry, { vmPort, hostPort, http })` →
+`{ hostPort, url, close() }` (`kernel/network/expose.ts:91`). **`exposePort`
+takes an injected `node:http`** — that is how orchd's LifoDriver gets a real TCP
+port to reverse-proxy to.
+
+Suggested split so browser and box share one implementation:
+
+- `lifo-pkg-orchd` — the `orchd` command (parses `orchd.json`, resolves the
+  profile, runs the workload). Works in the playground too.
+- a thin `lifo serve --snapshot X --workload Y --port N` in `lifo-sh` — boots a
+  sandbox, imports the snapshot, runs `orchd run`, calls `exposePort`. This is
+  what orchd's LifoDriver shells out to.
+
+Optionally ship a systemd unit so `systemctl enable orchd` survives a restore
+(`kernel/ServiceManager.ts:352`) — note `ExecStart` has **no quoting support**
+(`unit-parser.ts`, split on whitespace), so keep the command simple.
+
+### Upstream bug spotted
+
+`lifo snapshot list` filters `.zip` while saves write `.tar.gz`
+(`packages/cli/src/snapshot.ts:145`), so it always reports "No snapshots found."
+
+## Distribution across instances
+
+Docker already has registry push + import. Tarballs and lifo snapshots are just
+files, so they share one path: content-addressed blob store + a download URL +
+the existing import flow, with the artifact list in the image record so an
+import is self-describing (as `ImageWorkload` already is). An Expo lifo snapshot
+is ~90 MB (4.5 MB for Vite/React, per lifo's own ROADMAP), so dedup and
+retention matter — see open questions.
+
+## Phasing
+
+1. **Schema + build** — `profiles`, `warm`, per-workload `artifacts`; build
+   produces `tarball` + `warm`. No new substrate. Ship value immediately: warm
+   tarballs kill the `npm install` on every provision.
+2. **Source/driver split** — `Source` on the spec, `Supports()` on `Runtime`,
+   manager picks by source. Pure refactor, covered by existing tests.
+3. **`lifo-pkg-orchd` + `lifo serve`** — in the lifo repo, developed against a
+   real Expo snapshot.
+4. **`LifoDriver` in orchd** — shells out to `lifo serve`, wires `exposePort` to
+   the gateway. Local domain mode is the natural test bed: it already routes by
+   host with no port mapping.
+5. **Distribution** — blob store, URLs, cross-instance import for the new kinds.
+
+## Open questions
+
+1. ~~`db` on lifo~~ — **answered**: `--engine pgmem`/wasm, proven by lifo's own
+   bench. Pin the engine in the lifo profile.
+2. ~~Warm-cache payoff~~ — **answered by measurement**: no payoff. Drop the warm
+   step; pack after install.
+3. **Snapshot retention.** 58 MB per Expo deps-snapshot (0.01 MB if lifo skips
+   `node_modules`, which the numbers say it should). Keep N per template, GC by
+   age, or content-address and dedup `node_modules` across versions?
+4. **Offline/cold-cache behaviour.** The Expo cold path leans on
+   `esm.reactnative.run`. Is a self-hosted pre-bundle mirror needed before this
+   is a production substrate?
+5. **Browser as a first-class substrate.** Real target now, or a consumer of the
+   same artifacts outside orchd's lifecycle?
+6. **Re-measure on the real template** (1251 packages) and on docker/local
+   before locking pack rules.
