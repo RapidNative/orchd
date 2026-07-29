@@ -7,11 +7,11 @@ import { Related } from '@/components/related'
 
 export const metadata: Metadata = {
   title: {
-    default: 'ORCHD — a workload orchestrator for one box',
+    default: 'ORCHD — the open-source, self-hosted Fly.io alternative',
     template: '%s · ORCHD',
   },
   description:
-    'ORCHD is a single Go daemon that provisions per-tenant workloads, routes them by hostname, isolates them, sleeps them when idle and wakes them on the next request.',
+    'The open-source, self-hosted alternative to Fly.io. ORCHD is a single Go daemon that provisions per-tenant workloads, routes them by hostname, isolates them, sleeps them when idle and wakes them on the next request.',
 }
 
 // Set the theme class before first paint so there is no flash. Kept inline and

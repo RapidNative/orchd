@@ -16,7 +16,7 @@ export default function Home() {
         />
         <div className="relative mx-auto max-w-6xl px-5 py-20 lg:py-28">
           <p className="font-mono text-[0.7rem] tracking-[0.18em] text-accent uppercase">
-            multi-tenant workload orchestrator
+            the open-source, self-hosted Fly.io alternative
           </p>
           <h1 className="mt-5 max-w-3xl text-4xl leading-[1.05] font-bold tracking-tight text-ink sm:text-5xl lg:text-6xl">
             Run a thousand small apps
@@ -24,6 +24,7 @@ export default function Home() {
             on <span className="text-accent">one box.</span>
           </h1>
           <p className="mt-6 max-w-2xl text-lg text-muted">
+            Hostname routing, per-tenant isolation and scale-to-zero, without the platform bill.
             ORCHD is a single Go daemon that provisions per-tenant workloads, gives each one a
             hostname, caps and isolates it, puts it to sleep when nobody is using it, and wakes it on
             the next request in about a second. No cluster, no control-plane sprawl, no YAML.
