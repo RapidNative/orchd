@@ -284,3 +284,7 @@ family of open-source tools:
 | [ORCHD](https://rapidnative.github.io/orchd) | this repo — a multi-tenant workload orchestrator |
 
 See them all on [rapidnative.com/open-source](https://www.rapidnative.com/open-source).
+
+## License
+
+[MIT](LICENSE).
