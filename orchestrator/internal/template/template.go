@@ -42,6 +42,28 @@ type Workload struct {
 	PortEnv string            `json:"port_env,omitempty"` // if set, the port is passed via this env var
 	Image   string            `json:"image,omitempty"`    // prod image tag (built from the template)
 	Env     map[string]string `json:"env,omitempty"`      // default env vars for this workload
+	// Primary marks the workload that owns the project's bare route
+	// (<ref>.<base>); every other workload gets <ref>-<name>.<base>. At most
+	// one workload may be primary. Absent everywhere = legacy behavior: the
+	// first tinbase workload is primary.
+	Primary bool `json:"primary,omitempty"`
+}
+
+// PrimaryName returns the manifest name of the workload that should own the
+// project's bare route: the one marked primary, else (legacy manifests) the
+// first tinbase workload, else "" (no primary — every route is named).
+func (m *Manifest) PrimaryName() string {
+	for _, w := range m.Workloads {
+		if w.Primary {
+			return w.Name
+		}
+	}
+	for _, w := range m.Workloads {
+		if w.Kind == "tinbase" {
+			return w.Name
+		}
+	}
+	return ""
 }
 
 // Load reads and validates <dir>/orchd.json.
@@ -58,9 +80,15 @@ func Load(dir string) (*Manifest, error) {
 		return nil, fmt.Errorf("%s: no workloads", FileName)
 	}
 	seen := map[string]bool{}
+	primaries := 0
 	for i, w := range m.Workloads {
 		if w.Name == "" {
 			return nil, fmt.Errorf("%s: workload %d has no name", FileName, i)
+		}
+		if w.Primary {
+			if primaries++; primaries > 1 {
+				return nil, fmt.Errorf("%s: more than one workload marked primary", FileName)
+			}
 		}
 		if seen[w.Name] {
 			return nil, fmt.Errorf("%s: duplicate workload name %q", FileName, w.Name)

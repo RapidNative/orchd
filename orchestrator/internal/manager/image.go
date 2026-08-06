@@ -124,6 +124,15 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 				continue
 			}
 			im.Dockers[w.Name] = tag
+			// Extract the image's installed node_modules once per version. Every
+			// workload of this image bind-mounts it read-only — without this,
+			// docker's named-volume initialization copies multi-GB of small
+			// files per workload on first boot (observed: 10+ minute boots).
+			if w.Kind == "node" {
+				if err := m.extractImageDeps(ctx, tag, m.imageDepsDir(tmpl, version, w.Name)); err != nil {
+					log.Printf("BuildImage %s@%s: deps extract %q skipped: %v", tmpl, version, w.Name, err)
+				}
+			}
 		}
 	} else {
 		log.Printf("BuildImage %s@%s: docker CLI not found, tarball-only image", tmpl, version)
@@ -147,9 +156,41 @@ func imageWorkloads(man *template.Manifest) []store.ImageWorkload {
 			Workspace: w.Name,
 			Image:     w.Image,
 			Env:       w.Env,
+			Primary:   w.Primary,
+			Port:      workspaceImagePort(w),
+			Dir:       w.Dir,
 		})
 	}
 	return out
+}
+
+// workspaceImagePort is the container port a synthesized workspace image
+// listens on (see dockerfileFor): nginx serves static on 80, node runs with
+// PORT=8080. tinbase keeps the driver default (54321).
+func workspaceImagePort(w template.Workload) int {
+	switch w.Kind {
+	case "static":
+		return 80
+	case "node":
+		return 8080
+	}
+	return 0
+}
+
+// imagePrimaryName mirrors Manifest.PrimaryName for a frozen image shape:
+// the workload marked primary, else (legacy) the first tinbase workload.
+func imagePrimaryName(shape []store.ImageWorkload) string {
+	for _, w := range shape {
+		if w.Primary {
+			return w.Name
+		}
+	}
+	for _, w := range shape {
+		if w.Kind == "tinbase" {
+			return w.Name
+		}
+	}
+	return ""
 }
 
 // PushImage re-tags each of an image's local docker tags under the configured
@@ -242,6 +283,39 @@ func (m *Manager) ImportImage(spec ImportSpec) (*store.Image, error) {
 	}
 	m.emit("image.imported", "", "", store.ImageID(spec.Template, spec.Version))
 	return im, nil
+}
+
+// imageDepsDir is where a workspace image's node_modules is extracted for
+// shared, read-only mounting into every workload booted from that image:
+//
+//	<DataRoot>/images/<template>/<version>/deps/<workspace>
+func (m *Manager) imageDepsDir(tmpl, version, workspace string) string {
+	return filepath.Join(m.imagesDir(), tmpl, version, "deps", workspace)
+}
+
+// extractImageDeps copies /app/node_modules out of a built workspace image
+// into destDir (atomically via a temp dir). The tree is immutable per image
+// version, so one extraction serves every workload.
+func (m *Manager) extractImageDeps(ctx context.Context, tag, destDir string) error {
+	if _, err := os.Stat(destDir); err == nil {
+		return nil // already extracted
+	}
+	tmp := destDir + ".tmp"
+	_ = os.RemoveAll(tmp)
+	if err := os.MkdirAll(filepath.Dir(destDir), 0o755); err != nil {
+		return err
+	}
+	cid, err := exec.CommandContext(ctx, "docker", "create", tag).Output()
+	if err != nil {
+		return fmt.Errorf("docker create: %w", err)
+	}
+	id := strings.TrimSpace(string(cid))
+	defer exec.Command("docker", "rm", "-f", id).Run()
+	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/app/node_modules", tmp).CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("docker cp: %v: %s", err, tailStr(string(out), 200))
+	}
+	return os.Rename(tmp, destDir)
 }
 
 // dockerBuildWorkspace generates a Dockerfile for one workspace and builds it,

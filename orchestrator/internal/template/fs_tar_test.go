@@ -30,10 +30,21 @@ func TestBundleThenMaterializeFromTar(t *testing.T) {
 	f.Close()
 
 	dest := t.TempDir()
-	delta := map[string]string{"api/index.js": "console.log('delta')"}
+	// One text overlay and one binary overlay (invalid UTF-8) — binary deltas
+	// must survive byte-identical.
+	binary := []byte{0xFF, 0xFE, 0x00, 0x89, 'P', 'N', 'G', 0x0D}
+	delta := map[string][]byte{
+		"api/index.js":   []byte("console.log('delta')"),
+		"assets/img.png": binary,
+	}
 	deleted := []string{"README.md"}
 	if err := MaterializeFromTar(tarPath, dest, delta, deleted); err != nil {
 		t.Fatal(err)
+	}
+
+	// Binary delta round-trips byte-identical.
+	if got, err := os.ReadFile(filepath.Join(dest, "assets", "img.png")); err != nil || !bytes.Equal(got, binary) {
+		t.Fatalf("binary delta corrupted: %v %v", got, err)
 	}
 
 	// Delta wins over the base file.
