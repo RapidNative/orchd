@@ -2,7 +2,7 @@
 # TimeoutStopSec bounds Caddy's "eternal" shutdown grace so restarts do not hang.
 # HOME gives it a stable cert/ACME storage dir (/root/.local/share/caddy).
 [Unit]
-Description=Caddy (tinbase-cloud front door)
+Description=Caddy (orchd front door)
 After=network.target
 
 [Service]

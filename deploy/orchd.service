@@ -1,28 +1,30 @@
 # /etc/systemd/system/orchd.service
 [Unit]
-Description=tinbase-cloud orchestrator
+Description=orchd orchestrator
 After=docker.service
 Requires=docker.service
 
 [Service]
-WorkingDirectory=/opt/tinbase-cloud
+WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
-Environment=ORCHD_DATA_ROOT=/opt/tinbase-cloud/data
-Environment=ORCHD_STATE_SQLITE=/opt/tinbase-cloud/data/state/orchd.db
-Environment=ORCHD_IMAGE=tinbase:0.10.0
+Environment=ORCHD_DATA_ROOT=/opt/orchd/data
+Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
+Environment=ORCHD_IMAGE=tinbase:0.13.0
 Environment=ORCHD_DOCKER_RUNTIME=runsc
-Environment=ORCHD_IDLE_TIMEOUT=120s
-Environment=ORCHD_API_KEY_FILE=/opt/tinbase-cloud/secrets/admin.key
+Environment=ORCHD_IDLE_TIMEOUT=15m
+Environment=ORCHD_DEV_CPUS=4
+Environment=ORCHD_DEV_MEM_MB=4096
+Environment=ORCHD_API_KEY_FILE=/opt/orchd/secrets/admin.key
 Environment=ORCHD_BASE_DOMAIN=rnproject.dev
 Environment=ORCHD_ALT_DOMAINS=tinbase.dev
 Environment=ORCHD_PUBLIC_SCHEME=https
 Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
-Environment=ORCHD_BACKUP_DIR=/opt/tinbase-cloud/backups
+Environment=ORCHD_BACKUP_DIR=/opt/orchd/backups
 Environment=ORCHD_BACKUP_INTERVAL=24h
 Environment=ORCHD_BACKUP_RETAIN=7
 Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
-ExecStart=/opt/tinbase-cloud/orchd
+ExecStart=/opt/orchd/orchd
 Restart=on-failure
 
 [Install]

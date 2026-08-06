@@ -25,7 +25,7 @@
 		redir https://admin.rnproject.dev 302
 	}
 	handle {
-		root * /opt/tinbase-cloud/site
+		root * /opt/orchd/site
 		encode gzip
 		file_server
 	}
@@ -56,7 +56,7 @@ https://cloud.rapidnative.com {
 			reverse_proxy 127.0.0.1:8080
 		}
 		handle {
-			root * /opt/tinbase-cloud/admin
+			root * /opt/orchd/admin
 			try_files {path} /index.html
 			file_server
 		}

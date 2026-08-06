@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time provisioning of a fresh Ubuntu box for tinbase-cloud: Docker + gVisor,
+# One-time provisioning of a fresh Ubuntu box for orchd: Docker + gVisor,
 # Caddy, directories, the control-plane API key, workload images, and services.
 #
 # Run the sync first so configs + image sources exist on the box, then bootstrap:
@@ -30,19 +30,19 @@ command -v caddy >/dev/null || {
 }
 
 # 4. dirs + control-plane API key (never leaves the box; not in the repo)
-mkdir -p /opt/tinbase-cloud/{admin,site,images,secrets,data}
-chmod 700 /opt/tinbase-cloud/secrets
-if [ ! -s /opt/tinbase-cloud/secrets/admin.key ]; then
-  openssl rand -hex 32 > /opt/tinbase-cloud/secrets/admin.key
-  chmod 600 /opt/tinbase-cloud/secrets/admin.key
-  echo "generated /opt/tinbase-cloud/secrets/admin.key"
+mkdir -p /opt/orchd/{admin,site,images,secrets,data}
+chmod 700 /opt/orchd/secrets
+if [ ! -s /opt/orchd/secrets/admin.key ]; then
+  openssl rand -hex 32 > /opt/orchd/secrets/admin.key
+  chmod 600 /opt/orchd/secrets/admin.key
+  echo "generated /opt/orchd/secrets/admin.key"
 fi
 
 # 5. build workload images (needs images/* synced by deploy.sh first)
-docker build -t tinbase:0.10.0 /opt/tinbase-cloud/images/tinbase
-docker build -t rn-api:dev     /opt/tinbase-cloud/images/rn-api
-docker build -t rn-vite:dev    /opt/tinbase-cloud/images/rn-vite
-docker build -t rn-expo:dev    /opt/tinbase-cloud/images/rn-expo
+docker build -t tinbase:0.13.0 /opt/orchd/images/tinbase
+docker build -t rn-api:dev     /opt/orchd/images/rn-api
+docker build -t rn-vite:dev    /opt/orchd/images/rn-vite
+docker build -t rn-expo:dev    /opt/orchd/images/rn-expo
 
 # 6. enable + start services (needs unit files + orchd binary synced first)
 systemctl daemon-reload

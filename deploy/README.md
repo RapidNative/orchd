@@ -1,6 +1,6 @@
 # deploy
 
-Everything needed to run tinbase-cloud on a box, tracked in the repo. The repo is
+Everything needed to run orchd on a box, tracked in the repo. The repo is
 the source of truth; nothing on the server should diverge from what is here.
 
 ## What's on the box
@@ -10,12 +10,12 @@ the source of truth; nothing on the server should diverge from what is here.
 | `/etc/caddy/Caddyfile` | `Caddyfile` | front door: TLS, routing (see below) |
 | `/etc/systemd/system/orchd.service` | `orchd.service` | orchestrator service unit |
 | `/etc/systemd/system/caddy.service` | `caddy.service` | Caddy service unit |
-| `/opt/tinbase-cloud/images/*/Dockerfile` | `../orchestrator/images/*` | workload images |
-| `/opt/tinbase-cloud/admin/` | `../admin` (Vite app; `dist/` deployed) | admin UI SPA |
-| `/opt/tinbase-cloud/site/` | `../site` (Next.js; `out/` deployed) | public site + docs |
-| `/opt/tinbase-cloud/orchd` | built from `../orchestrator` | orchd binary (artifact) |
-| `/opt/tinbase-cloud/secrets/admin.key` | **never tracked** | control-plane API key |
-| `/opt/tinbase-cloud/data/` | **never tracked** | per-project volumes + state |
+| `/opt/orchd/images/*/Dockerfile` | `../orchestrator/images/*` | workload images |
+| `/opt/orchd/admin/` | `../admin` (Vite app; `dist/` deployed) | admin UI SPA |
+| `/opt/orchd/site/` | `../site` (Next.js; `out/` deployed) | public site + docs |
+| `/opt/orchd/orchd` | built from `../orchestrator` | orchd binary (artifact) |
+| `/opt/orchd/secrets/admin.key` | **never tracked** | control-plane API key |
+| `/opt/orchd/data/` | **never tracked** | per-project volumes + state |
 
 Installed by `bootstrap.sh` (not tracked as files, they're upstream binaries):
 Docker, gVisor (`runsc`), and the Caddy static binary at `/usr/bin/caddy`.
@@ -41,7 +41,7 @@ deploy/deploy.sh            # defaults to root@167.233.215.115
 Builds orchd for linux/amd64, syncs configs + static + image sources, restarts
 orchd (tenant containers keep running and re-attach), and reloads Caddy in place.
 It does **not** rebuild workload images; if a Dockerfile changed, rebuild on the
-box: `ssh root@HOST 'docker build -t <tag> /opt/tinbase-cloud/images/<name>'`.
+box: `ssh root@HOST 'docker build -t <tag> /opt/orchd/images/<name>'`.
 
 ## Backups (S3/R2) and the on-box S3 mock
 
@@ -56,7 +56,7 @@ on the box as an S3-compatible mock:
 ```bash
 docker run -d --name minio -p 127.0.0.1:9000:9000 -p 127.0.0.1:9001:9001 \
   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin123 \
-  -v /opt/tinbase-cloud/minio-data:/data minio/minio server /data --console-address ":9001"
+  -v /opt/orchd/minio-data:/data minio/minio server /data --console-address ":9001"
 docker run --rm --network host --entrypoint sh minio/mc -c \
   'mc alias set loc http://127.0.0.1:9000 minioadmin minioadmin123 && mc mb -p loc/tbc-backups'
 ```
@@ -68,7 +68,7 @@ region `us-east-1`. Swap in real R2 credentials for genuine off-box durability.
 
 Control-plane state (projects, workloads, routes, regions, keys, settings) lives
 behind a `store.Store` interface. By default it is a JSON file
-(`/opt/tinbase-cloud/data/state/projects.json`). Set `ORCHD_STATE_DSN` to store it
+(`/opt/orchd/data/state/projects.json`). Set `ORCHD_STATE_DSN` to store it
 in Postgres instead (`postgres://user:pass@host/db?sslmode=disable`) — the seam for
 a distributed control plane. An on-box Postgres for testing:
 

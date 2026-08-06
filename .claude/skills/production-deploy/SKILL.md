@@ -53,10 +53,10 @@ user asks, and say plainly in your report that checks were skipped.
 `deploy.sh` does **not** rebuild workload images. If a Dockerfile changed:
 
 ```bash
-ssh root@HOST 'docker build -t <tag> /opt/tinbase-cloud/images/<name>'
+ssh root@HOST 'docker build -t <tag> /opt/orchd/images/<name>'
 ```
 
-Tags in use: `tinbase:0.10.0`, `rn-api:dev`, `rn-vite:dev`, `rn-expo:dev`.
+Tags in use: `tinbase:0.13.0`, `rn-api:dev`, `rn-vite:dev`, `rn-expo:dev`.
 
 ## Provision a fresh box
 
@@ -66,7 +66,7 @@ ssh root@HOST 'bash -s' < deploy/bootstrap.sh
 ```
 
 `bootstrap.sh` is idempotent: Docker, gVisor, the Caddy binary, directories, a
-generated `/opt/tinbase-cloud/secrets/admin.key` (never tracked), the workload
+generated `/opt/orchd/secrets/admin.key` (never tracked), the workload
 images, then enables the services. Afterwards point a wildcard `A` record at the
 box; the first HTTPS request per host mints its cert.
 
@@ -83,7 +83,7 @@ the deploy good. Report what actually happened, including anything that failed.
 
 ## Rules
 
-- Secrets (`/opt/tinbase-cloud/secrets/`) and data (`/opt/tinbase-cloud/data/`)
+- Secrets (`/opt/orchd/secrets/`) and data (`/opt/orchd/data/`)
   never enter the repo and never get printed into the transcript.
 - Don't take destructive actions on the box (deleting data dirs, wiping state,
   `docker rm` of tenant containers) without explicit per-action confirmation.
