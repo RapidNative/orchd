@@ -39,9 +39,11 @@ CDN sharing. See ~/.claude/plans/dev-server-reset.md Phase 3.
   keep workloads awake indefinitely — observed 14 workloads (~12GB) pinned
   after the 2026-08-09 provider network outage. Consider classifying reconnect
   storms vs real use, or capping touches from failed upgrades.
-- Per-project disk: the mobile run wrapper copies the baked Metro cache to the
-  /data volume (~800MB per project). Replace with a second read-through
-  FileStore (cacheStores = [/data, /cache-baked]) — no copy, ~100MB/project.
+- Per-project disk: DONE 2026-08-09 (template v38) — read-through FileStore
+  chain replaced the ~800MB per-project cache copy; measured ~100MB/project
+  (58MB mobile + 40MB db). Note for future measurements: du on a workload dir
+  counts the deps overlay's MERGED mountpoint (~700MB shared layer) — read
+  .deps/upper for the real per-project delta.
 - Archive strategy: project source of truth is the website DB; orchd projects
   are reconstructible. A "delete workloads after N days idle, re-provision on
   return" reaper turns cold storage cost to ~zero. Not urgent at current scale
