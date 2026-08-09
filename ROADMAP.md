@@ -48,5 +48,8 @@ CDN sharing. See ~/.claude/plans/dev-server-reset.md Phase 3.
   are reconstructible. A "delete workloads after N days idle, re-provision on
   return" reaper turns cold storage cost to ~zero. Not urgent at current scale
   (65 projects = 48GB of 915GB).
+- Project deletion leaks the deps overlayfs mount: 76 orphaned .deps/merged
+  mounts found on 2026-08-09 after deleting all projects — DeleteProject must
+  umount the overlay before removing the workload dir.
 - npm registry cache (verdaccio) on the box for faster installs/builds.
 - bootstrap.sh: install the custom caddy build (vercel-dns) instead of stock.
