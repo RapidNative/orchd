@@ -1789,6 +1789,12 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		}
 	}
 	wsDir, appMount, depsPath, depsHost := m.workspaceMount(w)
+	// Dev servers may rebundle on first boot (delta'd projects); give them
+	// headroom beyond the 90s driver default.
+	var ready time.Duration
+	if w.Type == runtime.WorkloadRapidNativeDev {
+		ready = 300 * time.Second
+	}
 	return runtime.Spec{
 		Type:         w.Type,
 		Ref:          w.ID, // runtime key = workload id
@@ -1802,6 +1808,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		AppMount:     appMount,
 		DepsPath:     depsPath,
 		DepsHostDir:  depsHost,
+		ReadyTimeout: ready,
 		DockerHost:   dockerHost,
 		Env:          env,
 		Limits: runtime.Limits{

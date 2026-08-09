@@ -80,6 +80,11 @@ type Spec struct {
 	WorkspaceDir string
 	AppMount     string
 	DepsPath     string
+	// ReadyTimeout caps how long a boot waits for the workload to serve before
+	// failing. Zero means the driver default (90s). Dev servers that may
+	// rebundle at boot need more headroom.
+	ReadyTimeout time.Duration
+
 	// DepsHostDir, when set, is a host directory holding the image's extracted
 	// dependencies, bind-mounted read-only at DepsPath and shared by every
 	// workload of the image version. Empty falls back to a per-workload named

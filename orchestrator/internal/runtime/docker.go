@@ -279,10 +279,18 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	}
 
 	addr := fmt.Sprintf("%s:%d", addrHost, hostPort)
-	if err := waitHTTP(ctx, addr, 90*time.Second); err != nil {
+	if err := waitHTTP(ctx, addr, readyTimeout(spec)); err != nil {
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
 	return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
+}
+
+// readyTimeout is the boot readiness cap: the spec's own value, else 90s.
+func readyTimeout(spec Spec) time.Duration {
+	if spec.ReadyTimeout > 0 {
+		return spec.ReadyTimeout
+	}
+	return 90 * time.Second
 }
 
 func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) {
@@ -306,7 +314,7 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 		return nil, fmt.Errorf("no published port after start for %s", spec.Ref)
 	}
 	addr := addrHost + ":" + port
-	if err := waitHTTP(ctx, addr, 90*time.Second); err != nil {
+	if err := waitHTTP(ctx, addr, readyTimeout(spec)); err != nil {
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
 	return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil

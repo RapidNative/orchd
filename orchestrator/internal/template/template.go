@@ -42,6 +42,11 @@ type Workload struct {
 	PortEnv string            `json:"port_env,omitempty"` // if set, the port is passed via this env var
 	Image   string            `json:"image,omitempty"`    // prod image tag (built from the template)
 	Env     map[string]string `json:"env,omitempty"`      // default env vars for this workload
+	// Build is a list of argv commands RUN at image build time, after install —
+	// the seam for baking caches into the image (a dev server's transform
+	// cache, a prebuilt bundle) so boots don't pay the cold cost. Docker-only:
+	// the local/process driver ignores it.
+	Build [][]string `json:"build,omitempty"`
 	// Primary marks the workload that owns the project's bare route
 	// (<ref>.<base>); every other workload gets <ref>-<name>.<base>. At most
 	// one workload may be primary. Absent everywhere = legacy behavior: the
@@ -101,6 +106,14 @@ func Load(dir string) (*Manifest, error) {
 		}
 		if w.Kind == "node" && len(w.Run) == 0 {
 			return nil, fmt.Errorf("%s: node workload %q needs a run command", FileName, w.Name)
+		}
+		if len(w.Build) > 0 && w.Kind == "tinbase" {
+			return nil, fmt.Errorf("%s: workload %q: build steps are for node/static workspaces", FileName, w.Name)
+		}
+		for j, step := range w.Build {
+			if len(step) == 0 {
+				return nil, fmt.Errorf("%s: workload %q build step %d is empty", FileName, w.Name, j)
+			}
 		}
 	}
 	return &m, nil

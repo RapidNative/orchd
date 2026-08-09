@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/template"
 )
 
 // TestBuildImageFreezesTarballAndVersions builds images from a template twice and
@@ -244,5 +246,30 @@ func TestResetWorkloadRestoresPristineAndKeepsIdentity(t *testing.T) {
 	routesAfter := st.ListRoutesForWorkload(w.ID)
 	if len(routesAfter) != len(routesBefore) || routesAfter[0].Host != routesBefore[0].Host {
 		t.Fatalf("routes changed on reset: before=%v after=%v", routesBefore, routesAfter)
+	}
+}
+
+// TestDockerfileForBakesCacheHomeAndBuildSteps: node workspaces get a stable
+// /cache HOME and one RUN per manifest build step, in order, after install.
+func TestDockerfileForBakesCacheHomeAndBuildSteps(t *testing.T) {
+	df := dockerfileFor(template.Workload{
+		Name: "mobile", Kind: "node", Dir: "mobile",
+		Install: []string{"npm", "install"},
+		Run:     []string{"npx", "jetplane", "serve", "--port", "$PORT"},
+		Build:   [][]string{{"npm", "install", "-g", "bun"}, {"sh", "-lc", "warm-caches"}},
+	})
+	for _, want := range []string{
+		"ENV HOME=/cache",
+		"RUN mkdir -p /cache",
+		"RUN npm install",
+		`RUN ["npm","install","-g","bun"]`,
+		`RUN ["sh","-lc","warm-caches"]`,
+	} {
+		if !strings.Contains(df, want) {
+			t.Fatalf("dockerfile missing %q:\n%s", want, df)
+		}
+	}
+	if strings.Index(df, `RUN ["npm"`) < strings.Index(df, "RUN npm install\n") {
+		t.Fatal("build steps must come after install")
 	}
 }

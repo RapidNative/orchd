@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -73,6 +74,11 @@ func (m *Manager) ImageTarball(tmpl, version string) (string, error) {
 // the tarball is the guaranteed artifact — so a box without Docker still produces
 // a usable image for local mode.
 func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, error) {
+	// Builds are long (docker builds + warm steps + deps extraction) and their
+	// half-finished artifacts poison the image record (observed: a dropped
+	// client killed docker cp mid-extract, and every boot of that version paid
+	// a multi-minute volume copy). Survive caller cancellation.
+	ctx = context.WithoutCancel(ctx)
 	base := m.templatePath(tmpl)
 	if base == "" {
 		return nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmpl)
@@ -355,17 +361,36 @@ func dockerfileFor(w template.Workload) string {
 	default: // node
 		b.WriteString("FROM node:20-slim\n")
 		b.WriteString("WORKDIR /app\n")
+		// A stable, writable cache home baked into the image: build steps warm
+		// it (transform caches, prebuilt bundles) and runtime containers reuse
+		// it via copy-on-write (survives suspend/wake; reset on recreate).
+		b.WriteString("ENV HOME=/cache\n")
+		b.WriteString("RUN mkdir -p /cache\n")
 		fmt.Fprintf(&b, "COPY %s/ /app/\n", strings.TrimSuffix(dir, "/"))
 		if len(w.Install) > 0 {
 			fmt.Fprintf(&b, "RUN %s\n", strings.Join(w.Install, " "))
 		}
 		b.WriteString("ENV PORT=8080\n")
+		for _, step := range w.Build {
+			// Exec-form RUN: argv survives exactly (a step like
+			// ["sh","-lc","<script>"] must not be re-parsed by the build shell).
+			j, _ := json.Marshal(step)
+			fmt.Fprintf(&b, "RUN %s\n", j)
+		}
 		b.WriteString("EXPOSE 8080\n")
 		run := w.Run
 		if len(run) == 0 {
 			run = []string{"npm", "start"}
 		}
-		fmt.Fprintf(&b, "CMD [\"sh\",\"-c\",%q]\n", strings.Join(run, " "))
+		// Exec-form CMD with $PORT pre-substituted: the image port is fixed at
+		// 8080, and exec form keeps multi-word argv (e.g. ["sh","-lc",script])
+		// intact instead of re-parsing it through a shell.
+		sub := make([]string, len(run))
+		for i, a := range run {
+			sub[i] = strings.ReplaceAll(a, "$PORT", "8080")
+		}
+		cj, _ := json.Marshal(sub)
+		fmt.Fprintf(&b, "CMD %s\n", cj)
 	}
 	return b.String()
 }
