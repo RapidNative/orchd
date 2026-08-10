@@ -9,7 +9,8 @@
     ".next",
     ".cache",
     "ios",
-    "android"
+    "android",
+    ".metro-tmp"
   ],
   "workloads": [
     {
@@ -20,10 +21,21 @@
       "name": "api",
       "kind": "node",
       "dir": "api",
-      "install": ["npm", "install"],
-      "run": ["node", "--watch", "index.js"],
+      "install": [
+        "npm",
+        "install"
+      ],
+      "run": [
+        "node",
+        "--watch",
+        "index.js"
+      ],
       "port_env": "PORT",
-      "image": "rn-api:dev"
+      "image": "rn-api:dev",
+      "env": {
+        "SUPABASE_URL": "${route.db}",
+        "SUPABASE_SERVICE_ROLE_KEY": "${workload.db.service_key}"
+      }
     },
     {
       "name": "web",
@@ -35,9 +47,27 @@
       "name": "mobile",
       "kind": "node",
       "dir": "mobile",
-      "install": ["npm", "install"],
-      "run": ["npx", "expo", "start", "--web", "--port", "$PORT"],
-      "image": "rn-mobile:dev"
+      "install": [
+        "npm",
+        "install"
+      ],
+      "run": [
+        "npx",
+        "expo",
+        "start",
+        "--web",
+        "--port",
+        "$PORT"
+      ],
+      "image": "rn-mobile:dev",
+      "env": {
+        "EXPO_PUBLIC_API_URL": "${route.api}",
+        "EXPO_PUBLIC_SUPABASE_URL": "${route.db}",
+        "EXPO_PUBLIC_SUPABASE_ANON_KEY": "${workload.db.anon_key}",
+        "EXPO_PACKAGER_PROXY_URL": "${route.mobile}",
+        "TMPDIR": "/data/.metro-tmp"
+      },
+      "primary": true
     }
   ]
 }

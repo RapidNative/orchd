@@ -3,10 +3,13 @@ package api_test
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"testing"
 
@@ -356,5 +359,183 @@ func TestDefaultRegionSeeded(t *testing.T) {
 	}
 	if !hasDefault {
 		t.Fatalf("expected a seeded default region, got: %s", body)
+	}
+}
+
+// TestCreateProjectWithBinaryDelta registers a temp template, creates a
+// project overlaying both a text delta and a base64 binary delta, and reads
+// the binary back byte-identical through the workload fs API.
+func TestCreateProjectWithBinaryDelta(t *testing.T) {
+	srv := newTestServer(t)
+
+	tmplDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"),
+		[]byte(`{"name":"demo","workloads":[{"name":"db","kind":"tinbase"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := do(t, srv, "PUT", "/v1/templates", bootstrapKey,
+		map[string]string{"name": "demo", "path": tmplDir}); code != http.StatusOK {
+		t.Fatalf("set template: %d", code)
+	}
+
+	binary := []byte{0xFF, 0xFE, 0x00, 0x89, 'P', 'N', 'G', 0x0D, 0x0A}
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{
+		"template":  "demo",
+		"delta":     map[string]string{"note.txt": "hello"},
+		"delta_b64": map[string]string{"assets/img.png": base64.StdEncoding.EncodeToString(binary)},
+	})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var proj struct {
+		Workloads []struct {
+			ID string `json:"id"`
+		} `json:"workloads"`
+	}
+	json.Unmarshal(body, &proj)
+	wid := proj.Workloads[0].ID
+
+	if code, got := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=assets/img.png", bootstrapKey, nil); code != http.StatusOK || !bytes.Equal(got, binary) {
+		t.Fatalf("binary delta corrupted: code=%d got=%v want=%v", code, got, binary)
+	}
+	if code, got := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=note.txt", bootstrapKey, nil); code != http.StatusOK || string(got) != "hello" {
+		t.Fatalf("text delta: code=%d got=%q", code, got)
+	}
+}
+
+// TestCreateProjectRejectsBadBase64 ensures a malformed delta_b64 entry fails
+// the whole create with a 400 rather than silently writing garbage.
+func TestCreateProjectRejectsBadBase64(t *testing.T) {
+	srv := newTestServer(t)
+	code, _ := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{
+		"delta_b64": map[string]string{"x.bin": "not-base64!!!"},
+	})
+	if code != http.StatusBadRequest {
+		t.Fatalf("bad base64: got %d, want 400", code)
+	}
+}
+
+// TestWorkloadFileBatch exercises the batch fs endpoint: text write, base64
+// binary write, and delete in one call, verified through the fs read API.
+func TestWorkloadFileBatch(t *testing.T) {
+	srv := newTestServer(t)
+
+	tmplDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"),
+		[]byte(`{"name":"demo","workloads":[{"name":"db","kind":"tinbase"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmplDir, "stale.txt"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := do(t, srv, "PUT", "/v1/templates", bootstrapKey,
+		map[string]string{"name": "demo", "path": tmplDir}); code != http.StatusOK {
+		t.Fatalf("set template: %d", code)
+	}
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"template": "demo"})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var proj struct {
+		Workloads []struct {
+			ID string `json:"id"`
+		} `json:"workloads"`
+	}
+	json.Unmarshal(body, &proj)
+	wid := proj.Workloads[0].ID
+
+	binary := []byte{0x00, 0xFF, 0x42}
+	code, body = do(t, srv, "PUT", "/v1/workloads/"+wid+"/fs/batch", bootstrapKey, map[string]any{
+		"files": []map[string]any{
+			{"path": "app/index.tsx", "content": "export default 1"},
+			{"path": "assets/b.bin", "content_b64": base64.StdEncoding.EncodeToString(binary)},
+			{"path": "stale.txt", "delete": true},
+		},
+	})
+	if code != http.StatusOK {
+		t.Fatalf("batch: %d %s", code, body)
+	}
+	var res struct{ Written, Deleted int }
+	json.Unmarshal(body, &res)
+	if res.Written != 2 || res.Deleted != 1 {
+		t.Fatalf("counts = %+v, want written 2 deleted 1", res)
+	}
+
+	if code, got := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=app/index.tsx", bootstrapKey, nil); code != http.StatusOK || string(got) != "export default 1" {
+		t.Fatalf("text write: %d %q", code, got)
+	}
+	if code, got := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=assets/b.bin", bootstrapKey, nil); code != http.StatusOK || !bytes.Equal(got, binary) {
+		t.Fatalf("binary write: %d %v", code, got)
+	}
+	if code, _ := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=stale.txt", bootstrapKey, nil); code != http.StatusNotFound {
+		t.Fatalf("delete: file still readable (%d)", code)
+	}
+
+	// Missing path fails the whole batch up front.
+	if code, _ := do(t, srv, "PUT", "/v1/workloads/"+wid+"/fs/batch", bootstrapKey, map[string]any{
+		"files": []map[string]any{{"content": "x"}},
+	}); code != http.StatusBadRequest {
+		t.Fatalf("pathless entry: got %d, want 400", code)
+	}
+}
+
+// TestProjectResetRoute drives reset end-to-end over HTTP: dirty a workload
+// through the fs API, POST /v1/projects/{id}/reset with a fresh delta, and
+// verify the tree is pristine + delta with the same route hosts.
+func TestProjectResetRoute(t *testing.T) {
+	srv := newTestServer(t)
+
+	tmplDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"),
+		[]byte(`{"name":"demo","workloads":[{"name":"db","kind":"tinbase"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmplDir, "app.txt"), []byte("base"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if code, _ := do(t, srv, "PUT", "/v1/templates", bootstrapKey,
+		map[string]string{"name": "demo", "path": tmplDir}); code != http.StatusOK {
+		t.Fatalf("set template: %d", code)
+	}
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"template": "demo"})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var proj struct {
+		ID        string `json:"id"`
+		Workloads []struct {
+			ID     string   `json:"id"`
+			Routes []string `json:"routes"`
+		} `json:"workloads"`
+	}
+	json.Unmarshal(body, &proj)
+	wid := proj.Workloads[0].ID
+	routesBefore := proj.Workloads[0].Routes
+
+	// Dirty the tree over the fs API.
+	req, _ := http.NewRequest("PUT", srv.URL+"/v1/workloads/"+wid+"/fs/file?path=app.txt", bytes.NewReader([]byte("dirty")))
+	req.Header.Set("Authorization", "Bearer "+bootstrapKey)
+	res, err := http.DefaultClient.Do(req)
+	if err != nil || res.StatusCode != http.StatusOK {
+		t.Fatalf("dirty write: %v %d", err, res.StatusCode)
+	}
+	res.Body.Close()
+
+	code, body = do(t, srv, "POST", "/v1/projects/"+proj.ID+"/reset", bootstrapKey,
+		map[string]any{"delta": map[string]string{"fresh.txt": "overlay"}})
+	if code != http.StatusOK {
+		t.Fatalf("reset: %d %s", code, body)
+	}
+
+	if _, got := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=app.txt", bootstrapKey, nil); string(got) != "base" {
+		t.Fatalf("base not restored: %q", got)
+	}
+	if _, got := do(t, srv, "GET", "/v1/workloads/"+wid+"/fs/file?path=fresh.txt", bootstrapKey, nil); string(got) != "overlay" {
+		t.Fatalf("reset delta not applied: %q", got)
+	}
+	_, body = do(t, srv, "GET", "/v1/projects/"+proj.ID, bootstrapKey, nil)
+	json.Unmarshal(body, &proj)
+	if len(proj.Workloads[0].Routes) != len(routesBefore) || proj.Workloads[0].Routes[0] != routesBefore[0] {
+		t.Fatalf("routes changed across reset: %v -> %v", routesBefore, proj.Workloads[0].Routes)
 	}
 }

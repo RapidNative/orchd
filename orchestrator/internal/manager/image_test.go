@@ -4,10 +4,12 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/template"
 )
 
 // TestBuildImageFreezesTarballAndVersions builds images from a template twice and
@@ -86,7 +88,7 @@ func TestCreateFromImageMaterializesTarballPlusDelta(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	delta := map[string]string{"extra.txt": "from delta"}
+	delta := map[string][]byte{"extra.txt": []byte("from delta")}
 	_, wls, err := m.CreateFromImage(context.Background(), "demo", "v1", "proj", "", delta, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -181,5 +183,93 @@ func TestBuildImageUnknownTemplate(t *testing.T) {
 	m := New(config.Config{DataRoot: t.TempDir()}, st, reapStub{})
 	if _, err := m.BuildImage(context.Background(), "nope"); err == nil {
 		t.Fatal("expected error for unknown template")
+	}
+}
+
+// TestResetWorkloadRestoresPristineAndKeepsIdentity: create a project from a
+// template, dirty its tree (stray file + modified base file), reset, and
+// assert the tree is pristine again while the workload ID, JWT secret, host
+// port and route all survive. Also proves a reset delta overlays cleanly.
+func TestResetWorkloadRestoresPristineAndKeepsIdentity(t *testing.T) {
+	tmplDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"),
+		[]byte(`{"name":"demo","workloads":[{"name":"db","kind":"tinbase"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmplDir, "seed.sql"), []byte("select 1;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local"}, st, reapStub{})
+	if err := m.SetTemplate("demo", tmplDir); err != nil {
+		t.Fatal(err)
+	}
+
+	_, wls, err := m.CreateFromTemplate(context.Background(), "demo", "", "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := wls[0]
+	routesBefore := st.ListRoutesForWorkload(w.ID)
+
+	// Dirty the tree: stray file + clobbered base file.
+	if err := os.WriteFile(filepath.Join(w.DataDir, "stray.txt"), []byte("junk"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(w.DataDir, "seed.sql"), []byte("drop everything;"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	delta := map[string][]byte{"fresh.txt": []byte("new state")}
+	if err := m.ResetWorkload(context.Background(), w.ID, delta, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(filepath.Join(w.DataDir, "stray.txt")); !os.IsNotExist(err) {
+		t.Fatal("stray file survived reset")
+	}
+	if got, _ := os.ReadFile(filepath.Join(w.DataDir, "seed.sql")); string(got) != "select 1;" {
+		t.Fatalf("base file not restored: %q", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(w.DataDir, "fresh.txt")); string(got) != "new state" {
+		t.Fatalf("reset delta not applied: %q", got)
+	}
+
+	after, err := st.GetWorkload(w.ID)
+	if err != nil {
+		t.Fatalf("workload identity lost: %v", err)
+	}
+	if after.JWTSecret != w.JWTSecret || after.AnonKey != w.AnonKey || after.HostPort != w.HostPort {
+		t.Fatalf("credentials/port changed on reset: before=%+v after=%+v", w, after)
+	}
+	routesAfter := st.ListRoutesForWorkload(w.ID)
+	if len(routesAfter) != len(routesBefore) || routesAfter[0].Host != routesBefore[0].Host {
+		t.Fatalf("routes changed on reset: before=%v after=%v", routesBefore, routesAfter)
+	}
+}
+
+// TestDockerfileForBakesCacheHomeAndBuildSteps: node workspaces get a stable
+// /cache HOME and one RUN per manifest build step, in order, after install.
+func TestDockerfileForBakesCacheHomeAndBuildSteps(t *testing.T) {
+	df := dockerfileFor(template.Workload{
+		Name: "mobile", Kind: "node", Dir: "mobile",
+		Install: []string{"npm", "install"},
+		Run:     []string{"npx", "jetplane", "serve", "--port", "$PORT"},
+		Build:   [][]string{{"npm", "install", "-g", "bun"}, {"sh", "-lc", "warm-caches"}},
+	})
+	for _, want := range []string{
+		"ENV HOME=/cache",
+		"RUN mkdir -p /cache",
+		"RUN npm install",
+		`RUN ["npm","install","-g","bun"]`,
+		`RUN ["sh","-lc","warm-caches"]`,
+	} {
+		if !strings.Contains(df, want) {
+			t.Fatalf("dockerfile missing %q:\n%s", want, df)
+		}
+	}
+	if strings.Index(df, `RUN ["npm"`) < strings.Index(df, "RUN npm install\n") {
+		t.Fatal("build steps must come after install")
 	}
 }

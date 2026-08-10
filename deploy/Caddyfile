@@ -1,11 +1,13 @@
 # Caddy front door.
 #
 # cloud.rapidnative.com — behind Cloudflare, self-signed origin cert (tls internal).
-# *.rnproject.dev / *.tinbase.dev — direct A records; a single on-demand-TLS
-#   block per domain issues real Let's Encrypt certs per hostname on the TLS
-#   handshake, gated by orchd's /internal/tls-allow (so only admin/api/real
-#   workload hosts get a cert). Host matchers dispatch admin/api; everything else
-#   is a workload on the gateway.
+# *.rnproject.dev — ONE wildcard certificate via DNS-01 (Vercel DNS plugin;
+#   VERCEL_API_TOKEN from the caddy unit's EnvironmentFile). Per-hostname
+#   issuance is not viable here: every project mints several hostnames and
+#   Let's Encrypt caps new certs at 50/week per registered domain (hit on
+#   2026-08-08 — handshakes for uncached hosts then hang on issuance).
+# *.tinbase.dev — low churn, keeps per-hostname on-demand TLS gated by orchd's
+#   /internal/tls-allow.
 {
 	auto_https disable_redirects
 	on_demand_tls {
@@ -25,7 +27,7 @@
 		redir https://admin.rnproject.dev 302
 	}
 	handle {
-		root * /opt/tinbase-cloud/site
+		root * /opt/orchd/site
 		encode gzip
 		file_server
 	}
@@ -42,12 +44,9 @@ https://cloud.rapidnative.com {
 
 # Wildcard front for a base domain. {args[0]} = the base domain (e.g. rnproject.dev).
 # admin.<base> serves the panel, api.<base> the control API; every other subdomain
-# is a workload host proxied to the gateway.
+# is a workload host proxied to the gateway. TLS comes from the importing site
+# block (wildcard DNS-01 or on-demand per-host).
 (wildcard) {
-	tls {
-		on_demand
-	}
-
 	@admin host admin.{args[0]}
 	@api host api.{args[0]}
 
@@ -56,7 +55,7 @@ https://cloud.rapidnative.com {
 			reverse_proxy 127.0.0.1:8080
 		}
 		handle {
-			root * /opt/tinbase-cloud/admin
+			root * /opt/orchd/admin
 			try_files {path} /index.html
 			file_server
 		}
@@ -71,9 +70,16 @@ https://cloud.rapidnative.com {
 }
 
 *.rnproject.dev {
+	tls {
+		dns vercel {env.VERCEL_API_TOKEN}
+		resolvers 1.1.1.1
+	}
 	import wildcard rnproject.dev
 }
 
 *.tinbase.dev {
+	tls {
+		on_demand
+	}
 	import wildcard tinbase.dev
 }

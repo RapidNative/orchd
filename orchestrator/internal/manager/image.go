@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -73,6 +74,11 @@ func (m *Manager) ImageTarball(tmpl, version string) (string, error) {
 // the tarball is the guaranteed artifact — so a box without Docker still produces
 // a usable image for local mode.
 func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, error) {
+	// Builds are long (docker builds + warm steps + deps extraction) and their
+	// half-finished artifacts poison the image record (observed: a dropped
+	// client killed docker cp mid-extract, and every boot of that version paid
+	// a multi-minute volume copy). Survive caller cancellation.
+	ctx = context.WithoutCancel(ctx)
 	base := m.templatePath(tmpl)
 	if base == "" {
 		return nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmpl)
@@ -124,6 +130,15 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 				continue
 			}
 			im.Dockers[w.Name] = tag
+			// Extract the image's installed node_modules once per version. Every
+			// workload of this image bind-mounts it read-only — without this,
+			// docker's named-volume initialization copies multi-GB of small
+			// files per workload on first boot (observed: 10+ minute boots).
+			if w.Kind == "node" {
+				if err := m.extractImageDeps(ctx, tag, m.imageDepsDir(tmpl, version, w.Name)); err != nil {
+					log.Printf("BuildImage %s@%s: deps extract %q skipped: %v", tmpl, version, w.Name, err)
+				}
+			}
 		}
 	} else {
 		log.Printf("BuildImage %s@%s: docker CLI not found, tarball-only image", tmpl, version)
@@ -147,9 +162,41 @@ func imageWorkloads(man *template.Manifest) []store.ImageWorkload {
 			Workspace: w.Name,
 			Image:     w.Image,
 			Env:       w.Env,
+			Primary:   w.Primary,
+			Port:      workspaceImagePort(w),
+			Dir:       w.Dir,
 		})
 	}
 	return out
+}
+
+// workspaceImagePort is the container port a synthesized workspace image
+// listens on (see dockerfileFor): nginx serves static on 80, node runs with
+// PORT=8080. tinbase keeps the driver default (54321).
+func workspaceImagePort(w template.Workload) int {
+	switch w.Kind {
+	case "static":
+		return 80
+	case "node":
+		return 8080
+	}
+	return 0
+}
+
+// imagePrimaryName mirrors Manifest.PrimaryName for a frozen image shape:
+// the workload marked primary, else (legacy) the first tinbase workload.
+func imagePrimaryName(shape []store.ImageWorkload) string {
+	for _, w := range shape {
+		if w.Primary {
+			return w.Name
+		}
+	}
+	for _, w := range shape {
+		if w.Kind == "tinbase" {
+			return w.Name
+		}
+	}
+	return ""
 }
 
 // PushImage re-tags each of an image's local docker tags under the configured
@@ -244,6 +291,39 @@ func (m *Manager) ImportImage(spec ImportSpec) (*store.Image, error) {
 	return im, nil
 }
 
+// imageDepsDir is where a workspace image's node_modules is extracted for
+// shared, read-only mounting into every workload booted from that image:
+//
+//	<DataRoot>/images/<template>/<version>/deps/<workspace>
+func (m *Manager) imageDepsDir(tmpl, version, workspace string) string {
+	return filepath.Join(m.imagesDir(), tmpl, version, "deps", workspace)
+}
+
+// extractImageDeps copies /app/node_modules out of a built workspace image
+// into destDir (atomically via a temp dir). The tree is immutable per image
+// version, so one extraction serves every workload.
+func (m *Manager) extractImageDeps(ctx context.Context, tag, destDir string) error {
+	if _, err := os.Stat(destDir); err == nil {
+		return nil // already extracted
+	}
+	tmp := destDir + ".tmp"
+	_ = os.RemoveAll(tmp)
+	if err := os.MkdirAll(filepath.Dir(destDir), 0o755); err != nil {
+		return err
+	}
+	cid, err := exec.CommandContext(ctx, "docker", "create", tag).Output()
+	if err != nil {
+		return fmt.Errorf("docker create: %w", err)
+	}
+	id := strings.TrimSpace(string(cid))
+	defer exec.Command("docker", "rm", "-f", id).Run()
+	if out, err := exec.CommandContext(ctx, "docker", "cp", id+":/app/node_modules", tmp).CombinedOutput(); err != nil {
+		_ = os.RemoveAll(tmp)
+		return fmt.Errorf("docker cp: %v: %s", err, tailStr(string(out), 200))
+	}
+	return os.Rename(tmp, destDir)
+}
+
 // dockerBuildWorkspace generates a Dockerfile for one workspace and builds it,
 // using the template root as the build context. The generated Dockerfile is kept
 // alongside the tarball for transparency.
@@ -281,17 +361,36 @@ func dockerfileFor(w template.Workload) string {
 	default: // node
 		b.WriteString("FROM node:20-slim\n")
 		b.WriteString("WORKDIR /app\n")
+		// A stable, writable cache home baked into the image: build steps warm
+		// it (transform caches, prebuilt bundles) and runtime containers reuse
+		// it via copy-on-write (survives suspend/wake; reset on recreate).
+		b.WriteString("ENV HOME=/cache\n")
+		b.WriteString("RUN mkdir -p /cache\n")
 		fmt.Fprintf(&b, "COPY %s/ /app/\n", strings.TrimSuffix(dir, "/"))
 		if len(w.Install) > 0 {
 			fmt.Fprintf(&b, "RUN %s\n", strings.Join(w.Install, " "))
 		}
 		b.WriteString("ENV PORT=8080\n")
+		for _, step := range w.Build {
+			// Exec-form RUN: argv survives exactly (a step like
+			// ["sh","-lc","<script>"] must not be re-parsed by the build shell).
+			j, _ := json.Marshal(step)
+			fmt.Fprintf(&b, "RUN %s\n", j)
+		}
 		b.WriteString("EXPOSE 8080\n")
 		run := w.Run
 		if len(run) == 0 {
 			run = []string{"npm", "start"}
 		}
-		fmt.Fprintf(&b, "CMD [\"sh\",\"-c\",%q]\n", strings.Join(run, " "))
+		// Exec-form CMD with $PORT pre-substituted: the image port is fixed at
+		// 8080, and exec form keeps multi-word argv (e.g. ["sh","-lc",script])
+		// intact instead of re-parsing it through a shell.
+		sub := make([]string, len(run))
+		for i, a := range run {
+			sub[i] = strings.ReplaceAll(a, "$PORT", "8080")
+		}
+		cj, _ := json.Marshal(sub)
+		fmt.Fprintf(&b, "CMD %s\n", cj)
 	}
 	return b.String()
 }

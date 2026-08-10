@@ -98,6 +98,9 @@ type ImageWorkload struct {
 	Workspace string            `json:"workspace"`
 	Image     string            `json:"image,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
+	Primary   bool              `json:"primary,omitempty"` // owns the bare <ref>.<base> route
+	Port      int               `json:"port,omitempty"`    // container port the workspace image listens on
+	Dir       string            `json:"dir,omitempty"`     // workspace subdir within the template tree
 }
 
 // ImageID is the "template@version" key for an image.

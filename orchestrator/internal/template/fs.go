@@ -34,11 +34,18 @@ func safeJoin(root, rel string) string {
 
 // Materialize builds a workload's working tree: copy the base (minus skipped
 // dirs), then apply the delta (write files, remove tombstones). This is the
-// base + delta the project runs from.
-func Materialize(baseDir, destDir string, exclude []string, delta map[string]string, deleted []string) error {
+// base + delta the project runs from. Delta contents are raw bytes so binary
+// files (images, fonts) survive intact.
+func Materialize(baseDir, destDir string, exclude []string, delta map[string][]byte, deleted []string) error {
 	if err := copyTree(baseDir, destDir, skipSet(exclude)); err != nil {
 		return err
 	}
+	return applyDelta(destDir, delta, deleted)
+}
+
+// applyDelta overlays delta files onto a materialized tree and removes
+// tombstoned paths (path-traversal safe; unsafe paths are skipped).
+func applyDelta(destDir string, delta map[string][]byte, deleted []string) error {
 	for path, content := range delta {
 		p := safeJoin(destDir, path)
 		if p == "" {
@@ -47,7 +54,7 @@ func Materialize(baseDir, destDir string, exclude []string, delta map[string]str
 		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		if err := os.WriteFile(p, content, 0o644); err != nil {
 			return err
 		}
 	}
@@ -163,28 +170,11 @@ func Bundle(baseDir string, exclude []string, w io.Writer) error {
 // apply the delta (write files, remove tombstones). This is the boot-from-image
 // path — local/process drivers restore the exact frozen tree, then overlay the
 // per-project delta on top.
-func MaterializeFromTar(tarPath, destDir string, delta map[string]string, deleted []string) error {
+func MaterializeFromTar(tarPath, destDir string, delta map[string][]byte, deleted []string) error {
 	if err := Untar(tarPath, destDir); err != nil {
 		return err
 	}
-	for path, content := range delta {
-		p := safeJoin(destDir, path)
-		if p == "" {
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-		if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
-			return err
-		}
-	}
-	for _, path := range deleted {
-		if p := safeJoin(destDir, path); p != "" {
-			_ = os.RemoveAll(p)
-		}
-	}
-	return nil
+	return applyDelta(destDir, delta, deleted)
 }
 
 // Untar extracts a tar.gz into destDir (path-traversal safe).

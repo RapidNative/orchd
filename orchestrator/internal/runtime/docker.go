@@ -1,11 +1,13 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -47,6 +49,95 @@ func (d *DockerDriver) Name() string {
 }
 
 func containerName(ref string) string { return "tb-" + ref }
+
+// depsVolumeName is the per-workload named volume that preserves the image's
+// installed dependencies (node_modules) across the source mount. It survives
+// suspend/wake (fast boots) and is removed with the workload.
+func depsVolumeName(ref string) string { return "tb-" + ref + "-deps" }
+
+// RemoveVolumes deletes the workload's named volumes and unmounts its deps
+// overlay (called on workload deletion; suspend keeps both so wakes stay
+// fast). Best-effort. The overlay must be unmounted before the manager
+// reclaims the data dir, or the removal would recurse into the mount.
+func (d *DockerDriver) RemoveVolumes(ctx context.Context, ref string) error {
+	return d.docker(ctx, d.hostFor(ref), "volume", "rm", "-f", depsVolumeName(ref)).Run()
+}
+
+// RemoveWorkloadMounts unmounts the per-workload deps overlay under dataDir.
+func RemoveWorkloadMounts(dataDir string) {
+	merged := filepath.Join(dataDir, ".deps", "merged")
+	if exec.Command("mountpoint", "-q", merged).Run() == nil {
+		_ = exec.Command("umount", "-l", merged).Run()
+	}
+}
+
+// prepareDepsOverlay mounts (idempotently) a writable overlay whose lower
+// layer is the shared per-image deps extraction and whose upper layer is
+// per-workload scratch under the data dir. Linux-only; callers fall back to a
+// named volume when it fails (macOS dev, missing privileges).
+func prepareDepsOverlay(dataDir, depsHost string) (string, error) {
+	base := filepath.Join(dataDir, ".deps")
+	merged := filepath.Join(base, "merged")
+	upper := filepath.Join(base, "upper")
+	work := filepath.Join(base, "work")
+	for _, d := range []string{merged, upper, work} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			return "", err
+		}
+	}
+	if exec.Command("mountpoint", "-q", merged).Run() == nil {
+		return merged, nil // already mounted (wake after suspend / orchd restart)
+	}
+	opts := "lowerdir=" + depsHost + ",upperdir=" + upper + ",workdir=" + work
+	if out, err := exec.Command("mount", "-t", "overlay", "overlay", "-o", opts, merged).CombinedOutput(); err != nil {
+		return "", fmt.Errorf("overlay mount: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	return merged, nil
+}
+
+// WriteFileInContainer writes content to a path inside a running container
+// via docker exec. The bind mount makes the bytes identical to a host-side
+// write — the point is the inotify event: watchers inside the container
+// (Metro, node --watch) do not see events for host-side writes under gVisor,
+// so a file written from outside is invisible to them until a restart.
+// Returns an error when the container isn't running; callers fall back to the
+// host-side write (a later boot crawls the tree fresh anyway).
+func (d *DockerDriver) WriteFileInContainer(ctx context.Context, ref, containerPath string, content []byte) error {
+	quoted := "'" + strings.ReplaceAll(containerPath, "'", `'\''`) + "'"
+	cmd := d.docker(ctx, d.hostFor(ref), "exec", "-i", containerName(ref),
+		"sh", "-c", "mkdir -p \"$(dirname "+quoted+")\" && cat > "+quoted)
+	cmd.Stdin = bytes.NewReader(content)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("exec write %s: %v: %s", containerPath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// DeleteFileInContainer removes a path inside a running container (see
+// WriteFileInContainer for why deletion also goes through the namespace).
+func (d *DockerDriver) DeleteFileInContainer(ctx context.Context, ref, containerPath string) error {
+	quoted := "'" + strings.ReplaceAll(containerPath, "'", `'\''`) + "'"
+	if out, err := d.docker(ctx, d.hostFor(ref), "exec", containerName(ref),
+		"sh", "-c", "rm -rf "+quoted).CombinedOutput(); err != nil {
+		return fmt.Errorf("exec delete %s: %v: %s", containerPath, err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+// removeAndWait force-removes a container and blocks until its name is
+// actually free. Removal of a running container (especially under gVisor, or
+// a loaded daemon) completes asynchronously — a docker run issued right after
+// `rm -f` races it and fails with "Conflict: name already in use".
+func (d *DockerDriver) removeAndWait(ctx context.Context, host, name string) {
+	_ = d.docker(ctx, host, "rm", "-f", name).Run()
+	for i := 0; i < 60; i++ {
+		if err := d.docker(ctx, host, "inspect", name).Run(); err != nil {
+			return // name is free
+		}
+		_ = d.docker(ctx, host, "rm", "-f", name).Run()
+		time.Sleep(500 * time.Millisecond)
+	}
+}
 
 func (d *DockerDriver) setHost(ref, host string) {
 	d.mu.Lock()
@@ -106,7 +197,7 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	d.setHost(spec.Ref, host)
 	bind, addrHost := placement(d.effHost(host))
 
-	_ = d.docker(ctx, host, "rm", "-f", containerName(spec.Ref)).Run()
+	d.removeAndWait(ctx, host, containerName(spec.Ref))
 
 	if err := os.MkdirAll(spec.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("data dir: %w", err)
@@ -137,6 +228,35 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 		"-p", fmt.Sprintf("%s:%d:%d", bind, hostPort, cport),
 		"-v", spec.DataDir + ":/data",
 	}
+	// Volume-run: mount the seeded workspace source over the image's app dir so
+	// the container runs the per-project tree (deltas + live file sync), not
+	// the code baked at build. DepsPath (node_modules) is shadowed by a named
+	// per-workload volume that docker initializes from the image's content.
+	if spec.AppMount != "" {
+		src := spec.DataDir
+		if spec.WorkspaceDir != "" {
+			src = filepath.Join(spec.DataDir, spec.WorkspaceDir)
+		}
+		args = append(args, "-v", src+":"+spec.AppMount)
+		if spec.DepsPath != "" {
+			mounted := false
+			if spec.DepsHostDir != "" {
+				// Shared deps extracted once per image version, with a small
+				// per-workload writable overlay on top: node tooling writes
+				// caches inside node_modules (react-native-css-interop writes
+				// into its own package dir), so a plain :ro mount breaks it.
+				if merged, err := prepareDepsOverlay(spec.DataDir, spec.DepsHostDir); err == nil {
+					args = append(args, "-v", merged+":"+spec.DepsPath)
+					mounted = true
+				} else {
+					fmt.Fprintf(os.Stderr, "deps overlay for %s unavailable (%v) — falling back to named volume\n", spec.Ref, err)
+				}
+			}
+			if !mounted {
+				args = append(args, "-v", depsVolumeName(spec.Ref)+":"+spec.DepsPath)
+			}
+		}
+	}
 	if d.Runtime != "" {
 		args = append(args, "--runtime", d.Runtime)
 	}
@@ -159,10 +279,18 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	}
 
 	addr := fmt.Sprintf("%s:%d", addrHost, hostPort)
-	if err := waitHTTP(ctx, addr, 90*time.Second); err != nil {
+	if err := waitHTTP(ctx, addr, readyTimeout(spec)); err != nil {
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
 	return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
+}
+
+// readyTimeout is the boot readiness cap: the spec's own value, else 90s.
+func readyTimeout(spec Spec) time.Duration {
+	if spec.ReadyTimeout > 0 {
+		return spec.ReadyTimeout
+	}
+	return 90 * time.Second
 }
 
 func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) {
@@ -186,7 +314,7 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 		return nil, fmt.Errorf("no published port after start for %s", spec.Ref)
 	}
 	addr := addrHost + ":" + port
-	if err := waitHTTP(ctx, addr, 90*time.Second); err != nil {
+	if err := waitHTTP(ctx, addr, readyTimeout(spec)); err != nil {
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
 	return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil

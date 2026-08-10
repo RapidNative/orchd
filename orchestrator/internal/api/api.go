@@ -6,6 +6,7 @@ package api
 
 import (
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -53,9 +54,11 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/workloads/{id}/start", a.workloadStart)
 	mux.HandleFunc("POST /v1/workloads/{id}/stop", a.workloadStop)
 	mux.HandleFunc("POST /v1/workloads/{id}/restart", a.workloadRestart)
+	mux.HandleFunc("POST /v1/workloads/{id}/reset", a.workloadReset)
 	mux.HandleFunc("POST /v1/projects/{id}/start", a.projectStart)
 	mux.HandleFunc("POST /v1/projects/{id}/stop", a.projectStop)
 	mux.HandleFunc("POST /v1/projects/{id}/restart", a.projectRestart)
+	mux.HandleFunc("POST /v1/projects/{id}/reset", a.projectReset)
 	mux.HandleFunc("PUT /v1/projects/{id}/env", a.setProjectEnv)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
@@ -92,6 +95,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/workloads/{id}/fs", a.workloadFiles)
 	mux.HandleFunc("GET /v1/workloads/{id}/fs/file", a.workloadFileGet)
 	mux.HandleFunc("PUT /v1/workloads/{id}/fs/file", a.workloadFilePut)
+	mux.HandleFunc("PUT /v1/workloads/{id}/fs/batch", a.workloadFileBatch)
 	mux.HandleFunc("DELETE /v1/workloads/{id}/fs/file", a.workloadFileDelete)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("PUT /v1/settings/name", a.setInstanceName)
@@ -244,11 +248,9 @@ func (a *API) workloadView(w *store.Workload) workloadView {
 	for _, r := range routes {
 		hosts = append(hosts, r.Host)
 		if w.HostPort == 0 {
-			if a.cfg.PublicScheme == "https" {
-				endpoints = append(endpoints, "https://"+r.Host) // public subdomain, TLS on 443
-			} else {
-				endpoints = append(endpoints, "http://"+r.Host+gatewayPort(a.cfg.GatewayAddr))
-			}
+			// Shared with env interpolation (manager.EndpointForHost) so what
+			// the admin shows and what sibling workloads dial agree.
+			endpoints = append(endpoints, a.mgr.EndpointForHost(r.Host))
 		}
 		if a.cfg.PublicURL != "" {
 			subroutes = append(subroutes, strings.TrimRight(a.cfg.PublicURL, "/")+"/w/"+r.Key)
@@ -275,26 +277,31 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string            `json:"name"`
 		Region    string            `json:"region"`
-		Template  string            `json:"template"`          // create from a registered template
-		Image     string            `json:"image,omitempty"`   // create from a frozen image ("template@version")
-		Delta     map[string]string `json:"delta,omitempty"`   // files to overlay on the base (path -> content)
-		Deleted   []string          `json:"deleted,omitempty"` // base paths to remove
+		Template  string            `json:"template"`            // create from a registered template
+		Image     string            `json:"image,omitempty"`     // create from a frozen image ("template@version")
+		Delta     map[string]string `json:"delta,omitempty"`     // text files to overlay on the base (path -> content)
+		DeltaB64  map[string]string `json:"delta_b64,omitempty"` // binary files to overlay (path -> base64 bytes)
+		Deleted   []string          `json:"deleted,omitempty"`   // base paths to remove
 		Workloads []workloadSpecReq `json:"workloads"`
 	}
 	if r.ContentLength > 0 {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
+	delta, err := mergeDelta(body.Delta, body.DeltaB64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
 	var proj *store.Project
-	var err error
 	if body.Image != "" {
 		tmpl, ver, ok := strings.Cut(body.Image, "@")
 		if !ok {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("image must be \"template@version\""))
 			return
 		}
-		proj, _, err = a.mgr.CreateFromImage(r.Context(), tmpl, ver, body.Name, body.Region, body.Delta, body.Deleted)
+		proj, _, err = a.mgr.CreateFromImage(r.Context(), tmpl, ver, body.Name, body.Region, delta, body.Deleted)
 	} else if body.Template != "" {
-		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region, body.Delta, body.Deleted)
+		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region, delta, body.Deleted)
 	} else {
 		specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
 		for _, ws := range body.Workloads {
@@ -307,6 +314,26 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, a.projectView(proj))
+}
+
+// mergeDelta combines the text (`delta`) and base64 (`delta_b64`) overlay maps
+// into raw bytes keyed by path. Base64 entries win on a path collision.
+func mergeDelta(text, b64 map[string]string) (map[string][]byte, error) {
+	if len(text) == 0 && len(b64) == 0 {
+		return nil, nil
+	}
+	out := make(map[string][]byte, len(text)+len(b64))
+	for p, c := range text {
+		out[p] = []byte(c)
+	}
+	for p, c := range b64 {
+		raw, err := base64.StdEncoding.DecodeString(c)
+		if err != nil {
+			return nil, fmt.Errorf("delta_b64[%q]: invalid base64: %w", p, err)
+		}
+		out[p] = raw
+	}
+	return out, nil
 }
 
 func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +400,44 @@ func (a *API) workloadRestart(w http.ResponseWriter, r *http.Request) {
 }
 func (a *API) projectStart(w http.ResponseWriter, r *http.Request) {
 	lifecycle(w, a, a.mgr.StartProject(r.Context(), r.PathValue("id")), "started")
+}
+
+// resetBody is the optional payload of a reset: a fresh delta to overlay on
+// the pristine base, so a caller can reset straight to a new state in one call.
+func resetBody(r *http.Request) (map[string][]byte, []string, error) {
+	var body struct {
+		Delta    map[string]string `json:"delta,omitempty"`
+		DeltaB64 map[string]string `json:"delta_b64,omitempty"`
+		Deleted  []string          `json:"deleted,omitempty"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			return nil, nil, err
+		}
+	}
+	delta, err := mergeDelta(body.Delta, body.DeltaB64)
+	return delta, body.Deleted, err
+}
+
+// workloadReset re-materializes one workload from its pristine template/image
+// (identity — id, keys, port, routes — preserved).
+func (a *API) workloadReset(w http.ResponseWriter, r *http.Request) {
+	delta, deleted, err := resetBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	lifecycle(w, a, a.mgr.ResetWorkload(r.Context(), r.PathValue("id"), delta, deleted), "reset")
+}
+
+// projectReset resets every workload of a project to pristine state.
+func (a *API) projectReset(w http.ResponseWriter, r *http.Request) {
+	delta, deleted, err := resetBody(r)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	lifecycle(w, a, a.mgr.ResetProject(r.Context(), r.PathValue("id"), delta, deleted), "reset")
 }
 func (a *API) projectStop(w http.ResponseWriter, r *http.Request) {
 	lifecycle(w, a, a.mgr.StopProject(r.Context(), r.PathValue("id")), "stopped")
@@ -880,6 +945,61 @@ func (a *API) workloadFilePut(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"path": path, "bytes": len(body)})
 }
 
+// workloadFileBatch applies many file writes/deletes in one call — the file
+// sync hot path for callers pushing a burst of changes (an AI edit touching
+// several files). Applied sequentially; the first failure aborts with the
+// failing path, and the caller retries the whole batch (writes are idempotent).
+func (a *API) workloadFileBatch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Files []struct {
+			Path       string `json:"path"`
+			Content    string `json:"content"`
+			ContentB64 string `json:"content_b64"`
+			Delete     bool   `json:"delete"`
+		} `json:"files"`
+	}
+	// Same cap as single-file puts, over the whole batch.
+	if err := json.NewDecoder(io.LimitReader(r.Body, 16<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if len(body.Files) == 0 {
+		writeErr(w, http.StatusBadRequest, errors.New("files required"))
+		return
+	}
+	ops := make([]manager.FileOp, 0, len(body.Files))
+	for _, f := range body.Files {
+		if f.Path == "" {
+			writeErr(w, http.StatusBadRequest, errors.New("every file needs a path"))
+			return
+		}
+		op := manager.FileOp{Path: f.Path, Delete: f.Delete}
+		if !f.Delete {
+			if f.ContentB64 != "" {
+				raw, err := base64.StdEncoding.DecodeString(f.ContentB64)
+				if err != nil {
+					writeErr(w, http.StatusBadRequest, fmt.Errorf("files[%q]: invalid base64: %w", f.Path, err))
+					return
+				}
+				op.Content = raw
+			} else {
+				op.Content = []byte(f.Content)
+			}
+		}
+		ops = append(ops, op)
+	}
+	written, deleted, err := a.mgr.ApplyWorkloadFiles(r.PathValue("id"), ops)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			a.writeLookupErr(w, err)
+			return
+		}
+		writeErr(w, http.StatusInternalServerError, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"written": written, "deleted": deleted})
+}
+
 func (a *API) workloadFileDelete(w http.ResponseWriter, r *http.Request) {
 	path := r.URL.Query().Get("path")
 	if path == "" {
@@ -1074,11 +1194,3 @@ func writeErr(w http.ResponseWriter, code int, err error) {
 
 // gatewayPort returns the ":port" suffix (if any) so displayed endpoints are
 // clickable in local dev where the gateway does not run on :80.
-func gatewayPort(gatewayAddr string) string {
-	for i := len(gatewayAddr) - 1; i >= 0; i-- {
-		if gatewayAddr[i] == ':' {
-			return gatewayAddr[i:]
-		}
-	}
-	return ""
-}

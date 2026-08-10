@@ -80,7 +80,7 @@ type WorkloadSpec struct {
 	ImageVersion string            // if set, boot from this frozen image version (v1, v2, …) of Template
 	Workspace    string            // orchd.json workspace name within the template
 	Env          map[string]string // user-injected environment variables
-	SeedDelta    map[string]string // files to overlay on the base at seed (path -> content)
+	SeedDelta    map[string][]byte // files to overlay on the base at seed (path -> raw bytes)
 	SeedDeleted  []string          // base paths to remove at seed (tombstones)
 }
 
@@ -596,7 +596,49 @@ func (m *Manager) WriteWorkloadFile(id, rel string, content []byte) error {
 	if err != nil {
 		return err
 	}
-	return template.WriteFile(w.DataDir, rel, content)
+	if err := template.WriteFile(w.DataDir, rel, content); err != nil {
+		return err
+	}
+	m.notifyContainerWrite(w, rel, content)
+	return nil
+}
+
+// notifyContainerWrite re-writes a just-written file through the workload's
+// running container so in-namespace watchers see the event (host-side writes
+// to a bind mount generate no inotify inside gVisor — dev servers would only
+// pick the change up on restart). Best-effort: the host file is the source of
+// truth, and a stopped/suspended workload crawls the tree fresh on boot.
+func (m *Manager) notifyContainerWrite(w *store.Workload, rel string, content []byte) {
+	cw, ok := m.rt.(interface {
+		WriteFileInContainer(context.Context, string, string, []byte) error
+	})
+	if !ok || !m.isLive(w.ID) {
+		return
+	}
+	if err := cw.WriteFileInContainer(context.Background(), w.ID, m.containerPathFor(w, rel), content); err != nil {
+		log.Printf("container write-through %s %s: %v", w.ID, rel, err)
+	}
+}
+
+// containerPathFor maps a DataDir-relative path to where the running
+// container sees it: workspace files live under the AppMount (the mount its
+// dev server watches); everything else is under the /data volume.
+func (m *Manager) containerPathFor(w *store.Workload, rel string) string {
+	wsDir, appMount, _, _ := m.workspaceMount(w)
+	if appMount != "" && wsDir != "" && strings.HasPrefix(rel, wsDir+"/") {
+		return appMount + "/" + strings.TrimPrefix(rel, wsDir+"/")
+	}
+	if appMount != "" && wsDir == "" {
+		return appMount + "/" + rel
+	}
+	return "/data/" + rel
+}
+
+func (m *Manager) isLive(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.live[id]
+	return ok
 }
 
 func (m *Manager) DeleteWorkloadFile(id, rel string) error {
@@ -604,12 +646,57 @@ func (m *Manager) DeleteWorkloadFile(id, rel string) error {
 	if err != nil {
 		return err
 	}
-	return template.DeleteFile(w.DataDir, rel)
+	if err := template.DeleteFile(w.DataDir, rel); err != nil {
+		return err
+	}
+	if cd, ok := m.rt.(interface {
+		DeleteFileInContainer(context.Context, string, string) error
+	}); ok && m.isLive(w.ID) {
+		if err := cd.DeleteFileInContainer(context.Background(), w.ID, m.containerPathFor(w, rel)); err != nil {
+			log.Printf("container delete-through %s %s: %v", w.ID, rel, err)
+		}
+	}
+	return nil
+}
+
+// FileOp is one entry of a batch file mutation: a write (Content) or a delete.
+type FileOp struct {
+	Path    string
+	Content []byte
+	Delete  bool
+}
+
+// ApplyWorkloadFiles applies a batch of file writes/deletes to a workload's
+// data dir sequentially, stopping at the first failure. Writes are idempotent,
+// so a caller can safely retry the whole batch. Returns counts applied.
+func (m *Manager) ApplyWorkloadFiles(id string, ops []FileOp) (written, deleted int, err error) {
+	w, err := m.store.GetWorkload(id)
+	if err != nil {
+		return 0, 0, err
+	}
+	for _, op := range ops {
+		if op.Delete {
+			if err := template.DeleteFile(w.DataDir, op.Path); err != nil {
+				return written, deleted, fmt.Errorf("delete %q: %w", op.Path, err)
+			}
+			deleted++
+			continue
+		}
+		if err := template.WriteFile(w.DataDir, op.Path, op.Content); err != nil {
+			return written, deleted, fmt.Errorf("write %q: %w", op.Path, err)
+		}
+		m.notifyContainerWrite(w, op.Path, op.Content)
+		written++
+	}
+	return written, deleted, nil
 }
 
 // rebootWorkload recreates a workload's instance (stop -> create), picking up
 // the current spec — new env, etc. Serialized per workload via refLock.
 func (m *Manager) rebootWorkload(ctx context.Context, w *store.Workload) error {
+	// Boot survives caller cancellation (a dropped request must not abort a
+	// docker run mid-flight and strand a half-created container).
+	ctx = context.WithoutCancel(ctx)
 	rl := m.refLock(w.ID)
 	rl.Lock()
 	defer rl.Unlock()
@@ -658,6 +745,7 @@ func (m *Manager) StopWorkload(ctx context.Context, workloadID string) error {
 
 // StartWorkload boots a suspended/stopped workload — the "play".
 func (m *Manager) StartWorkload(ctx context.Context, workloadID string) error {
+	ctx = context.WithoutCancel(ctx) // boot survives caller cancellation
 	w, err := m.store.GetWorkload(workloadID)
 	if err != nil {
 		return err
@@ -762,7 +850,7 @@ func (m *Manager) SetTemplate(name, path string) error {
 // CreateFromTemplate provisions a project whose workloads come from a template's
 // orchd.json: one workload per manifest entry, each running its workspace on its
 // own port (local) or from its image (prod).
-func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string, delta map[string]string, deleted []string) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string, delta map[string][]byte, deleted []string) (*store.Project, []*store.Workload, error) {
 	path := m.templatePath(tmplName)
 	if path == "" {
 		return nil, nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmplName)
@@ -771,14 +859,17 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 	if err != nil {
 		return nil, nil, fmt.Errorf("template %q: %w", tmplName, err)
 	}
+	primary := man.PrimaryName()
 	specs := make([]WorkloadSpec, 0, len(man.Workloads))
 	for _, w := range man.Workloads {
 		s := WorkloadSpec{Template: tmplName, Workspace: w.Name, Name: w.Name, Image: w.Image, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
-			s.Name = "" // primary
 		} else {
 			s.Type = runtime.WorkloadRapidNativeDev
+		}
+		if w.Name == primary {
+			s.Name = "" // primary owns the bare <ref>.<base> route
 		}
 		specs = append(specs, s)
 	}
@@ -792,7 +883,7 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 // same workload shape as the template, but each workload restores from the
 // image's tarball (local) or runs the versioned container tag (prod), rather than
 // the live template. A caller-supplied delta still overlays on top.
-func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projName, regionID string, delta map[string]string, deleted []string) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projName, regionID string, delta map[string][]byte, deleted []string) (*store.Project, []*store.Workload, error) {
 	im, err := m.store.GetImage(tmplName, version)
 	if err != nil {
 		return nil, nil, fmt.Errorf("image %s: %w", store.ImageID(tmplName, version), err)
@@ -813,14 +904,26 @@ func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projNa
 		return nil, nil, fmt.Errorf("image %s has no workload shape and template %q is not available", store.ImageID(tmplName, version), tmplName)
 	}
 
+	primary := imagePrimaryName(shape)
 	specs := make([]WorkloadSpec, 0, len(shape))
 	for _, w := range shape {
-		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Workspace, Name: w.Name, Image: w.Image, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
+		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Workspace, Name: w.Name, Image: w.Image, Port: w.Port, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
-			s.Name = ""
 		} else {
 			s.Type = runtime.WorkloadRapidNativeDev
+			if s.Port == 0 {
+				// Legacy image (built before ports were frozen): synthesized
+				// workspace images listen on 8080 (node) / 80 (static).
+				if w.Kind == "static" {
+					s.Port = 80
+				} else {
+					s.Port = 8080
+				}
+			}
+		}
+		if w.Name == primary {
+			s.Name = ""
 		}
 		specs = append(specs, s)
 	}
@@ -851,13 +954,20 @@ func (m *Manager) CreateProject(ctx context.Context, name, regionID string, spec
 	if len(specs) == 0 {
 		specs = []WorkloadSpec{{Type: runtime.WorkloadTinbaseProject}}
 	}
+	// Two-phase create: register every workload (record + route + materialized
+	// tree) before booting any, so env interpolation can resolve references in
+	// both directions — a workload booting first still sees siblings registered
+	// after it in the manifest.
 	var created []*store.Workload
 	for _, ws := range specs {
-		w, err := m.AddWorkload(ctx, proj.ID, ws)
+		w, err := m.registerWorkload(proj.ID, ws)
 		if err != nil {
 			return proj, created, fmt.Errorf("workload %q: %w", ws.Name, err)
 		}
 		created = append(created, w)
+	}
+	for _, w := range created {
+		go m.provision(w.ID)
 	}
 	m.emit("project.created", proj.ID, "", name)
 	return proj, created, nil
@@ -866,6 +976,23 @@ func (m *Manager) CreateProject(ctx context.Context, name, regionID string, spec
 // AddWorkload provisions one workload into an existing project: mint credentials
 // (tinbase types), allocate a data dir, assign a route, and boot it.
 func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws WorkloadSpec) (*store.Workload, error) {
+	w, err := m.registerWorkload(projectID, ws)
+	if err != nil {
+		return nil, err
+	}
+	// Provision in the background so a slow first boot (npm install for a heavy
+	// template workspace, an image pull, tinbase initdb) doesn't block the create
+	// call. The workload starts "provisioning" and flips to running/failed; the
+	// admin polls state. Synchronous errors in registration still return.
+	go m.provision(w.ID)
+	return m.store.GetWorkload(w.ID)
+}
+
+// registerWorkload records a workload without booting it: mint credentials
+// (tinbase types), allocate a data dir, assign the default route, and
+// materialize a template tree. Booting is the caller's job (provision), which
+// lets CreateProject register a whole project before the first boot.
+func (m *Manager) registerWorkload(projectID string, ws WorkloadSpec) (*store.Workload, error) {
 	proj, err := m.store.GetProject(projectID)
 	if err != nil {
 		return nil, err
@@ -955,44 +1082,47 @@ func (m *Manager) AddWorkload(ctx context.Context, projectID string, ws Workload
 
 	// Materialize a template workload's working tree now (base copy + delta), and
 	// mark it seeded so the driver runs it as-is. Fast (file copy); the slow part
-	// (npm install) stays in the async boot below. Two sources: a frozen image
-	// tarball (boot-from-image) or the live template dir (boot-from-template).
-	if w.Template != "" {
-		var err error
-		seeded := true
-		if w.ImageVer != "" {
-			if im, gerr := m.store.GetImage(w.Template, w.ImageVer); gerr != nil {
-				err = fmt.Errorf("image %s: %w", store.ImageID(w.Template, w.ImageVer), gerr)
-			} else if im.Tarball != "" {
-				err = template.MaterializeFromTar(im.Tarball, w.DataDir, ws.SeedDelta, ws.SeedDeleted)
-			} else {
-				// Docker-only (imported) image: no tree to restore. The docker
-				// driver runs the registry image, which carries its own files.
-				seeded = false
-			}
-		} else if base := m.templatePath(w.Template); base != "" {
-			var excl []string
-			if man, lerr := template.Load(base); lerr == nil {
-				excl = man.BackupExclude
-			}
-			err = template.Materialize(base, w.DataDir, excl, ws.SeedDelta, ws.SeedDeleted)
-		}
-		if err != nil {
-			log.Printf("materialize %s: %v", wid, err)
-		} else if seeded {
-			_ = os.WriteFile(filepath.Join(w.DataDir, ".orchd-seeded"), []byte("ok\n"), 0o644)
-		}
-	}
+	// (npm install) stays in the async boot below.
+	m.materializeWorkload(w, ws.SeedDelta, ws.SeedDeleted)
 
 	m.emit("workload.created", proj.ID, wid, ws.Name)
 
-	// Provision in the background so a slow first boot (npm install for a heavy
-	// template workspace, an image pull, tinbase initdb) doesn't block the create
-	// call. The workload starts "provisioning" and flips to running/failed; the
-	// admin polls state. Synchronous errors above (bad spec, store) still return.
-	go m.provision(wid)
-
 	return m.store.GetWorkload(wid)
+}
+
+// materializeWorkload builds a workload's working tree from its pristine
+// source — a frozen image tarball (boot-from-image) or the live template dir
+// (boot-from-template) — with a delta overlaid. Shared by registration and
+// reset. Best-effort: materialize errors are logged, and the boot surfaces
+// the real failure.
+func (m *Manager) materializeWorkload(w *store.Workload, delta map[string][]byte, deleted []string) {
+	if w.Template == "" {
+		return
+	}
+	var err error
+	seeded := true
+	if w.ImageVer != "" {
+		if im, gerr := m.store.GetImage(w.Template, w.ImageVer); gerr != nil {
+			err = fmt.Errorf("image %s: %w", store.ImageID(w.Template, w.ImageVer), gerr)
+		} else if im.Tarball != "" {
+			err = template.MaterializeFromTar(im.Tarball, w.DataDir, delta, deleted)
+		} else {
+			// Docker-only (imported) image: no tree to restore. The docker
+			// driver runs the registry image, which carries its own files.
+			seeded = false
+		}
+	} else if base := m.templatePath(w.Template); base != "" {
+		var excl []string
+		if man, lerr := template.Load(base); lerr == nil {
+			excl = man.BackupExclude
+		}
+		err = template.Materialize(base, w.DataDir, excl, delta, deleted)
+	}
+	if err != nil {
+		log.Printf("materialize %s: %v", w.ID, err)
+	} else if seeded {
+		_ = os.WriteFile(filepath.Join(w.DataDir, ".orchd-seeded"), []byte("ok\n"), 0o644)
+	}
 }
 
 // provision boots a freshly-created workload in the background, updating its
@@ -1079,6 +1209,9 @@ func (m *Manager) ResolveKey(key string) (*store.Workload, error) {
 // EnsureRunning returns the address to proxy to for a workload, waking a
 // suspended/stopped one on demand. The gateway hot path.
 func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string, error) {
+	// The gateway passes the request context; a canceled proxy request must
+	// not abort the wake it triggered (the next request needs that instance).
+	ctx = context.WithoutCancel(ctx)
 	w, err := m.store.GetWorkload(workloadID)
 	if err != nil {
 		return "", err
@@ -1235,6 +1368,15 @@ func (m *Manager) DeleteWorkload(ctx context.Context, workloadID string) error {
 	}
 	_ = m.rt.Stop(ctx, workloadID)
 	m.forget(workloadID)
+	// Drop driver-side volumes too (the docker deps volume); suspend keeps
+	// them, deletion should not leak them. The deps overlay must unmount
+	// before reclaimPath recurses into the data dir.
+	runtime.RemoveWorkloadMounts(w.DataDir)
+	if vr, ok := m.rt.(interface {
+		RemoveVolumes(context.Context, string) error
+	}); ok {
+		_ = vr.RemoveVolumes(ctx, workloadID)
+	}
 	if err := m.store.DeleteWorkload(workloadID); err != nil {
 		return err
 	}
@@ -1437,7 +1579,60 @@ func (m *Manager) ListBackups(workloadID string) ([]backup.Backup, error) {
 }
 
 // RestoreWorkload replaces a workload's data with a backup and boots it.
+// ResetWorkload returns a workload to its pristine template/image state (with
+// an optional fresh delta overlaid), keeping its identity intact: workload ID,
+// JWT secret, minted keys, host port and routes are all untouched, so URLs a
+// caller has stored stay valid. Same stop → wipe → re-materialize → boot shape
+// as RestoreWorkload, sourcing from the template/image instead of a backup.
+// Workloads with no template (plain tinbase) just get a wiped volume — a fresh
+// initdb on boot.
+func (m *Manager) ResetWorkload(ctx context.Context, workloadID string, delta map[string][]byte, deleted []string) error {
+	ctx = context.WithoutCancel(ctx) // reset survives caller cancellation
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return err
+	}
+	rl := m.refLock(workloadID)
+	rl.Lock()
+	defer rl.Unlock()
+
+	_ = m.rt.Stop(ctx, workloadID) // remove container so we can replace the volume
+	m.forget(workloadID)
+
+	m.reclaimPath(w.DataDir) // wipe current data (guarded within the data root)
+	if err := os.MkdirAll(w.DataDir, 0o700); err != nil {
+		return err
+	}
+	m.materializeWorkload(w, delta, deleted)
+
+	inst, err := m.rt.Create(ctx, m.specFor(w))
+	if err != nil {
+		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+		return fmt.Errorf("boot after reset: %w", err)
+	}
+	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
+	m.markLive(workloadID, inst.Addr)
+	m.emit("workload.reset", w.ProjectID, workloadID, "")
+	return nil
+}
+
+// ResetProject resets every workload of a project to pristine state. Routes,
+// keys and the project ref survive; data does not.
+func (m *Manager) ResetProject(ctx context.Context, projectID string, delta map[string][]byte, deleted []string) error {
+	if _, err := m.store.GetProject(projectID); err != nil {
+		return err
+	}
+	if err := m.forEachWorkload(projectID, func(id string) error {
+		return m.ResetWorkload(ctx, id, delta, deleted)
+	}); err != nil {
+		return err
+	}
+	m.emit("project.reset", projectID, "", "")
+	return nil
+}
+
 func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID string) error {
+	ctx = context.WithoutCancel(ctx) // restore survives caller cancellation
 	bk := m.backupStore()
 	if bk == nil {
 		return ErrBackupsDisabled
@@ -1578,6 +1773,10 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	for k, v := range w.Env {
 		env[k] = v
 	}
+	// Resolve ${route.<name>} / ${workload.<name>.*} / ${project.ref} tokens
+	// against sibling workloads (see interpolate.go). Runs on every boot so
+	// values track route and key changes.
+	env = m.interpolateEnv(w, env)
 	// Boot-from-image: the docker driver runs the frozen, versioned image tag
 	// built for this workspace. The local/process driver ignores Image and boots
 	// from the tarball-materialized DataDir instead.
@@ -1589,23 +1788,96 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 			}
 		}
 	}
+	wsDir, appMount, depsPath, depsHost := m.workspaceMount(w)
+	// Dev servers may rebundle on first boot (delta'd projects); give them
+	// headroom beyond the 90s driver default.
+	var ready time.Duration
+	if w.Type == runtime.WorkloadRapidNativeDev {
+		ready = 300 * time.Second
+	}
 	return runtime.Spec{
-		Type:        w.Type,
-		Ref:         w.ID, // runtime key = workload id
-		DataDir:     w.DataDir,
-		Image:       image,
-		Port:        w.Port,
-		HostPort:    w.HostPort,
-		TemplateSrc: m.templatePath(w.Template),
-		Workspace:   w.Workspace,
-		DockerHost:  dockerHost,
-		Env:         env,
+		Type:         w.Type,
+		Ref:          w.ID, // runtime key = workload id
+		DataDir:      w.DataDir,
+		Image:        image,
+		Port:         w.Port,
+		HostPort:     w.HostPort,
+		TemplateSrc:  m.templatePath(w.Template),
+		Workspace:    w.Workspace,
+		WorkspaceDir: wsDir,
+		AppMount:     appMount,
+		DepsPath:     depsPath,
+		DepsHostDir:  depsHost,
+		ReadyTimeout: ready,
+		DockerHost:   dockerHost,
+		Env:          env,
 		Limits: runtime.Limits{
 			MemoryMB:  w.MemoryMB,
 			CPUs:      w.CPUs,
 			PidsLimit: m.cfg.PidsLimit,
 		},
 	}
+}
+
+// workspaceMount computes the volume-run mounts for a template/image workload
+// under the docker driver: the seeded workspace source (DataDir/<dir>) mounts
+// over the image's app directory, so what runs is the per-project tree —
+// deltas and live file sync included — not the code baked at image build. For
+// node workspaces the image's installed node_modules is preserved via a named
+// deps volume (docker initializes it from the image on first use). Returns
+// zero values (no mounts, run the baked image) for tinbase workloads, plain
+// preset images, and docker-only imported images with no seeded tree.
+func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, depsHostDir string) {
+	if w.Type != runtime.WorkloadRapidNativeDev || w.Template == "" || w.Workspace == "" {
+		return "", "", "", ""
+	}
+	if _, err := os.Stat(filepath.Join(w.DataDir, ".orchd-seeded")); err != nil {
+		return "", "", "", "" // no materialized tree (docker-only imported image)
+	}
+
+	kind, dir := "", w.Workspace // legacy fallback: dir == workspace name
+	if w.ImageVer != "" {
+		if im, err := m.store.GetImage(w.Template, w.ImageVer); err == nil {
+			for _, iw := range im.Workloads {
+				if iw.Workspace == w.Workspace {
+					kind = iw.Kind
+					if iw.Dir != "" || iw.Kind == "tinbase" {
+						dir = iw.Dir
+					}
+					break
+				}
+			}
+		}
+	}
+	if kind == "" {
+		if base := m.templatePath(w.Template); base != "" {
+			if man, err := template.Load(base); err == nil {
+				if tw, ok := man.Find(w.Workspace); ok {
+					kind, dir = tw.Kind, tw.Dir
+				}
+			}
+		}
+	}
+
+	switch kind {
+	case "node":
+		// Prefer the shared read-only deps extraction (one per image version);
+		// absent that, the driver falls back to a per-workload named volume.
+		if w.ImageVer != "" {
+			if d := m.imageDepsDir(w.Template, w.ImageVer, w.Workspace); dirExists(d) {
+				return dir, "/app", "/app/node_modules", d
+			}
+		}
+		return dir, "/app", "/app/node_modules", ""
+	case "static":
+		return dir, "/usr/share/nginx/html", "", ""
+	}
+	return "", "", "", ""
+}
+
+func dirExists(p string) bool {
+	st, err := os.Stat(p)
+	return err == nil && st.IsDir()
 }
 
 // defaultLimits returns the config default memory/CPU caps for a workload type.
