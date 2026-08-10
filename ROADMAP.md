@@ -53,3 +53,14 @@ CDN sharing. See ~/.claude/plans/dev-server-reset.md Phase 3.
   umount the overlay before removing the workload dir.
 - npm registry cache (verdaccio) on the box for faster installs/builds.
 - bootstrap.sh: install the custom caddy build (vercel-dns) instead of stock.
+- Image builds must be serialized per template and extract deps atomically.
+  2026-08-10: killing the build REQUEST doesn't kill the build (WithoutCancel),
+  so a retry ran concurrently with the original; both extracted deps into the
+  same versioned dir and the second copy landed NESTED
+  (deps/mobile/node_modules with all 685 packages duplicated). Node resolution
+  climbs through node_modules/node_modules first, so bundles evaluated two
+  copies of expo-router/safe-area-context — "Tried to register two views with
+  the same name RNCSafeAreaProvider" on device. Fix: per-template build lock
+  (reject or queue concurrent builds) + extract to a temp dir and atomically
+  rename into place; a versioned dir that already exists must never be
+  extracted into again.

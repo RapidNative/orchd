@@ -89,3 +89,16 @@ https://cloud.rapidnative.com {
 	}
 	import wildcard tinbase.dev
 }
+
+# Plain-HTTP (:80) mirrors of the wildcard fronts. The legacy front door
+# served these hosts on 80 as well, and some clients still arrive there —
+# notably exp:// deep links (Expo Go resolves them to http). auto_https
+# redirects are globally disabled, so without these blocks :80 answers an
+# empty 200 and those clients see a dead server.
+http://*.rnproject.dev {
+	import wildcard rnproject.dev
+}
+
+http://*.tinbase.dev {
+	import wildcard tinbase.dev
+}
