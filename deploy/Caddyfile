@@ -63,6 +63,12 @@ https://cloud.rapidnative.com {
 	handle @api {
 		reverse_proxy 127.0.0.1:8080
 	}
+	# Site-local drop-ins: /etc/caddy/conf.d/<base>/*.caddy can claim hosts
+	# before the default gateway handle (e.g. forward a host pattern to an
+	# external service). The directory is not tracked in this repo and may be
+	# empty; deploys leave it alone.
+	import /etc/caddy/conf.d/{args[0]}/*.caddy
+
 	# every other subdomain -> gateway (host-based workload routing)
 	handle {
 		reverse_proxy 127.0.0.1:8081
