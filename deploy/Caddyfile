@@ -90,6 +90,18 @@ https://cloud.rapidnative.com {
 	import wildcard tinbase.dev
 }
 
+# rapidnative.app — the production pretty-domain base (<slug>.rapidnative.app,
+# <id>-preview.rapidnative.app). The apex stays on Vercel (marketing site);
+# only the wildcard points here. Same Vercel DNS-01 wildcard cert setup as
+# rnproject.dev.
+*.rapidnative.app {
+	tls {
+		dns vercel {env.VERCEL_API_TOKEN}
+		resolvers 1.1.1.1
+	}
+	import wildcard rapidnative.app
+}
+
 # Plain-HTTP (:80) mirrors of the wildcard fronts. The legacy front door
 # served these hosts on 80 as well, and some clients still arrive there —
 # notably exp:// deep links (Expo Go resolves them to http). auto_https
@@ -101,4 +113,8 @@ http://*.rnproject.dev {
 
 http://*.tinbase.dev {
 	import wildcard tinbase.dev
+}
+
+http://*.rapidnative.app {
+	import wildcard rapidnative.app
 }
