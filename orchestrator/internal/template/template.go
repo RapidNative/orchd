@@ -47,6 +47,13 @@ type Workload struct {
 	// cache, a prebuilt bundle) so boots don't pay the cold cost. Docker-only:
 	// the local/process driver ignores it.
 	Build [][]string `json:"build,omitempty"`
+	// Setup is a list of argv commands RUN at image build time BEFORE any
+	// app files are copied — toolchain installs (apt packages, global npm
+	// binaries) that don't depend on the template's contents. Keeping them
+	// ahead of the COPY makes the layer cache-stable across image versions;
+	// as a build step they'd be rebuilt (hundreds of MB) on every template
+	// change. Docker-only, like Build.
+	Setup [][]string `json:"setup,omitempty"`
 	// Primary marks the workload that owns the project's bare route
 	// (<ref>.<base>); every other workload gets <ref>-<name>.<base>. At most
 	// one workload may be primary. Absent everywhere = legacy behavior: the
