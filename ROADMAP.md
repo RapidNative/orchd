@@ -53,6 +53,27 @@ CDN sharing. See ~/.claude/plans/dev-server-reset.md Phase 3.
   umount the overlay before removing the workload dir.
 - npm registry cache (verdaccio) on the box for faster installs/builds.
 - bootstrap.sh: install the custom caddy build (vercel-dns) instead of stock.
+- Image layer hygiene (2026-08-12, after the box ran out of INODES at 56% disk
+  — 164GB of buildkit cache from a week of builds; "no space left on device"
+  on every container start). Per-version unique bytes are ~2.2GB because the
+  Dockerfile emission (manager/image.go) puts everything after COPY: the
+  apt+bun step (567MB) doesn't depend on app files and belongs before COPY;
+  npm install (1.19GB) should COPY package.json+lockfile first so the layer
+  caches across versions; apt lists + npm cache should be cleaned in-RUN.
+  Also: bound builder cache after each build (docker builder prune
+  --keep-storage 30GB), and GC image versions no live workload references
+  (722MB deps extraction each, 5 versions retained today).
+- Evaluate microVM runtime (firecracker) to replace gVisor. /dev/kvm is
+  available on the box. Cheapest path: keep the docker driver and swap the
+  OCI runtime runsc -> kata-containers with the firecracker (or
+  cloud-hypervisor) backend + containerd devmapper thin-pool snapshotter —
+  block-device rootfs means guest filesystems own their inodes (kills the
+  host-inode exhaustion class entirely), a real guest kernel drops gVisor's
+  syscall tax on Metro's 80k-file crawls, and FC memory snapshots could make
+  scale-to-zero wakes near-instant (fly.io's model). Costs to size: per-VM
+  kernel+agent overhead (~30-50MB) vs shared page cache, virtiofs vs block
+  for the deps overlay and write-through file API, docker-exec equivalents
+  via the guest agent.
 - Image builds must be serialized per template and extract deps atomically.
   2026-08-10: killing the build REQUEST doesn't kill the build (WithoutCancel),
   so a retry ran concurrently with the original; both extracted deps into the

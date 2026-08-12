@@ -2,6 +2,8 @@ package manager
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -11,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
@@ -79,6 +82,9 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 	// client killed docker cp mid-extract, and every boot of that version paid
 	// a multi-minute volume copy). Survive caller cancellation.
 	ctx = context.WithoutCancel(ctx)
+	lk, _ := m.buildLocks.LoadOrStore(tmpl, &sync.Mutex{})
+	lk.(*sync.Mutex).Lock()
+	defer lk.(*sync.Mutex).Unlock()
 	base := m.templatePath(tmpl)
 	if base == "" {
 		return nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmpl)
@@ -135,10 +141,17 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 			// docker's named-volume initialization copies multi-GB of small
 			// files per workload on first boot (observed: 10+ minute boots).
 			if w.Kind == "node" {
-				if err := m.extractImageDeps(ctx, tag, m.imageDepsDir(tmpl, version, w.Name)); err != nil {
+				if err := m.ensureImageDeps(ctx, base, w, tag, tmpl, version); err != nil {
 					log.Printf("BuildImage %s@%s: deps extract %q skipped: %v", tmpl, version, w.Name, err)
 				}
 			}
+		}
+		// The build cache is inode-dense (each version's node_modules layers
+		// are ~80k files) and grew unbounded to 164GB / a quarter of the
+		// filesystem's inodes before it starved container creation. Keep
+		// enough for warm rebuilds, drop the tail.
+		if out, err := exec.CommandContext(ctx, "docker", "builder", "prune", "-f", "--keep-storage", "30GB").CombinedOutput(); err != nil {
+			log.Printf("BuildImage %s@%s: builder prune skipped: %v: %s", tmpl, version, err, tailStr(string(out), 120))
 		}
 	} else {
 		log.Printf("BuildImage %s@%s: docker CLI not found, tarball-only image", tmpl, version)
@@ -147,8 +160,57 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 	if err := m.store.PutImage(im); err != nil {
 		return nil, err
 	}
+	m.gcImageVersions(ctx, tmpl, 2)
 	m.emit("image.built", "", "", store.ImageID(tmpl, version))
 	return im, nil
+}
+
+// gcImageVersions removes image versions beyond the newest `keep` that no
+// container (running or stopped — suspended workloads must keep waking)
+// references: docker tags, the store record, and the versioned data dir.
+// Best-effort; a referenced or unparseable version is simply left alone.
+func (m *Manager) gcImageVersions(ctx context.Context, tmpl string, keep int) {
+	type ver struct {
+		n  int
+		im *store.Image
+	}
+	var vers []ver
+	for _, im := range m.store.ListImages() {
+		if im.Template != tmpl {
+			continue
+		}
+		n, err := strconv.Atoi(strings.TrimPrefix(im.Version, "v"))
+		if err != nil {
+			continue
+		}
+		vers = append(vers, ver{n, im})
+	}
+	sort.Slice(vers, func(i, j int) bool { return vers[i].n > vers[j].n })
+	for i, v := range vers {
+		if i < keep {
+			continue
+		}
+		referenced := false
+		for _, tag := range v.im.Dockers {
+			out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "ancestor="+tag).Output()
+			if err != nil || len(strings.TrimSpace(string(out))) > 0 {
+				referenced = true
+				break
+			}
+		}
+		if referenced {
+			continue
+		}
+		for _, tag := range v.im.Dockers {
+			_ = exec.CommandContext(ctx, "docker", "rmi", tag).Run()
+		}
+		if err := m.store.DeleteImage(tmpl, v.im.Version); err != nil {
+			log.Printf("image gc %s@%s: store delete: %v", tmpl, v.im.Version, err)
+			continue
+		}
+		_ = os.RemoveAll(filepath.Join(m.imagesDir(), tmpl, v.im.Version))
+		log.Printf("image gc: removed %s@%s (unreferenced)", tmpl, v.im.Version)
+	}
 }
 
 // imageWorkloads freezes a manifest's workload shape into the driver-agnostic
@@ -299,6 +361,43 @@ func (m *Manager) imageDepsDir(tmpl, version, workspace string) string {
 	return filepath.Join(m.imagesDir(), tmpl, version, "deps", workspace)
 }
 
+// ensureImageDeps materializes the shared node_modules extraction for one
+// workspace of a freshly built image, deduplicated by lockfile content:
+// consecutive versions almost always ship identical dependencies, so the
+// ~700MB / ~80k-inode tree is extracted once per distinct lockfile into
+// <tmpl>/shared-deps/<hash> and each version's deps/<workspace> is a symlink
+// to it (overlay lowerdirs and os.Stat both resolve symlinks). No lockfile =
+// legacy behavior, a private extraction per version.
+func (m *Manager) ensureImageDeps(ctx context.Context, base string, w template.Workload, tag, tmpl, version string) error {
+	dest := m.imageDepsDir(tmpl, version, w.Name)
+	hash := lockfileHash(base, w.Dir)
+	if hash == "" {
+		return m.extractImageDeps(ctx, tag, dest)
+	}
+	shared := filepath.Join(m.imagesDir(), tmpl, "shared-deps", hash+"-"+w.Name)
+	if err := m.extractImageDeps(ctx, tag, shared); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	_ = os.Remove(dest)
+	return os.Symlink(shared, dest)
+}
+
+// lockfileHash hashes the workspace's dependency manifest (lockfile when
+// present, else package.json). Empty when neither exists.
+func lockfileHash(base, dir string) string {
+	for _, name := range []string{"package-lock.json", "bun.lock", "package.json"} {
+		b, err := os.ReadFile(filepath.Join(base, dir, name))
+		if err == nil {
+			sum := sha256.Sum256(b)
+			return hex.EncodeToString(sum[:])[:12]
+		}
+	}
+	return ""
+}
+
 // extractImageDeps copies /app/node_modules out of a built workspace image
 // into destDir (atomically via a temp dir). The tree is immutable per image
 // version, so one extraction serves every workload.
@@ -366,10 +465,20 @@ func dockerfileFor(w template.Workload) string {
 		// it via copy-on-write (survives suspend/wake; reset on recreate).
 		b.WriteString("ENV HOME=/cache\n")
 		b.WriteString("RUN mkdir -p /cache\n")
-		fmt.Fprintf(&b, "COPY %s/ /app/\n", strings.TrimSuffix(dir, "/"))
+		// Layer ordering is the size/inode story: everything below COPY is
+		// invalidated by ANY template change, so app-independent work stays
+		// above it. Setup (toolchains) first; then the manifest lockfile alone
+		// so the install layer (typically >1GB / ~80k files) is reused across
+		// versions while dependencies are unchanged; the full tree last.
+		for _, step := range w.Setup {
+			j, _ := json.Marshal(step)
+			fmt.Fprintf(&b, "RUN %s\n", j)
+		}
 		if len(w.Install) > 0 {
+			fmt.Fprintf(&b, "COPY %s/package*.json /app/\n", strings.TrimSuffix(dir, "/"))
 			fmt.Fprintf(&b, "RUN %s\n", strings.Join(w.Install, " "))
 		}
+		fmt.Fprintf(&b, "COPY %s/ /app/\n", strings.TrimSuffix(dir, "/"))
 		b.WriteString("ENV PORT=8080\n")
 		for _, step := range w.Build {
 			// Exec-form RUN: argv survives exactly (a step like

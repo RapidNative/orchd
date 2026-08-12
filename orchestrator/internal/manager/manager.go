@@ -60,6 +60,12 @@ type Manager struct {
 	refLocks map[string]*sync.Mutex   // per-workload wake serialization
 
 	portMu sync.Mutex // serializes host-port allocation (port-addressing mode)
+
+	// buildLocks serializes image builds per template. Two concurrent builds
+	// of one template raced their deps extraction into the same versioned dir
+	// and nested node_modules inside itself (2026-08-10, v39) — the request
+	// being killed doesn't kill a build (WithoutCancel), so retries overlap.
+	buildLocks sync.Map // template name -> *sync.Mutex
 }
 
 type liveInstance struct {
