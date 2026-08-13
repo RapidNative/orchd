@@ -148,6 +148,10 @@ func (n *vmNet) ensure() error {
 	}
 	// veth pair host <-> namespace
 	if err := sh("ip", "link", "show", n.hostVeth()); err != nil {
+		// A re-created ref reuses its namespace but gets a new veth index;
+		// the old ve0 inside the ns makes `ip link add ... peer ve0` fail
+		// with EEXIST (observed as a create fallback storm). Clear it first.
+		_ = inNS("ip", "link", "del", "ve0")
 		if err := sh("ip", "link", "add", n.hostVeth(), "type", "veth", "peer", "name", "ve0", "netns", ns); err != nil {
 			return err
 		}

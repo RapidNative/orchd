@@ -61,7 +61,12 @@ func (m *Mux) Create(ctx context.Context, spec Spec) (*Instance, error) {
 }
 
 func (m *Mux) Start(ctx context.Context, spec Spec) (*Instance, error) {
-	if m.fc.Knows(spec.Ref) || m.picksFC(spec) {
+	// Strict ownership: only refs the fc driver already owns wake through it.
+	// Routing Start by the allowlist re-CREATED a shadow microVM for refs
+	// whose fc create had fallen back to docker — two instances fighting over
+	// one ref, the gateway pointing at the dead one (observed 2026-08-13).
+	// Runtime choice happens exactly once, at Create.
+	if m.fc.Knows(spec.Ref) {
 		return m.fc.Start(ctx, spec)
 	}
 	return m.def.Start(ctx, spec)

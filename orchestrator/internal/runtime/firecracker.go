@@ -68,6 +68,11 @@ type FirecrackerDriver struct {
 	// the mem file to an async zstd; a Start racing it must wait for whichever
 	// form (raw or .zst) wins.
 	refLocks sync.Map // ref -> *sync.Mutex
+	// bootSem staggers fresh boots: N concurrent cold boots through the thin
+	// pool serialize IO badly enough to blow ReadyTimeout and trigger create
+	// fallbacks (S2's load-735 lesson, re-observed with live traffic).
+	// Snapshot restores are cheap and skip this.
+	bootSem chan struct{}
 }
 
 func (d *FirecrackerDriver) lockFor(ref string) *sync.Mutex {
@@ -96,9 +101,10 @@ func NewFirecrackerDriver(cfg FirecrackerConfig) (*FirecrackerDriver, error) {
 		return nil, err
 	}
 	d := &FirecrackerDriver{
-		cfg:  cfg,
-		pool: &thinPool{Name: cfg.Pool, root: cfg.Root, sectors: cfg.VolumeGiB * 1024 * 1024 * 1024 / 512},
-		idx:  map[string]*vmMeta{},
+		cfg:     cfg,
+		pool:    &thinPool{Name: cfg.Pool, root: cfg.Root, sectors: cfg.VolumeGiB * 1024 * 1024 * 1024 / 512},
+		idx:     map[string]*vmMeta{},
+		bootSem: make(chan struct{}, 3),
 	}
 	return d, nil
 }
@@ -152,6 +158,12 @@ func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, e
 	img, err := d.imageMeta(sanitizeTagFC(spec.Image))
 	if err != nil {
 		return nil, fmt.Errorf("fc image %q: %w (run image prep first)", spec.Image, err)
+	}
+	// A ref being re-created (retry after a failed attempt, project reset)
+	// must not inherit half-made state — stale clones, snapshots or netns
+	// wreck the new instance in confusing ways. Start from nothing.
+	if d.Knows(spec.Ref) {
+		_ = d.Delete(ctx, spec.Ref)
 	}
 	if err := os.MkdirAll(d.vmDir(spec.Ref), 0o755); err != nil {
 		return nil, err
@@ -413,6 +425,12 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 }
 
 func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bool) (*Instance, error) {
+	select {
+	case d.bootSem <- struct{}{}:
+		defer func() { <-d.bootSem }()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	if err := d.spawn(m); err != nil {
 		return nil, err
 	}
