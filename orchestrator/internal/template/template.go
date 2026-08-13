@@ -54,6 +54,11 @@ type Workload struct {
 	// as a build step they'd be rebuilt (hundreds of MB) on every template
 	// change. Docker-only, like Build.
 	Setup [][]string `json:"setup,omitempty"`
+	// Warm, when set, is a path requested once against the freshly built
+	// workload during image preparation (docker bake and firecracker template
+	// boot both use it) so caches and bundles are hot before any user hits it.
+	Warm string `json:"warm,omitempty"`
+
 	// Primary marks the workload that owns the project's bare route
 	// (<ref>.<base>); every other workload gets <ref>-<name>.<base>. At most
 	// one workload may be primary. Absent everywhere = legacy behavior: the

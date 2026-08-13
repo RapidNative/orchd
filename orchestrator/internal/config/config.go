@@ -53,6 +53,16 @@ type Config struct {
 
 	// Image is the container image the DockerDriver runs.
 	Image string
+	// FCWorkloads routes template/workspace pairs (comma-separated, e.g.
+	// "fullstack-supabase/mobile") to the firecracker runtime; empty disables
+	// the microVM path entirely. Linux-only; requires FCBin/FCKernel and a
+	// dm-thin pool named FCPool.
+	FCWorkloads string
+	FCBin       string
+	FCKernel    string
+	FCRoot      string
+	FCPool      string
+
 	// DockerRuntime is the Docker runtime for tenant containers. "runsc" selects
 	// gVisor isolation; empty uses runc.
 	DockerRuntime string
@@ -155,6 +165,11 @@ func Load() Config {
 		StateDSN:        env("ORCHD_STATE_DSN", ""),
 		StateSQLite:     env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin: envInt("ORCHD_RATE_LIMIT", 0),
+		FCWorkloads:     env("ORCHD_FC_WORKLOADS", ""),
+		FCBin:           env("ORCHD_FC_BIN", "/opt/orchd/fc/firecracker"),
+		FCKernel:        env("ORCHD_FC_KERNEL", "/opt/orchd/fc/vmlinux"),
+		FCRoot:          env("ORCHD_FC_ROOT", "/opt/orchd/data/fc"),
+		FCPool:          env("ORCHD_FC_POOL", "fcorchd"),
 	}
 }
 

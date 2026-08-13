@@ -16,6 +16,9 @@ Environment=ORCHD_DEV_CPUS=4
 Environment=ORCHD_DEV_MEM_MB=4096
 Environment=ORCHD_API_KEY_FILE=/opt/orchd/secrets/admin.key
 Environment=ORCHD_BASE_DOMAIN=rapidnative.app
+# Firecracker pilot: mobile dev servers run as microVMs (wake=snapshot
+# restore ~0.1-3s vs 60-90s docker rebundle). Other workloads stay docker.
+Environment=ORCHD_FC_WORKLOADS=fullstack-supabase/mobile
 Environment=ORCHD_ALT_DOMAINS=rnproject.dev,tinbase.dev
 Environment=ORCHD_PUBLIC_SCHEME=https
 Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com

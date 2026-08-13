@@ -60,6 +60,7 @@ func main() {
 	default:
 		rt = runtime.NewLocalDriver(cfg.TinbaseBin, cfg.Engine)
 	}
+	rt = wrapFC(cfg, rt)
 	mgr := manager.New(cfg, st, rt)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
