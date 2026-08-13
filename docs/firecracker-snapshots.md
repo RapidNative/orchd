@@ -129,10 +129,32 @@ with stale in-guest Metro caches); S3's image pipeline must build the base
 volume from a clean export and warm it in one boot, not reuse a
 crash-copied filesystem.
 
-S3 — orchd `firecracker` runtime driver: lifecycle + vsock agent
-(fs/exec/logs), wake-on-request and wake-on-write, reaper re-snapshot.
-Behind a per-template runtime flag so one pilot template runs FC while
-everything else stays on gVisor.
+S3 — driver DONE 2026-08-13 (manager wiring remains for S4). The
+FirecrackerDriver (internal/runtime/firecracker.go + fc_host.go +
+fc_image.go) implements the Runtime interface; `fcharness` (cmd/fcharness)
+drives it end to end on the box. Full lifecycle, measured:
+
+| step                                  | measured |
+|---------------------------------------|----------|
+| image prep (once per version)         | 2m22s    |
+| Create: thin clone + env + fresh boot | 7.3s     |
+| first bundle                          | 20.3s    |
+| Suspend (3GB mem snapshot write)      | 25-49s   |
+| Start = restore, to serving           | 117-159ms|
+| bundle right after restore            | 0.3-0.9s |
+| agent file write                      | 70ms     |
+
+Repeatable across suspend/restore cycles. Hard-won rules encoded in the
+driver: the warm volume must come from a clean RUNNING halt (a paused VM
+can't process /halt; pause-then-kill tears cache writes and every clone
+500s — hit twice), the image CMD assumes docker's WORKDIR so init must cd
+/app, and kill() must reap the VMM before a respawn (the tap fd EBUSYs).
+Suspend's 25-49s snapshot write wants a real-LV pool + memory balloon;
+fine for a reaper, not for anything user-facing.
+
+Remaining for S4: manager multi-runtime selection (pilot template flag),
+wake-on-write via driver WriteFile, reaper re-snapshot, backups export,
+HTTP agent -> vsock hardening, jailer.
 
 S4 — gateway pilot: fullstack-supabase on FC end to end (create → scan →
 suspend → write → auto-resume → scan), then flip the default.
