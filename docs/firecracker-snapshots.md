@@ -82,10 +82,23 @@ the budget needs stretching.
 
 ## Spike plan (box-first; macOS has no KVM)
 
-S1 — raw firecracker on the box (off-hours, guarded): kernel + rootfs built
-from the mobile image (`docker export` → ext4), boot, run `expo start`,
-snapshot after warm bundle, restore, measure: boot time, resume time,
-first-request-after-resume, RSS, snapshot size. Go/no-go numbers.
+S1 — DONE 2026-08-13, verdict: GO. Firecracker v1.16.1, CI kernel 6.1.141,
+rootfs = docker export of fullstack-supabase@v44 mobile + 20-line init,
+4 vCPU / 3GB. Measured on the production box:
+
+| metric                        | gVisor today | firecracker |
+|-------------------------------|--------------|-------------|
+| boot -> Metro listening       | ~14s         | 5.9s        |
+| cold first bundle             | 43-90s       | 20.9s       |
+| warm request                  | ~1s          | 0.24s       |
+| restore -> serving            | n/a (60-90s) | 61ms        |
+| first bundle after restore    | n/a          | 0.30s       |
+| snapshot create / mem size    | n/a          | 8.8s / 3.1G |
+
+The guest kernel alone halves-to-quarters the cold path (gVisor's syscall
+tax confirmed); snapshot restore makes wake effectively free. The 3.1GB
+mem file (= full guest RAM) is the cost the two-tier design + balloon-
+before-snapshot must manage. Spike harness: /opt/fc-spike on the box.
 
 S2 — dm-thin pool: base volume + N clones, delta apply via agent stub,
 incremental rebundle timing from the template snapshot (the cold-tier wake
