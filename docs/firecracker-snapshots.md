@@ -184,13 +184,16 @@ orchd API:
 - BuildImage now auto-preps fc images for allowlisted workspaces (manifest
   gains a `warm` field for the warm-request path)
 
-OPEN BUG: wake-on-write half-works. The manager resumed the suspended
-microVM (~3.1s incl. 148MB decompress) and the host-side write landed, but
-the agent write into the guest failed with "no route to host" on the veth
-(gateway traffic on :8080 worked moments later, so it is not plain netns
-breakage — suspect the agent process or :9000 path after a cross-process
-suspend/restore cycle). Needs a live repro with in-guest logs before the
-pilot is enabled for real traffic.
+Wake-on-write bug FIXED same day: the wake was gated on the manager's
+in-memory live map, which an out-of-band suspend leaves stale — the wake
+block was skipped and the agent write dialed a dead VM's namespace. The
+gate is now EnsureRunning itself (cheap when running). Verified: suspended
+microVM -> API write 200 in 3.4s -> state running -> file contents read
+back INSIDE the guest -> zero write-through errors. DeleteProject also
+releases per-workload driver state now (fixes the 2026-08-09 deps-overlay
+mount leak AND leaked microVMs; verified live). The pilot is ENABLED on
+the box (ORCHD_FC_WORKLOADS=fullstack-supabase/mobile via a systemd
+drop-in) with real projects running on microVMs.
 
 Also remaining: reaper calling Compact, backups export, HTTP agent ->
 vsock hardening, jailer.
