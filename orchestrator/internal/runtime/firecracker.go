@@ -429,7 +429,25 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	return fmt.Errorf("firecracker api socket never appeared")
 }
 
+// ensureGuestResolver writes /etc/resolv.conf into the VM's rootfs clone while
+// it is down. Runs on every fresh boot, not just at create: nothing in the
+// sandbox hands a resolver out (no DHCP — the guest address arrives on the
+// kernel command line), and clones made before this existed have no resolver
+// on disk, so a boot-time dependency install would fail on DNS.
+func (d *FirecrackerDriver) ensureGuestResolver(m *vmMeta) {
+	mnt := filepath.Join(d.vmDir(m.Ref), "mnt")
+	if err := os.MkdirAll(mnt, 0o755); err != nil {
+		return
+	}
+	if err := sh("mount", "/dev/mapper/"+d.dmName(m.Ref), mnt); err != nil {
+		return // best-effort: a guest that already has one keeps working
+	}
+	defer sh("umount", mnt)
+	_ = os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644)
+}
+
 func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bool) (*Instance, error) {
+	d.ensureGuestResolver(m)
 	select {
 	case d.bootSem <- struct{}{}:
 		defer func() { <-d.bootSem }()
@@ -575,9 +593,6 @@ func (d *FirecrackerDriver) prepareGuest(m *vmMeta, spec Spec) error {
 	if err := os.WriteFile(filepath.Join(mnt, "etc", "orchd.env"), []byte(b.String()), 0o644); err != nil {
 		return err
 	}
-	// A guest with egress still needs a resolver: nothing in the sandbox hands
-	// one out (no DHCP — the address is on the kernel command line). Written
-	// here rather than only baked, so images built before this get it too.
 	if err := os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644); err != nil {
 		return err
 	}
