@@ -136,6 +136,21 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 				continue
 			}
 			im.Dockers[w.Name] = tag
+			// Firecracker pilot: prepare the microVM base + warm volume for
+			// workloads routed to the fc runtime (clean export, one template
+			// boot, warm request from the manifest's `warm` path).
+			if mx, ok := m.rt.(interface {
+				PicksFC(tmpl, workspace string) bool
+				PrepareFCImage(ctx context.Context, dockerTag, runCmd, warmPath string) error
+			}); ok && mx.PicksFC(tmpl, w.Name) && w.Kind == "node" {
+				runCmd := strings.Join(w.Run, " ")
+				if len(w.Run) == 3 && w.Run[0] == "sh" {
+					runCmd = w.Run[2]
+				}
+				if err := mx.PrepareFCImage(ctx, tag, runCmd, w.Warm); err != nil {
+					log.Printf("BuildImage %s@%s: fc image prep %q skipped: %v", tmpl, version, w.Name, err)
+				}
+			}
 			// Extract the image's installed node_modules once per version. Every
 			// workload of this image bind-mounts it read-only — without this,
 			// docker's named-volume initialization copies multi-GB of small

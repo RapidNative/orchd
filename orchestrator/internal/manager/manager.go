@@ -618,8 +618,26 @@ func (m *Manager) notifyContainerWrite(w *store.Workload, rel string, content []
 	cw, ok := m.rt.(interface {
 		WriteFileInContainer(context.Context, string, string, []byte) error
 	})
-	if !ok || !m.isLive(w.ID) {
+	if !ok {
 		return
+	}
+	// Wake-on-write (microVM workloads): a suspended guest owns its filesystem,
+	// so the write must happen INSIDE a live VM — resume it, apply the write,
+	// let the dev server rebuild; the reaper re-suspends later. Docker
+	// workloads keep the old contract (host bind mount is the source of truth;
+	// only live containers get the inotify nudge).
+	if !m.isLive(w.ID) {
+		fcOwned := false
+		if mx, ok := m.rt.(interface{ KnowsMicroVM(string) bool }); ok {
+			fcOwned = mx.KnowsMicroVM(w.ID)
+		}
+		if !fcOwned {
+			return
+		}
+		if _, err := m.EnsureRunning(context.Background(), w.ID); err != nil {
+			log.Printf("wake-on-write %s: %v", w.ID, err)
+			return
+		}
 	}
 	if err := cw.WriteFileInContainer(context.Background(), w.ID, m.containerPathFor(w, rel), content); err != nil {
 		log.Printf("container write-through %s %s: %v", w.ID, rel, err)
@@ -1806,6 +1824,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		Ref:          w.ID, // runtime key = workload id
 		DataDir:      w.DataDir,
 		Image:        image,
+		Template:     w.Template,
 		Port:         w.Port,
 		HostPort:     w.HostPort,
 		TemplateSrc:  m.templatePath(w.Template),

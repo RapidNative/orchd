@@ -105,6 +105,13 @@ func NewFirecrackerDriver(cfg FirecrackerConfig) (*FirecrackerDriver, error) {
 
 func (d *FirecrackerDriver) Name() string { return "firecracker" }
 
+// Knows reports whether this driver owns a ref (durable: meta.json survives
+// restarts). The Mux routes every ref-keyed call with it.
+func (d *FirecrackerDriver) Knows(ref string) bool {
+	_, err := d.meta(ref)
+	return err == nil
+}
+
 func (d *FirecrackerDriver) vmDir(ref string) string { return filepath.Join(d.cfg.Root, "vms", ref) }
 func (d *FirecrackerDriver) dmName(ref string) string {
 	return "fcvm-" + sanitizeNet(ref) + "-rootfs"
@@ -142,7 +149,7 @@ func (d *FirecrackerDriver) saveMeta(m *vmMeta) error {
 // the workload env into the clone, fresh-boot it in its own namespace, and
 // wait until the workload serves.
 func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, error) {
-	img, err := d.imageMeta(spec.Image)
+	img, err := d.imageMeta(sanitizeTagFC(spec.Image))
 	if err != nil {
 		return nil, fmt.Errorf("fc image %q: %w (run image prep first)", spec.Image, err)
 	}
@@ -156,12 +163,12 @@ func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, e
 	if err := d.pool.snapshotOf(img.WarmDevID, devID, d.dmName(spec.Ref)); err != nil {
 		return nil, fmt.Errorf("clone rootfs: %w", err)
 	}
-	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: spec.Image, Ephemeral: spec.Ephemeral}
+	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: sanitizeTagFC(spec.Image), Ephemeral: spec.Ephemeral}
 	if err := d.saveMeta(m); err != nil {
 		return nil, err
 	}
-	if err := d.writeGuestEnv(m, spec.Env); err != nil {
-		return nil, fmt.Errorf("write guest env: %w", err)
+	if err := d.prepareGuest(m, spec); err != nil {
+		return nil, fmt.Errorf("prepare guest: %w", err)
 	}
 	inst, err := d.boot(ctx, m, spec, false)
 	if err != nil {
@@ -523,9 +530,13 @@ func (d *FirecrackerDriver) api(ref, method, path, body string) error {
 	return nil
 }
 
-// writeGuestEnv mounts the VM's rootfs clone and drops the workload env where
-// the baked init sources it. Only valid while the VM is down.
-func (d *FirecrackerDriver) writeGuestEnv(m *vmMeta, env map[string]string) error {
+// prepareGuest mounts the VM's rootfs clone while it is down and (a) drops
+// the workload env where the baked init sources it, (b) syncs the project's
+// materialized workspace over the image's /app — the guest boots the image
+// scaffold otherwise and would never see the project's delta files.
+// node_modules is excluded: the image's installed tree stays authoritative
+// (the boot wrapper's pkg-hash guard installs additions).
+func (d *FirecrackerDriver) prepareGuest(m *vmMeta, spec Spec) error {
 	mnt := filepath.Join(d.vmDir(m.Ref), "mnt")
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
 		return err
@@ -535,10 +546,40 @@ func (d *FirecrackerDriver) writeGuestEnv(m *vmMeta, env map[string]string) erro
 	}
 	defer sh("umount", mnt)
 	var b strings.Builder
-	for k, v := range env {
+	for k, v := range spec.Env {
 		b.WriteString(fmt.Sprintf("export %s=%q\n", k, v))
 	}
-	return os.WriteFile(filepath.Join(mnt, "etc", "orchd.env"), []byte(b.String()), 0o644)
+	if err := os.WriteFile(filepath.Join(mnt, "etc", "orchd.env"), []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	src := spec.DataDir
+	if spec.WorkspaceDir != "" {
+		src = filepath.Join(spec.DataDir, spec.WorkspaceDir)
+	}
+	if st, err := os.Stat(src); err == nil && st.IsDir() {
+		if err := sh("rsync", "-a", "--delete-after", "--exclude", "node_modules", "--exclude", ".expo",
+			src+"/", filepath.Join(mnt, "app")+"/"); err != nil {
+			return fmt.Errorf("workspace sync: %w", err)
+		}
+	}
+	return sh("sync")
+}
+
+// DeleteFileInGuest removes a file inside the running guest via the agent.
+func (d *FirecrackerDriver) DeleteFileInGuest(ctx context.Context, ref, path string) error {
+	m, err := d.meta(ref)
+	if err != nil {
+		return err
+	}
+	n := &vmNet{Ref: ref, Idx: m.NetIdx}
+	body, _ := json.Marshal(map[string]string{"p": path})
+	req, _ := http.NewRequestWithContext(ctx, "DELETE", fmt.Sprintf("http://%s/file", n.Addr(d.cfg.AgentPort)), bytes.NewReader(body))
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	res.Body.Close()
+	return nil
 }
 
 func pidAlive(pid int) bool {

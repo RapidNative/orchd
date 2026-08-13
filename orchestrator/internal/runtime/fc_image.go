@@ -53,7 +53,10 @@ func (d *FirecrackerDriver) imageMeta(name string) (*fcImageMeta, error) {
 // The template memory snapshot (tpl.state/tpl.mem in the image dir) is kept
 // for a future template-restore cold tier; project creates today fresh-boot
 // from the warm volume.
-func (d *FirecrackerDriver) PrepareImage(ctx context.Context, name, dockerTag, runCmd, warmPath string) error {
+// PrepareImage derives the fc image name from the docker tag so the create
+// path (which only has spec.Image) always finds it.
+func (d *FirecrackerDriver) PrepareImage(ctx context.Context, dockerTag, runCmd, warmPath string) error {
+	name := sanitizeTagFC(dockerTag)
 	dir := d.imageDir(name)
 	if _, err := d.imageMeta(name); err == nil {
 		return fmt.Errorf("image %s already prepared (delete %s to redo)", name, dir)

@@ -10,8 +10,12 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"time"
 )
+
+// errUnsupported reports a driver capability the active runtime lacks.
+var errUnsupported = errors.New("not supported by this runtime")
 
 // WorkloadType is the generic primitive that lets one orchestrator run more than
 // one kind of tenant. tinbase-cloud projects and RapidNative dev environments are
@@ -90,6 +94,10 @@ type Spec struct {
 	// workload of the image version. Empty falls back to a per-workload named
 	// volume initialized by docker from the image (slow for big trees).
 	DepsHostDir string
+
+	// Template is the template NAME this workload came from (routing key for
+	// multi-runtime selection); TemplateSrc is its on-disk path.
+	Template string
 
 	// TemplateSrc + Workspace drive template mode (local process driver): the
 	// driver copies the template folder at TemplateSrc into DataDir on first boot,

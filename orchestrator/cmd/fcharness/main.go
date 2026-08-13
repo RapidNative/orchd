@@ -58,7 +58,8 @@ func main() {
 		if len(os.Args) > 5 {
 			warm = os.Args[5]
 		}
-		must(d.PrepareImage(ctx, os.Args[2], os.Args[3], os.Args[4], warm))
+		_ = os.Args[2] // legacy name arg kept for CLI compatibility; name derives from the tag
+		must(d.PrepareImage(ctx, os.Args[3], os.Args[4], warm))
 		fmt.Println("image prepared in", time.Since(t0).Round(time.Millisecond))
 	case "create":
 		env := map[string]string{}
