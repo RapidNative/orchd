@@ -197,9 +197,23 @@ func (d *FirecrackerDriver) Start(ctx context.Context, spec Spec) (*Instance, er
 	if err != nil {
 		return d.Create(ctx, spec)
 	}
+	n0 := &vmNet{Ref: spec.Ref, Idx: m.NetIdx}
 	if st, _ := d.Status(ctx, spec.Ref); st == StateRunning {
-		n := &vmNet{Ref: spec.Ref, Idx: m.NetIdx}
-		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: n.Addr(d.cfg.GuestPort), StartedAt: time.Now()}, nil
+		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: n0.Addr(d.cfg.GuestPort), StartedAt: time.Now()}, nil
+	}
+	// Alive but paused (interrupted suspend): resuming is instant and keeps the
+	// dev server's state. Booting instead would spawn a second VMM and fail on
+	// the tap device the live one still holds.
+	if m.PID != 0 && pidAlive(m.PID) {
+		if st, err := d.instanceState(spec.Ref); err == nil && st == "Paused" {
+			if err := d.api(spec.Ref, "PATCH", "vm", `{"state":"Resumed"}`); err == nil {
+				addr := n0.Addr(d.cfg.GuestPort)
+				if err := waitHTTP(ctx, addr, 30*time.Second); err == nil {
+					return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
+				}
+			}
+		}
+		d.kill(m) // unrecoverable: fall through to a fresh boot
 	}
 	if d.hasSnapshot(spec.Ref) {
 		inst, err := d.restore(ctx, m)
@@ -235,8 +249,20 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 	}
 	body := fmt.Sprintf(`{"snapshot_type":"Full","snapshot_path":%q,"mem_file_path":%q}`,
 		d.snapPath(ref, "state"), d.snapPath(ref, "mem"))
-	if err := d.api(ref, "PUT", "snapshot/create", body); err != nil {
-		return fmt.Errorf("snapshot: %w", err)
+	// Writing multiple GB to a busy disk can take minutes; a short timeout here
+	// used to abandon the VM mid-suspend. And whatever goes wrong, the VM must
+	// not be left paused: a paused guest answers nothing while orchd still
+	// believes it is running, so the workload 502s forever with no self-heal
+	// (production incident 2026-08-13, 11 workloads stuck).
+	if err := d.apiTimeout(ref, "PUT", "snapshot/create", body, 15*time.Minute); err != nil {
+		if rerr := d.api(ref, "PATCH", "vm", `{"state":"Resumed"}`); rerr != nil {
+			// cannot resume either — kill it so the next request boots fresh
+			d.kill(m)
+			d.dropSnapshot(ref)
+			return fmt.Errorf("snapshot: %w (resume also failed: %v; killed instead)", err, rerr)
+		}
+		d.dropSnapshot(ref) // a partial snapshot must never be restored
+		return fmt.Errorf("snapshot: %w (VM resumed, still serving)", err)
 	}
 	d.kill(m)
 	// Compress off the caller's path: 3GB of mostly-zero pages zstd to
@@ -304,6 +330,11 @@ func (d *FirecrackerDriver) Status(ctx context.Context, ref string) (State, erro
 		return StateStopped, nil
 	}
 	if m.PID != 0 && pidAlive(m.PID) {
+		// Alive is not the same as serving: a VM paused by an interrupted
+		// suspend must report as not-running so the manager heals it.
+		if st, err := d.instanceState(ref); err == nil && st == "Paused" {
+			return StateSuspended, nil
+		}
 		return StateRunning, nil
 	}
 	if d.hasSnapshot(ref) {
@@ -525,11 +556,37 @@ func (d *FirecrackerDriver) kill(m *vmMeta) {
 
 // api calls the firecracker unix-socket HTTP API for a VM.
 func (d *FirecrackerDriver) api(ref, method, path, body string) error {
+	return d.apiTimeout(ref, method, path, body, 60*time.Second)
+}
+
+// instanceState reports the VMM's own view of itself ("Running", "Paused",
+// "Not started"). Cheap, and the only way to tell a serving VM from one that
+// was paused and never resumed.
+func (d *FirecrackerDriver) instanceState(ref string) (string, error) {
 	client := http.Client{
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", d.sockPath(ref))
 		}},
-		Timeout: 60 * time.Second,
+		Timeout: 5 * time.Second,
+	}
+	res, err := client.Get("http://fc/")
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	var info struct{ State string `json:"state"` }
+	if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
+		return "", err
+	}
+	return info.State, nil
+}
+
+func (d *FirecrackerDriver) apiTimeout(ref, method, path, body string, timeout time.Duration) error {
+	client := http.Client{
+		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", d.sockPath(ref))
+		}},
+		Timeout: timeout,
 	}
 	req, err := http.NewRequest(method, "http://fc/"+path, strings.NewReader(body))
 	if err != nil {
