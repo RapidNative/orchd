@@ -25,6 +25,33 @@ func sh(name string, args ...string) error {
 	return nil
 }
 
+// ipt adds an iptables rule unless an identical one already exists: the same
+// argv is probed with -C first. nsPrefix, when set, runs it inside a network
+// namespace ("ip netns exec <ns>").
+func ipt(nsPrefix []string, args ...string) error {
+	probe := make([]string, len(args))
+	copy(probe, args)
+	for i, a := range probe {
+		if a == "-A" || a == "-I" {
+			probe[i] = "-C"
+			break
+		}
+	}
+	run := func(a []string) *exec.Cmd {
+		full := append(append([]string{}, nsPrefix...), "iptables")
+		full = append(full, a...)
+		return exec.Command(full[0], full[1:]...)
+	}
+	if err := run(probe).Run(); err == nil {
+		return nil
+	}
+	out, err := run(args).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("iptables %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
 func shOut(name string, args ...string) (string, error) {
 	out, err := exec.Command(name, args...).Output()
 	return strings.TrimSpace(string(out)), err
@@ -99,6 +126,8 @@ const (
 	fcGuestIP = "172.16.0.2"
 	fcTapIP   = "172.16.0.1"
 	fcTapName = "tap0"
+	// fcVMSubnet covers every VM's host-side veth /30.
+	fcVMSubnet = "10.201.0.0/16"
 )
 
 type vmNet struct {
@@ -167,8 +196,8 @@ func (n *vmNet) ensure() error {
 		if err := inNS("ip", "link", "set", "ve0", "up"); err != nil {
 			return err
 		}
-		// forward + translate: anything arriving on ve0 goes to the guest;
-		// replies masquerade as the tap so the guest needs no host routes.
+		// inbound: anything arriving on ve0 goes to the guest; replies
+		// masquerade as the tap so the guest needs no host routes.
 		if err := inNS("sysctl", "-qw", "net.ipv4.ip_forward=1"); err != nil {
 			return err
 		}
@@ -179,6 +208,36 @@ func (n *vmNet) ensure() error {
 			return err
 		}
 	}
+	// Outbound. Applied on every ensure (not just on creation) and idempotent,
+	// so namespaces built before this existed gain egress on their next boot.
+	//
+	// Workloads install their own dependencies at boot when the caller's
+	// manifest differs from the image (a package added after the image was
+	// built), so a guest with no route to a package registry silently runs
+	// with a stale dependency tree — and pays the registry's DNS timeouts
+	// first. Containers had this via the docker bridge; microVMs need it
+	// spelled out: default route out of the namespace, SNAT to the veth, and
+	// SNAT again on the host.
+	nsPrefix := []string{"ip", "netns", "exec", ns}
+	_ = inNS("ip", "route", "add", "default", "via", n.hostIP(), "dev", "ve0")
+	_ = inNS("sysctl", "-qw", "net.ipv4.ip_forward=1")
+	if err := ipt(nsPrefix, "-t", "nat", "-A", "POSTROUTING", "-o", "ve0", "-j", "MASQUERADE"); err != nil {
+		return fmt.Errorf("guest egress SNAT: %w", err)
+	}
+	return ensureHostEgress()
+}
+
+// ensureHostEgress lets guest subnets reach the outside world: forwarding on,
+// and one SNAT rule covering every VM veth. Idempotent and cheap, so it runs
+// on each boot rather than needing a bootstrap step.
+func ensureHostEgress() error {
+	_ = sh("sysctl", "-qw", "net.ipv4.ip_forward=1")
+	if err := ipt(nil, "-t", "nat", "-A", "POSTROUTING", "-s", fcVMSubnet, "!", "-d", fcVMSubnet, "-j", "MASQUERADE"); err != nil {
+		return fmt.Errorf("host egress SNAT: %w", err)
+	}
+	// The FORWARD policy is DROP on hosts running docker; allow the veths.
+	_ = ipt(nil, "-A", "FORWARD", "-s", fcVMSubnet, "-j", "ACCEPT")
+	_ = ipt(nil, "-A", "FORWARD", "-d", fcVMSubnet, "-j", "ACCEPT")
 	return nil
 }
 

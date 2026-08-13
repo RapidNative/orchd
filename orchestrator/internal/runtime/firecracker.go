@@ -570,6 +570,12 @@ func (d *FirecrackerDriver) prepareGuest(m *vmMeta, spec Spec) error {
 	if err := os.WriteFile(filepath.Join(mnt, "etc", "orchd.env"), []byte(b.String()), 0o644); err != nil {
 		return err
 	}
+	// A guest with egress still needs a resolver: nothing in the sandbox hands
+	// one out (no DHCP — the address is on the kernel command line). Written
+	// here rather than only baked, so images built before this get it too.
+	if err := os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644); err != nil {
+		return err
+	}
 	src := spec.DataDir
 	if spec.WorkspaceDir != "" {
 		src = filepath.Join(spec.DataDir, spec.WorkspaceDir)

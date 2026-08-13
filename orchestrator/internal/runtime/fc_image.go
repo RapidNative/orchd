@@ -168,6 +168,9 @@ func (d *FirecrackerDriver) exportToVolume(ctx context.Context, dockerTag, dev, 
 	if err := os.WriteFile(filepath.Join(mnt, "opt", "orchd-agent.js"), []byte(fcAgentJS), 0o644); err != nil {
 		return err
 	}
+	if err := os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644); err != nil {
+		return err
+	}
 	init := fmt.Sprintf(fcInitTemplate, runCmd)
 	if err := os.WriteFile(filepath.Join(mnt, "sbin", "orchd-init"), []byte(init), 0o755); err != nil {
 		return err
@@ -186,6 +189,11 @@ func sanitizeTagFC(s string) string {
 	}
 	return string(out)
 }
+
+// fcResolvConf is the guest resolver. Public resolvers rather than the host's,
+// because the sandbox reaches the network through NAT and the host's own
+// nameserver may be link-local or unreachable from inside.
+const fcResolvConf = "nameserver 1.1.1.1\nnameserver 8.8.8.8\noptions timeout:2 attempts:2\n"
 
 // fcInitTemplate is the guest PID 1: mounts, env, agent, then the workload.
 // %s is the workload run command (a shell script string).
