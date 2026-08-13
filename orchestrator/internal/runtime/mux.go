@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"log"
 	"strings"
 )
 
@@ -45,7 +46,16 @@ func (m *Mux) Name() string { return m.def.Name() + "+firecracker" }
 
 func (m *Mux) Create(ctx context.Context, spec Spec) (*Instance, error) {
 	if m.picksFC(spec) {
-		return m.fc.Create(ctx, spec)
+		inst, err := m.fc.Create(ctx, spec)
+		if err == nil {
+			return inst, nil
+		}
+		// The pilot must never brick creation: clean up the half-made VM and
+		// fall back to the default runtime for this workload (it stays on
+		// docker for its lifetime — the fc driver won't know the ref).
+		log.Printf("fc create %s failed (%v); falling back to %s", spec.Ref, err, m.def.Name())
+		_ = m.fc.Delete(ctx, spec.Ref)
+		return m.def.Create(ctx, spec)
 	}
 	return m.def.Create(ctx, spec)
 }
