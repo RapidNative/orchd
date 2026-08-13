@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -406,6 +407,10 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	cmd := exec.Command("ip", "netns", "exec", n.ns(), d.cfg.Bin, "--api-sock", d.sockPath(m.Ref))
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = logf, logf
+	// Own session/process group: a signal aimed at orchd (Ctrl-C, systemd
+	// stop) must not take tenant VMs with it. Paired with KillMode=process in
+	// the unit file.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
 	}

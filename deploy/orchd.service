@@ -29,6 +29,12 @@ Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
 ExecStart=/opt/orchd/orchd
 Restart=on-failure
+# Tenant microVMs are children of this process. The default KillMode
+# (control-group) makes every orchd restart — i.e. every deploy — kill every
+# running VM, leaving the store saying "running" while the address is dead.
+# Kill only the main process; VMs keep serving across a restart, exactly like
+# docker-backed workloads do.
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
