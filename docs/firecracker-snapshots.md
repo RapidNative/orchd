@@ -1,0 +1,111 @@
+# Firecracker snapshots: instant wakes, write-triggered boots
+
+Status: design + spike plan (2026-08-13). Follows the inode exhaustion of
+2026-08-12 and the measured cold-wake UX failure (Expo Go times out at ~60s
+while the first bundle takes 60–90s; users need three scan attempts).
+
+## Why microVMs
+
+- **Inodes become a per-guest resource.** Rootfs is a block device
+  (device-mapper thin snapshot); the host filesystem stops being a shared
+  inode pool that one tenant's node_modules can exhaust.
+- **Real guest kernel.** gVisor's syscall interception dominates Metro's
+  80k-file crawls (~1.5ms/file). Near-native fs in a guest kernel shrinks
+  the cold path even before snapshots.
+- **Memory snapshots make wake = resume.** Firecracker restores a paused
+  VM's memory in hundreds of ms (lazy uffd paging makes first-touch even
+  cheaper). A resumed Metro still holds its transform caches, file map and
+  bundle — no rebundle at all.
+
+## Architecture
+
+A new orchd runtime driver (`firecracker`), sibling to `docker`, plus an
+image pipeline addition. gVisor/docker remains the fallback runtime; the
+driver interface (Create/Start/Stop/Exec/WriteFile/Logs) already abstracts
+what the gateway and manager need.
+
+### Image pipeline
+
+Image build (unchanged docker build, cache-stable layers) gains a final
+stage: export the built workspace image to an ext4 base volume in a dm-thin
+pool, boot a **template VM** from it, start the dev server, warm the bundle
+(the existing zz-warm route), then pause and snapshot. Artifact per image
+version: `{base ext4 volume, kernel, warm memory snapshot}` — one per
+template version, shared by every project, like today's shared deps
+extraction.
+
+### Project lifecycle
+
+- **Create**: thin-clone the base volume (block-level CoW — bytes and
+  "inodes" cost ~zero), resume from the *template* snapshot, agent applies
+  the project's file delta, Metro incrementally rebuilds (seconds, warm
+  caches), then the VM idles normally.
+- **Suspend** (scale-to-zero): pause VM, write memory snapshot to disk,
+  kill. RAM cost of a suspended project: zero.
+- **Wake on request**: restore from the project's own snapshot (~0.5s) and
+  serve. The bundle is already in memory.
+- **Wake on write** (Sanket's proposal, adopted as a core rule): a file
+  write targeting a suspended VM RESUMES it first, then the guest agent
+  applies the write inside the VM. The dev server processes the change live
+  (Metro incremental rebuild, npm install on package.json via the boot
+  wrapper's hash guard, tinbase migration on supabase/ changes), and the
+  idle reaper re-snapshots it later. Consequences:
+  - The snapshot is always warm *with the latest code* — by the time a
+    generation burst finishes, the project is scan-ready.
+  - No mutating a snapshotted VM's disk behind its back (the consistency
+    trap of today's host-side write-through: a resumed guest kernel must
+    not discover its filesystem changed under it — page cache and dentry
+    caches would be stale; every write goes through a live guest).
+  - Rebuild steps run exactly when needed, never at wake time.
+
+### Write path / exec path
+
+No virtiofs in Firecracker: the guest agent (tiny static binary as PID 1's
+child) speaks vsock — file put/delete/batch, exec, log streaming, health.
+The gateway keeps talking HTTP to the VM's tap IP; the manager's
+WriteWorkloadFile maps to agent calls (resuming first per the rule above).
+
+### Snapshot storage budget
+
+A memory snapshot ≈ RSS (Metro steady-state ~600MB–1GB). 300 projects ×
+1GB does not fly. Two-tier answer:
+
+- **Hot tier (bounded LRU, ~30–50 projects)**: per-project snapshots for
+  recently-active projects — instant resume.
+- **Everything else**: no per-project snapshot; wake = resume the shared
+  *template* snapshot on the project's thin volume + agent-applies delta +
+  incremental rebuild. Target ~10s, still 6–9x better than today, with
+  zero per-project storage.
+
+Evict/restore between tiers by recency; snapshots compress well (zstd) if
+the budget needs stretching.
+
+## Spike plan (box-first; macOS has no KVM)
+
+S1 — raw firecracker on the box (off-hours, guarded): kernel + rootfs built
+from the mobile image (`docker export` → ext4), boot, run `expo start`,
+snapshot after warm bundle, restore, measure: boot time, resume time,
+first-request-after-resume, RSS, snapshot size. Go/no-go numbers.
+
+S2 — dm-thin pool: base volume + N clones, delta apply via agent stub,
+incremental rebundle timing from the template snapshot (the cold-tier wake
+path). Density test: 20 resumed VMs on the box, memory/IO behavior.
+
+S3 — orchd `firecracker` runtime driver: lifecycle + vsock agent
+(fs/exec/logs), wake-on-request and wake-on-write, reaper re-snapshot.
+Behind a per-template runtime flag so one pilot template runs FC while
+everything else stays on gVisor.
+
+S4 — gateway pilot: fullstack-supabase on FC end to end (create → scan →
+suspend → write → auto-resume → scan), then flip the default.
+
+## Open questions
+
+- Kernel/rootfs maintenance: pin one guest kernel per orchd release.
+- tinbase workloads: same driver or keep on docker initially (their wake
+  path is cheap; pilot mobile-only first).
+- Backups: today's tarball flow reads host workspaces; with in-VM disks the
+  agent needs an export call (or mount thin volumes read-only host-side
+  while suspended).
+- Expo Go websockets across suspend/resume: clients reconnect; verify HMR
+  registration survives a resume (it should — same process memory).

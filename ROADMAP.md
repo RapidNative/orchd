@@ -50,7 +50,12 @@ CDN sharing. See ~/.claude/plans/dev-server-reset.md Phase 3.
   (65 projects = 48GB of 915GB).
 - Project deletion leaks the deps overlayfs mount: 76 orphaned .deps/merged
   mounts found on 2026-08-09 after deleting all projects — DeleteProject must
-  umount the overlay before removing the workload dir.
+  umount the overlay before removing the workload dir (DeleteWorkload already
+  calls RemoveWorkloadMounts; DeleteProject skips it). 2026-08-12 follow-up:
+  after a 296-project mass delete, the images' versioned deps SYMLINKS
+  (v43/deps/mobile etc.) were also gone — deletion recursing through live
+  mounts is the suspect; reclaimPath must never run while workload mounts
+  are active. Restored by hand; root-cause with a reproduction.
 - npm registry cache (verdaccio) on the box for faster installs/builds.
 - bootstrap.sh: install the custom caddy build (vercel-dns) instead of stock.
 - Image layer hygiene (2026-08-12, after the box ran out of INODES at 56% disk
