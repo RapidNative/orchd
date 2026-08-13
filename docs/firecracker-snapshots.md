@@ -170,9 +170,30 @@ boot. Intended split: tinbase db workloads persist, everything else can be
 ephemeral because project files re-sync from the website. The
 which-workloads-are-ephemeral policy is a next-phase decision.
 
-Remaining for S4: manager multi-runtime selection (pilot template flag),
-wake-on-write via driver WriteFile, reaper calling Compact, backups export,
-HTTP agent -> vsock hardening, jailer.
+S4 — wired and pilot-tested 2026-08-13 (deployed DORMANT; enable with
+ORCHD_FC_WORKLOADS=fullstack-supabase/mobile). Verified in a live enable
+window on the production box, against a real project created through the
+orchd API:
+
+- manager reports driver=docker+runsc+firecracker; the project's mobile
+  workload ran as a microVM while db/api/web stayed on docker
+- gateway serving on the public URL: FIRST bundle 200 in 5.7s (the warm
+  volume's baked Metro caches carry over; docker path is 43-90s)
+- suspend + compact from a separate process against shared state: works
+- fc-create failure falls back to the docker driver (safety valve)
+- BuildImage now auto-preps fc images for allowlisted workspaces (manifest
+  gains a `warm` field for the warm-request path)
+
+OPEN BUG: wake-on-write half-works. The manager resumed the suspended
+microVM (~3.1s incl. 148MB decompress) and the host-side write landed, but
+the agent write into the guest failed with "no route to host" on the veth
+(gateway traffic on :8080 worked moments later, so it is not plain netns
+breakage — suspect the agent process or :9000 path after a cross-process
+suspend/restore cycle). Needs a live repro with in-guest logs before the
+pilot is enabled for real traffic.
+
+Also remaining: reaper calling Compact, backups export, HTTP agent ->
+vsock hardening, jailer.
 
 S4 — gateway pilot: fullstack-supabase on FC end to end (create → scan →
 suspend → write → auto-resume → scan), then flip the default.
