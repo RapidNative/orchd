@@ -77,8 +77,15 @@ A memory snapshot ≈ RSS (Metro steady-state ~600MB–1GB). 300 projects ×
   incremental rebuild. Target ~10s, still 6–9x better than today, with
   zero per-project storage.
 
-Evict/restore between tiers by recency; snapshots compress well (zstd) if
-the budget needs stretching.
+Evict/restore between tiers by recency. Measured 2026-08-13: a Full
+snapshot is the entire guest RAM (3073MB on disk, not sparse — no delta),
+but zstd -3 takes it to 182MB (17:1 — untouched pages are zeros, JS heaps
+compress well). So the working tiering is: hot LRU raw (117ms wake), warm
+zstd'd (~180MB/project, ~2-4s wake, compressed async after suspend; 300
+projects ~= 55GB), cold none. fallocate --dig-holes is a free intermediate
+(punches zero pages, ~1.2GB sparse, no CPU). FC Diff snapshots
+(dirty-pages-only) are the true delta for re-suspends and come after the
+compress tier — they need base+merge bookkeeping on restore.
 
 ## Spike plan (box-first; macOS has no KVM)
 
