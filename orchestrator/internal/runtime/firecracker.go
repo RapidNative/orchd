@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -106,7 +107,70 @@ func NewFirecrackerDriver(cfg FirecrackerConfig) (*FirecrackerDriver, error) {
 		idx:     map[string]*vmMeta{},
 		bootSem: make(chan struct{}, 3),
 	}
+	// Storage is in-kernel state: after a reboot the pool table and every
+	// volume mapping are gone while their backing files remain. Rebuild them at
+	// startup so workloads wake normally instead of failing on a missing rootfs
+	// device — and so the box needs no manual step after a restart.
+	if err := d.ensureStorage(); err != nil {
+		log.Printf("firecracker: storage reactivation incomplete: %v", err)
+	}
 	return d, nil
+}
+
+// ensureStorage reactivates the thin pool and every known volume (image
+// base/warm volumes first, then per-VM rootfs clones). Idempotent: activation
+// is skipped for anything already mapped, so it is cheap on a normal restart.
+func (d *FirecrackerDriver) ensureStorage() error {
+	if err := d.pool.ensurePool(); err != nil {
+		return err
+	}
+	activated, failed := 0, 0
+	imagesDir := filepath.Join(d.cfg.Root, "images")
+	if entries, err := os.ReadDir(imagesDir); err == nil {
+		for _, e := range entries {
+			im, err := d.imageMeta(e.Name())
+			if err != nil {
+				continue
+			}
+			for devID, dmName := range map[int]string{
+				im.BaseDevID: "fcimg-" + sanitizeTagFC(im.Name) + "-base",
+				im.WarmDevID: "fcimg-" + sanitizeTagFC(im.Name) + "-warm",
+			} {
+				if _, err := os.Stat("/dev/mapper/" + dmName); err == nil {
+					continue
+				}
+				if err := d.pool.activate(devID, dmName); err != nil {
+					failed++
+				} else {
+					activated++
+				}
+			}
+		}
+	}
+	vmsDir := filepath.Join(d.cfg.Root, "vms")
+	entries, err := os.ReadDir(vmsDir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		m, err := d.meta(e.Name())
+		if err != nil {
+			continue
+		}
+		dmName := d.dmName(m.Ref)
+		if _, err := os.Stat("/dev/mapper/" + dmName); err == nil {
+			continue
+		}
+		if err := d.pool.activate(m.DevID, dmName); err != nil {
+			failed++
+		} else {
+			activated++
+		}
+	}
+	if activated > 0 || failed > 0 {
+		log.Printf("firecracker: reactivated %d volume(s), %d failed", activated, failed)
+	}
+	return nil
 }
 
 func (d *FirecrackerDriver) Name() string { return "firecracker" }
@@ -420,6 +484,13 @@ func (d *FirecrackerDriver) sockPath(ref string) string {
 // dir as cwd (the rootfs symlink is relative, which is what lets one template
 // snapshot restore onto any clone).
 func (d *FirecrackerDriver) spawn(m *vmMeta) error {
+	// The rootfs mapping can be missing (reboot, operator cleanup); recreate it
+	// from the recorded device id rather than failing the boot.
+	if _, err := os.Stat("/dev/mapper/" + d.dmName(m.Ref)); err != nil {
+		if perr := d.pool.ensurePool(); perr == nil {
+			_ = d.pool.activate(m.DevID, d.dmName(m.Ref))
+		}
+	}
 	dir := d.vmDir(m.Ref)
 	_ = os.Remove(d.sockPath(m.Ref))
 	if err := os.Symlink("/dev/mapper/"+d.dmName(m.Ref), filepath.Join(dir, "rootfs.blk")); err != nil && !os.IsExist(err) {
@@ -574,7 +645,9 @@ func (d *FirecrackerDriver) instanceState(ref string) (string, error) {
 		return "", err
 	}
 	defer res.Body.Close()
-	var info struct{ State string `json:"state"` }
+	var info struct {
+		State string `json:"state"`
+	}
 	if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
 		return "", err
 	}

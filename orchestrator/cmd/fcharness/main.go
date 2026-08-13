@@ -26,10 +26,19 @@ import (
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 )
 
-const (
-	root = "/opt/orchd/data/fc"
-	pool = "fcorchd"
+// Overridable so the harness can drive a scratch pool (reboot-recovery tests)
+// without touching the deployment's state.
+var (
+	root = envOr("ORCHD_FC_ROOT", "/opt/orchd/data/fc")
+	pool = envOr("ORCHD_FC_POOL", "fcorchd")
 )
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -43,8 +52,8 @@ func main() {
 	}
 
 	d, err := runtime.NewFirecrackerDriver(runtime.FirecrackerConfig{
-		Bin:    "/opt/fc-spike/firecracker",
-		Kernel: "/opt/fc-spike/vmlinux",
+		Bin:    envOr("ORCHD_FC_BIN", "/opt/orchd/fc/firecracker"),
+		Kernel: envOr("ORCHD_FC_KERNEL", "/opt/orchd/fc/vmlinux"),
 		Root:   root,
 		Pool:   pool,
 	})
