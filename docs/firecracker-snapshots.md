@@ -100,9 +100,34 @@ tax confirmed); snapshot restore makes wake effectively free. The 3.1GB
 mem file (= full guest RAM) is the cost the two-tier design + balloon-
 before-snapshot must manage. Spike harness: /opt/fc-spike on the box.
 
-S2 — dm-thin pool: base volume + N clones, delta apply via agent stub,
-incremental rebundle timing from the template snapshot (the cold-tier wake
-path). Density test: 20 resumed VMs on the box, memory/IO behavior.
+S2 — DONE 2026-08-13, verdict: GO with two lessons. Loopback-backed thin
+pool, base volume = S1 rootfs + 10-line in-guest HTTP agent baked into init.
+
+| metric                                   | measured        |
+|------------------------------------------|-----------------|
+| thin clone creation                      | ~47ms each      |
+| clone space cost (12 clones)             | ~0 (CoW blocks) |
+| fresh boot from thin clone -> Metro      | 6.9s            |
+| ONE template snapshot restored on a      |                 |
+|   DIFFERENT clone (relative drive path)  | 81ms            |
+| delta apply (agent) + incremental        |                 |
+|   rebundle = the cold-tier wake          | 3.3s            |
+| 12 concurrent fresh boots -> all serving | 8.0s            |
+
+The relative-path trick works: the snapshot records "rootfs.blk" and each
+VM's cwd symlinks it to its own thin device — one template snapshot serves
+every project (production should use the jailer's chroot for the same
+effect). Cold-tier wake beat its 10s target 3x: 0.08s restore + 3.3s
+incremental rebundle.
+
+Lessons: (1) the 12 simultaneous cold boots drove host load to 735 —
+loopback-file pools serialize IO horribly; production needs the pool on a
+real LV/partition and the driver must stage concurrent cold boots (wakes
+via restore are gentle by comparison). (2) the template bundle returned
+500 on the clone (S1's rootfs was captured dirty — never cleanly unmounted,
+with stale in-guest Metro caches); S3's image pipeline must build the base
+volume from a clean export and warm it in one boot, not reuse a
+crash-copied filesystem.
 
 S3 — orchd `firecracker` runtime driver: lifecycle + vsock agent
 (fs/exec/logs), wake-on-request and wake-on-write, reaper re-snapshot.
