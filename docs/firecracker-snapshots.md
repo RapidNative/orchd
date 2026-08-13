@@ -159,8 +159,19 @@ can't process /halt; pause-then-kill tears cache writes and every clone
 Suspend's 25-49s snapshot write wants a real-LV pool + memory balloon;
 fine for a reaper, not for anything user-facing.
 
+Snapshot economics implemented 2026-08-13: Suspend hands the raw mem file
+to an async Compact() (zstd -3, measured 148MB for the 3GB guest); wake
+transparently decompresses when only the .zst remains (3.4s to serving)
+and restores raw in ~110ms when it hasn't been compacted yet — the hot/warm
+tiering falls out of compaction timing, no LRU machinery needed yet. And
+Spec.Ephemeral marks disposable workloads: suspend is teardown (119ms, no
+snapshot at all — the CoW clone stays so files survive), wake is a fresh
+boot. Intended split: tinbase db workloads persist, everything else can be
+ephemeral because project files re-sync from the website. The
+which-workloads-are-ephemeral policy is a next-phase decision.
+
 Remaining for S4: manager multi-runtime selection (pilot template flag),
-wake-on-write via driver WriteFile, reaper re-snapshot, backups export,
+wake-on-write via driver WriteFile, reaper calling Compact, backups export,
 HTTP agent -> vsock hardening, jailer.
 
 S4 — gateway pilot: fullstack-supabase on FC end to end (create → scan →

@@ -98,6 +98,13 @@ type Spec struct {
 	TemplateSrc string
 	Workspace   string
 
+	// Ephemeral marks a workload whose runtime state is disposable: suspend
+	// tears it down instead of snapshotting (no 3GB memory file), and wake is
+	// a fresh boot. The intended split: tinbase db workloads persist,
+	// everything else can be ephemeral because project files re-sync from the
+	// website's source of truth. Only the firecracker driver honors it today.
+	Ephemeral bool
+
 	// Env is passed to the workload process/VM (JWT secret, engine, secrets).
 	Env map[string]string
 

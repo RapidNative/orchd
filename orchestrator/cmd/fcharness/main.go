@@ -62,17 +62,25 @@ func main() {
 		fmt.Println("image prepared in", time.Since(t0).Round(time.Millisecond))
 	case "create":
 		env := map[string]string{}
+		eph := false
 		for _, kv := range os.Args[4:] {
+			if kv == "--ephemeral" {
+				eph = true
+				continue
+			}
 			if k, v, ok := strings.Cut(kv, "="); ok {
 				env[k] = v
 			}
 		}
-		inst, err := d.Create(ctx, runtime.Spec{Ref: os.Args[3], Image: os.Args[2], Env: env, ReadyTimeout: 5 * time.Minute})
+		inst, err := d.Create(ctx, runtime.Spec{Ref: os.Args[3], Image: os.Args[2], Env: env, Ephemeral: eph, ReadyTimeout: 5 * time.Minute})
 		must(err)
 		fmt.Printf("created %s addr=%s in %s\n", inst.Ref, inst.Addr, time.Since(t0).Round(time.Millisecond))
 	case "suspend":
 		must(d.Suspend(ctx, os.Args[2]))
 		fmt.Println("suspended in", time.Since(t0).Round(time.Millisecond))
+		tc := time.Now()
+		must(d.Compact(os.Args[2]))
+		fmt.Println("compacted in", time.Since(tc).Round(time.Millisecond))
 	case "start":
 		inst, err := d.Start(ctx, runtime.Spec{Ref: os.Args[3], Image: os.Args[2]})
 		must(err)

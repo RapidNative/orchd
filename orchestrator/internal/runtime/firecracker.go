@@ -64,6 +64,15 @@ type FirecrackerDriver struct {
 
 	mu  sync.Mutex
 	idx map[string]*vmMeta // ref -> loaded meta (also persisted per VM)
+	// refLocks serialize snapshot compression against wakes: Suspend hands
+	// the mem file to an async zstd; a Start racing it must wait for whichever
+	// form (raw or .zst) wins.
+	refLocks sync.Map // ref -> *sync.Mutex
+}
+
+func (d *FirecrackerDriver) lockFor(ref string) *sync.Mutex {
+	lk, _ := d.refLocks.LoadOrStore(ref, &sync.Mutex{})
+	return lk.(*sync.Mutex)
 }
 
 // vmMeta is the durable per-VM record (vms/<ref>/meta.json): everything needed
@@ -74,6 +83,8 @@ type vmMeta struct {
 	NetIdx int    `json:"net_idx"` // veth /30 index
 	Image  string `json:"image"`   // fc image name (template@version)
 	PID    int    `json:"pid"`     // firecracker pid when running (0 otherwise)
+	// Ephemeral: suspend = teardown (no snapshot); wake = fresh boot.
+	Ephemeral bool `json:"ephemeral,omitempty"`
 }
 
 func NewFirecrackerDriver(cfg FirecrackerConfig) (*FirecrackerDriver, error) {
@@ -145,7 +156,7 @@ func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, e
 	if err := d.pool.snapshotOf(img.WarmDevID, devID, d.dmName(spec.Ref)); err != nil {
 		return nil, fmt.Errorf("clone rootfs: %w", err)
 	}
-	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: spec.Image}
+	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: spec.Image, Ephemeral: spec.Ephemeral}
 	if err := d.saveMeta(m); err != nil {
 		return nil, err
 	}
@@ -171,15 +182,14 @@ func (d *FirecrackerDriver) Start(ctx context.Context, spec Spec) (*Instance, er
 		n := &vmNet{Ref: spec.Ref, Idx: m.NetIdx}
 		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: n.Addr(d.cfg.GuestPort), StartedAt: time.Now()}, nil
 	}
-	if _, err := os.Stat(d.snapPath(spec.Ref, "mem")); err == nil {
+	if d.hasSnapshot(spec.Ref) {
 		inst, err := d.restore(ctx, m)
 		if err == nil {
 			return inst, nil
 		}
 		// a failed restore must not wedge the workload: drop the snapshot
 		// and take the fresh-boot path (slow wake beats no wake)
-		_ = os.Remove(d.snapPath(spec.Ref, "mem"))
-		_ = os.Remove(d.snapPath(spec.Ref, "state"))
+		d.dropSnapshot(spec.Ref)
 	}
 	return d.boot(ctx, m, spec, false)
 }
@@ -194,6 +204,13 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 	if m.PID == 0 || !pidAlive(m.PID) {
 		return nil // already down
 	}
+	if m.Ephemeral {
+		// Disposable runtime: no 3GB snapshot, no compression — just tear the
+		// VMM down. The thin clone stays (CoW, ~free) so the next Start is a
+		// fresh boot with the workspace files intact.
+		d.kill(m)
+		return nil
+	}
 	if err := d.api(ref, "PATCH", "vm", `{"state":"Paused"}`); err != nil {
 		return fmt.Errorf("pause: %w", err)
 	}
@@ -203,6 +220,34 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 		return fmt.Errorf("snapshot: %w", err)
 	}
 	d.kill(m)
+	// Compress off the caller's path: 3GB of mostly-zero pages zstd to
+	// ~180MB (measured 17:1), which is what makes snapshotting every
+	// suspended project affordable. Wake decompresses (~2-4s). The per-ref
+	// lock keeps a racing Start ordered behind the rename.
+	go func() { _ = d.Compact(ref) }()
+	return nil
+}
+
+// Compact compresses a suspended VM's raw memory snapshot in place
+// (3GB -> ~180MB measured). Blocking; Suspend runs it on a goroutine, the
+// harness and the future reaper call it directly. A missing raw file (already
+// compacted, or consumed by a wake) is success; a failed compression keeps
+// the raw file so wakes are never blocked.
+func (d *FirecrackerDriver) Compact(ref string) error {
+	lk := d.lockFor(ref)
+	lk.Lock()
+	defer lk.Unlock()
+	raw := d.snapPath(ref, "mem")
+	if _, err := os.Stat(raw); err != nil {
+		return nil
+	}
+	if _, err := exec.LookPath("zstd"); err != nil {
+		return fmt.Errorf("zstd not installed; raw snapshot kept")
+	}
+	if err := sh("zstd", "-3", "-T4", "-q", "-f", "--rm", raw, "-o", raw+".zst"); err != nil {
+		_ = os.Remove(raw + ".zst")
+		return err
+	}
 	return nil
 }
 
@@ -213,8 +258,7 @@ func (d *FirecrackerDriver) Stop(ctx context.Context, ref string) error {
 		return nil
 	}
 	d.kill(m)
-	_ = os.Remove(d.snapPath(ref, "mem"))
-	_ = os.Remove(d.snapPath(ref, "state"))
+	d.dropSnapshot(ref)
 	return nil
 }
 
@@ -243,7 +287,11 @@ func (d *FirecrackerDriver) Status(ctx context.Context, ref string) (State, erro
 	if m.PID != 0 && pidAlive(m.PID) {
 		return StateRunning, nil
 	}
-	if _, err := os.Stat(d.snapPath(ref, "mem")); err == nil {
+	if d.hasSnapshot(ref) {
+		return StateSuspended, nil
+	}
+	if m.Ephemeral {
+		// clone-at-rest with no snapshot: still resumable via fresh boot
 		return StateSuspended, nil
 	}
 	return StateStopped, nil
@@ -386,7 +434,33 @@ func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bo
 	return &Instance{Ref: m.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
 }
 
+func (d *FirecrackerDriver) hasSnapshot(ref string) bool {
+	if _, err := os.Stat(d.snapPath(ref, "mem")); err == nil {
+		return true
+	}
+	_, err := os.Stat(d.snapPath(ref, "mem") + ".zst")
+	return err == nil
+}
+
+func (d *FirecrackerDriver) dropSnapshot(ref string) {
+	_ = os.Remove(d.snapPath(ref, "mem"))
+	_ = os.Remove(d.snapPath(ref, "mem") + ".zst")
+	_ = os.Remove(d.snapPath(ref, "state"))
+}
+
 func (d *FirecrackerDriver) restore(ctx context.Context, m *vmMeta) (*Instance, error) {
+	// Serialize against an in-flight post-suspend compression, then
+	// materialize the raw mem file if only the compressed form remains.
+	lk := d.lockFor(m.Ref)
+	lk.Lock()
+	raw := d.snapPath(m.Ref, "mem")
+	if _, err := os.Stat(raw); err != nil {
+		if err := sh("zstd", "-d", "-T4", "-q", "-f", "--rm", raw+".zst", "-o", raw); err != nil {
+			lk.Unlock()
+			return nil, fmt.Errorf("decompress snapshot: %w", err)
+		}
+	}
+	lk.Unlock()
 	if err := d.spawn(m); err != nil {
 		return nil, err
 	}
@@ -404,8 +478,7 @@ func (d *FirecrackerDriver) restore(ctx context.Context, m *vmMeta) (*Instance, 
 	}
 	// the snapshot is consumed; a crash before the next Suspend must fall
 	// back to a fresh boot rather than restoring doubly-stale memory
-	_ = os.Remove(d.snapPath(m.Ref, "mem"))
-	_ = os.Remove(d.snapPath(m.Ref, "state"))
+	d.dropSnapshot(m.Ref)
 	return &Instance{Ref: m.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
 }
 
