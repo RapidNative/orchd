@@ -623,21 +623,24 @@ func (m *Manager) notifyContainerWrite(w *store.Workload, rel string, content []
 	}
 	// Wake-on-write (microVM workloads): a suspended guest owns its filesystem,
 	// so the write must happen INSIDE a live VM — resume it, apply the write,
-	// let the dev server rebuild; the reaper re-suspends later. Docker
-	// workloads keep the old contract (host bind mount is the source of truth;
-	// only live containers get the inotify nudge).
-	if !m.isLive(w.ID) {
-		fcOwned := false
-		if mx, ok := m.rt.(interface{ KnowsMicroVM(string) bool }); ok {
-			fcOwned = mx.KnowsMicroVM(w.ID)
-		}
-		if !fcOwned {
-			return
-		}
+	// let the dev server rebuild; the reaper re-suspends later. The gate must
+	// be EnsureRunning, NOT the live map: an out-of-band suspend (reaper race,
+	// operator tooling) leaves the map stale, and writing into a dead VM's
+	// namespace fails with "no route to host" (the exact first-pilot bug).
+	// EnsureRunning is cheap when already running (status check + touch).
+	// Docker workloads keep the old contract (host bind mount is the source
+	// of truth; only live containers get the inotify nudge).
+	fcOwned := false
+	if mx, ok := m.rt.(interface{ KnowsMicroVM(string) bool }); ok {
+		fcOwned = mx.KnowsMicroVM(w.ID)
+	}
+	if fcOwned {
 		if _, err := m.EnsureRunning(context.Background(), w.ID); err != nil {
 			log.Printf("wake-on-write %s: %v", w.ID, err)
 			return
 		}
+	} else if !m.isLive(w.ID) {
+		return
 	}
 	if err := cw.WriteFileInContainer(context.Background(), w.ID, m.containerPathFor(w, rel), content); err != nil {
 		log.Printf("container write-through %s %s: %v", w.ID, rel, err)
@@ -1375,6 +1378,17 @@ func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
 	for _, w := range m.store.ListWorkloads(projectID) {
 		_ = m.rt.Stop(ctx, w.ID)
 		m.forget(w.ID)
+		// Release driver-side state per workload, exactly like DeleteWorkload:
+		// the deps overlay must unmount before reclaimPath recurses (the
+		// 2026-08-09 orphaned-mount leak), docker volumes go, and microVM
+		// clones/snapshots/namespaces are torn down (fc VMs leaked on project
+		// deletion before this).
+		runtime.RemoveWorkloadMounts(w.DataDir)
+		if vr, ok := m.rt.(interface {
+			RemoveVolumes(context.Context, string) error
+		}); ok {
+			_ = vr.RemoveVolumes(ctx, w.ID)
+		}
 	}
 	if err := m.store.DeleteProject(projectID); err != nil {
 		return err
