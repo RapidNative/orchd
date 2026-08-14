@@ -6,15 +6,22 @@
 package gateway
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
 	"context"
 	"errors"
+	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
 
@@ -50,6 +57,16 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		log.Printf("gateway: proxy %s -> %s error: %v", workload.ID, addr, e)
 		http.Error(w, "upstream error", http.StatusBadGateway)
 	}
+
+	// Tinbase dashboard auto-login: inject a script into the /_/ HTML page
+	// that fills the service-role key and clicks login automatically.
+	isDashboard := workload.Type == runtime.WorkloadTinbaseProject &&
+		r.Method == "GET" &&
+		(r.URL.Path == "/_/" || r.URL.Path == "/_")
+	if isDashboard {
+		proxy.ModifyResponse = autoLoginModifier(workload.SvcKey)
+	}
+
 	proxy.ServeHTTP(w, r)
 }
 
@@ -103,6 +120,80 @@ func hostOnly(host string) string {
 		host = host[:i]
 	}
 	return strings.ToLower(strings.TrimSuffix(host, "."))
+}
+
+// autoLoginModifier returns an httputil.ReverseProxy ModifyResponse that
+// injects a tiny auto-login script into Tinbase Studio's dashboard HTML.
+// If svcKey is non-empty, the script sets sessionStorage directly (instant).
+// Otherwise it reads the ?_key= URL param, fills the input, and clicks login.
+func autoLoginModifier(svcKey string) func(*http.Response) error {
+	return func(resp *http.Response) error {
+		ct := resp.Header.Get("Content-Type")
+		if !strings.Contains(ct, "text/html") {
+			return nil
+		}
+
+		raw, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			return err
+		}
+
+		// Decompress if needed.
+		body, encoding := raw, resp.Header.Get("Content-Encoding")
+		switch encoding {
+		case "gzip":
+			r, err := gzip.NewReader(bytes.NewReader(raw))
+			if err == nil {
+				body, err = io.ReadAll(r)
+				r.Close()
+			}
+			if err != nil {
+				resp.Body = io.NopCloser(bytes.NewReader(raw))
+				return nil
+			}
+		case "deflate":
+			r := flate.NewReader(bytes.NewReader(raw))
+			body, err = io.ReadAll(r)
+			r.Close()
+			if err != nil {
+				resp.Body = io.NopCloser(bytes.NewReader(raw))
+				return nil
+			}
+		}
+
+		var script string
+		if svcKey != "" {
+			script = fmt.Sprintf(`<script>sessionStorage.setItem("tinbase_service_key",%q)</script>`, svcKey)
+		} else {
+			script = `<script>
+(function(){
+  var k = new URLSearchParams(location.search).get('_key');
+  if (!k) return;
+  function tryFill() {
+    var input = document.querySelector('input[placeholder*="service_role"]');
+    if (!input) return setTimeout(tryFill, 200);
+    var nativeSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    nativeSetter.call(input, k);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    var btn = document.querySelector('button');
+    if (btn) setTimeout(function(){ btn.click(); }, 100);
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', tryFill);
+  else tryFill();
+})();
+</script>`
+		}
+
+		html := strings.Replace(string(body), "</body>", script+"</body>", 1)
+		out := []byte(html)
+
+		resp.Header.Del("Content-Encoding")
+		resp.Header.Del("Transfer-Encoding")
+		resp.Header.Set("Content-Length", strconv.Itoa(len(out)))
+		resp.Body = io.NopCloser(bytes.NewReader(out))
+		return nil
+	}
 }
 
 // Serve runs the gateway HTTP server until ctx is cancelled.
