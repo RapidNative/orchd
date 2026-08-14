@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
 )
@@ -50,12 +51,16 @@ func (m *Mux) Create(ctx context.Context, spec Spec) (*Instance, error) {
 		if err == nil {
 			return inst, nil
 		}
-		// The pilot must never brick creation: clean up the half-made VM and
-		// fall back to the default runtime for this workload (it stays on
-		// docker for its lifetime — the fc driver won't know the ref).
-		log.Printf("fc create %s failed (%v); falling back to %s", spec.Ref, err, m.def.Name())
+		// No silent downgrade. Falling back to the default runtime kept
+		// creation working but hid the real fault and gave the workload the
+		// slow path for its whole life — observed as "why is this project on
+		// docker?" with the actual cause (no guest DNS, so its dependency
+		// install died) buried in the journal. An allowlisted workload runs as
+		// a microVM or it fails loudly; the half-made VM is cleaned up so a
+		// retry starts fresh.
+		log.Printf("fc create %s failed: %v", spec.Ref, err)
 		_ = m.fc.Delete(ctx, spec.Ref)
-		return m.def.Create(ctx, spec)
+		return nil, fmt.Errorf("firecracker create %s: %w", spec.Ref, err)
 	}
 	return m.def.Create(ctx, spec)
 }
