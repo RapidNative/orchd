@@ -61,6 +61,11 @@ type Manager struct {
 
 	portMu sync.Mutex // serializes host-port allocation (port-addressing mode)
 
+	// keyRepairTried remembers workloads whose key minting we already attempted
+	// and failed, so a boot path does not re-run a multi-attempt mint (with its
+	// backoff) on every single wake when minting is genuinely unavailable.
+	keyRepairTried sync.Map // workload id -> time of last attempt
+
 	// buildLocks serializes image builds per template. Two concurrent builds
 	// of one template raced their deps extraction into the same versioned dir
 	// and nested node_modules inside itself (2026-08-10, v39) — the request
@@ -1058,7 +1063,11 @@ func (m *Manager) registerWorkload(projectID string, ws WorkloadSpec) (*store.Wo
 
 	var anon, svc string
 	if ws.Type == runtime.WorkloadTinbaseProject {
-		anon, svc = m.mintKeys(secret) // best-effort
+		if anon, svc = m.mintKeys(secret); anon == "" || svc == "" {
+			// Not fatal — the workload still provisions and EnsureKeys repairs
+			// it before anything reads the values — but it must be visible.
+			log.Printf("workload %s (%s): key minting failed; will be repaired on demand", wid, ws.Name)
+		}
 	}
 
 	// Resource caps: explicit override wins, else default by workload type.
@@ -1813,7 +1822,10 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	}
 	// Resolve ${route.<name>} / ${workload.<name>.*} / ${project.ref} tokens
 	// against sibling workloads (see interpolate.go). Runs on every boot so
-	// values track route and key changes.
+	// values track route and key changes — and heals a sibling whose keys never
+	// got minted first, since resolving them to "" boots an app that cannot
+	// talk to its own database.
+	m.repairProjectKeys(w.ProjectID)
 	env = m.interpolateEnv(w, env)
 	// Boot-from-image: the docker driver runs the frozen, versioned image tag
 	// built for this workspace. The local/process driver ignores Image and boots
@@ -1827,11 +1839,16 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		}
 	}
 	wsDir, appMount, depsPath, depsHost := m.workspaceMount(w)
-	// Dev servers may rebundle on first boot (delta'd projects); give them
-	// headroom beyond the 90s driver default.
+	// Dev servers may install dependencies AND rebundle on first boot, and a
+	// caller's manifest can pull in a very large tree (one project's install is
+	// ~420k files). 300s was not enough: the boot missed the window, the
+	// runtime reported failure, and the workload was torn down and retried in a
+	// loop — each retry redoing the same install from scratch. First boots are
+	// slow but they are not stuck, so wait properly. Provisioning already runs
+	// in the background, so nothing user-facing blocks on this.
 	var ready time.Duration
 	if w.Type == runtime.WorkloadRapidNativeDev {
-		ready = 300 * time.Second
+		ready = 15 * time.Minute
 	}
 	return runtime.Spec{
 		Type:         w.Type,
@@ -1978,8 +1995,71 @@ func (m *Manager) refLock(id string) *sync.Mutex {
 
 // mintKeys derives anon/service_role keys for a JWT secret by asking tinbase.
 // Best-effort: empty if unavailable.
+// mintKeys derives a tinbase project's anon and service_role tokens from its
+// JWT secret by asking tinbase itself. It retries, because a silent failure
+// here is worse than a slow provision: the workload is stored with empty keys,
+// every app built on it fails at runtime with "supabaseKey is required", and
+// nothing in the logs says why (35 of 226 database workloads were in that state
+// on 2026-08-14, all minted during periods of heavy load).
+// EnsureKeys mints and persists a tinbase workload's tokens if they are
+// missing, so a workload that was created during a minting failure heals
+// instead of serving an app that cannot authenticate. Returns true when it
+// repaired something.
+func (m *Manager) EnsureKeys(w *store.Workload) bool {
+	if w == nil || w.Type != runtime.WorkloadTinbaseProject || w.JWTSecret == "" {
+		return false
+	}
+	if w.AnonKey != "" && w.SvcKey != "" {
+		return false
+	}
+	if last, ok := m.keyRepairTried.Load(w.ID); ok {
+		if t, _ := last.(time.Time); time.Since(t) < 10*time.Minute {
+			return false // already tried recently; don't stall every boot
+		}
+	}
+	m.keyRepairTried.Store(w.ID, time.Now())
+	// ONE attempt here: this runs on the boot path, where a working mint takes
+	// a second or two and a broken one must not add backoff to every wake. The
+	// retrying variant belongs at creation, where provisioning is already
+	// asynchronous.
+	anon, svc := m.mintKeysOnce(w.JWTSecret)
+	if anon == "" || svc == "" {
+		log.Printf("EnsureKeys %s: still cannot mint keys", w.ID)
+		return false
+	}
+	w.AnonKey, w.SvcKey = anon, svc
+	if err := m.store.PutWorkload(w); err != nil {
+		log.Printf("EnsureKeys %s: persist failed: %v", w.ID, err)
+		return false
+	}
+	log.Printf("EnsureKeys %s: minted missing keys", w.ID)
+	return true
+}
+
+// repairProjectKeys heals every tinbase workload of a project before its
+// siblings' env is resolved from them.
+func (m *Manager) repairProjectKeys(projectID string) {
+	for _, w := range m.store.ListWorkloads(projectID) {
+		_ = m.EnsureKeys(w)
+	}
+}
+
 func (m *Manager) mintKeys(secret string) (anon, svc string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	for attempt := 1; attempt <= 3; attempt++ {
+		anon, svc = m.mintKeysOnce(secret)
+		if anon != "" && svc != "" {
+			return anon, svc
+		}
+		log.Printf("mintKeys: attempt %d/3 produced no usable tokens", attempt)
+		time.Sleep(time.Duration(attempt) * 2 * time.Second)
+	}
+	return anon, svc
+}
+
+func (m *Manager) mintKeysOnce(secret string) (anon, svc string) {
+	// Pulling and starting the image can take a while on a busy box; the old
+	// 30s cap was the actual cause of the empty-key workloads.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	var cmd *exec.Cmd
@@ -1991,9 +2071,10 @@ func (m *Manager) mintKeys(secret string) (anon, svc string) {
 	default:
 		cmd = exec.CommandContext(ctx, m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
 	}
-	var out bytes.Buffer
-	cmd.Stdout = &out
+	var out, errb bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errb
 	if err := cmd.Run(); err != nil {
+		log.Printf("mintKeys: %v: %s", err, tailStr(errb.String(), 200))
 		return "", ""
 	}
 	tokens := jwtRe.FindAllString(out.String(), -1)

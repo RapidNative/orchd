@@ -531,25 +531,46 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	return fmt.Errorf("firecracker api socket never appeared")
 }
 
-// ensureGuestResolver writes /etc/resolv.conf into the VM's rootfs clone while
-// it is down. Runs on every fresh boot, not just at create: nothing in the
-// sandbox hands a resolver out (no DHCP — the guest address arrives on the
-// kernel command line), and clones made before this existed have no resolver
-// on disk, so a boot-time dependency install would fail on DNS.
-func (d *FirecrackerDriver) ensureGuestResolver(m *vmMeta) {
+// ensureGuestBoot prepares the rootfs clone while the VM is down: the resolver
+// and any directory the workload's env points at. Host-side on purpose —
+// writes made from inside a running guest are lost when the VMM is killed
+// without a sync, and baking them into the image would leave every existing
+// clone behind.
+//
+// Runs on every fresh boot, not just at create: nothing in the sandbox hands
+// out a resolver (no DHCP — the guest address arrives on the kernel command
+// line), so without this a boot-time dependency install fails on DNS; and a
+// workload whose TMPDIR does not exist loses its build caches on every start
+// ("metro-file-map Cache write error: ENOENT" — cosmetic but it makes every
+// cold start slower).
+func (d *FirecrackerDriver) ensureGuestBoot(m *vmMeta, spec Spec) {
 	mnt := filepath.Join(d.vmDir(m.Ref), "mnt")
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
 		return
 	}
 	if err := sh("mount", "/dev/mapper/"+d.dmName(m.Ref), mnt); err != nil {
-		return // best-effort: a guest that already has one keeps working
+		return // best-effort: a guest that is already set up keeps working
 	}
 	defer sh("umount", mnt)
 	_ = os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644)
+	// Absolute env paths the workload expects to exist. Only paths inside the
+	// guest's own writable areas, and only from env the caller set.
+	for _, key := range []string{"TMPDIR", "HOME", "METRO_CACHE_DIR", "XDG_CACHE_HOME"} {
+		p := spec.Env[key]
+		if p == "" || !strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
+			continue
+		}
+		if !strings.HasPrefix(p, "/data") && !strings.HasPrefix(p, "/tmp") && !strings.HasPrefix(p, "/cache") {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(mnt, strings.TrimPrefix(p, "/")), 0o1777); err != nil {
+			log.Printf("fc %s: could not create %s in guest: %v", m.Ref, p, err)
+		}
+	}
 }
 
 func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bool) (*Instance, error) {
-	d.ensureGuestResolver(m)
+	d.ensureGuestBoot(m, spec)
 	select {
 	case d.bootSem <- struct{}{}:
 		defer func() { <-d.bootSem }()
@@ -559,8 +580,16 @@ func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bo
 	if err := d.spawn(m); err != nil {
 		return nil, err
 	}
+	// Dev-server workloads walk very large dependency trees, and a watcher that
+	// runs out of inotify watches takes the whole server down mid-startup
+	// ("ENOSPC: System limit for number of file watchers reached" — observed on
+	// a project whose tree includes ~420k files). The guest kernel's defaults
+	// are far too low for that, and sysctl.* boot parameters let us raise them
+	// without baking anything into the image.
 	bootArgs := fmt.Sprintf(
-		"console=ttyS0 reboot=k panic=1 pci=off init=/sbin/orchd-init ip=%s::%s:255.255.255.240::eth0:off",
+		"console=ttyS0 reboot=k panic=1 pci=off init=/sbin/orchd-init ip=%s::%s:255.255.255.240::eth0:off"+
+			" sysctl.fs.inotify.max_user_watches=1048576 sysctl.fs.inotify.max_user_instances=8192"+
+			" sysctl.fs.file-max=1048576",
 		fcGuestIP, fcTapIP)
 	steps := []struct{ path, body string }{
 		{"boot-source", fmt.Sprintf(`{"kernel_image_path":%q,"boot_args":%q}`, d.cfg.Kernel, bootArgs)},
