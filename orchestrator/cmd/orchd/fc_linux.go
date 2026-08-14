@@ -17,10 +17,11 @@ func wrapFC(cfg config.Config, def runtime.Runtime) runtime.Runtime {
 		return def
 	}
 	fc, err := runtime.NewFirecrackerDriver(runtime.FirecrackerConfig{
-		Bin:    cfg.FCBin,
-		Kernel: cfg.FCKernel,
-		Root:   cfg.FCRoot,
-		Pool:   cfg.FCPool,
+		Bin:     cfg.FCBin,
+		Kernel:  cfg.FCKernel,
+		Root:    cfg.FCRoot,
+		Pool:    cfg.FCPool,
+		MaxLive: cfg.FCMaxLive,
 	})
 	if err != nil {
 		log.Printf("firecracker disabled (%v); workloads stay on %s", err, def.Name())

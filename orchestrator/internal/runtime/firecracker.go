@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,12 @@ type FirecrackerConfig struct {
 	MemSizeMiB int
 	GuestPort  int // the workload's in-guest listen port
 	AgentPort  int // in-guest agent port
+	// MaxLive caps concurrently running microVMs. Each guest reserves its full
+	// MemSizeMiB, so an uncapped fleet fills host memory and the box thrashes:
+	// wakes slow down, snapshot-based suspends start failing, which keeps even
+	// more VMs alive — observed 2026-08-14, 93 live VMs on a 125GB host, load
+	// 520. 0 disables the cap.
+	MaxLive int
 }
 
 func (c *FirecrackerConfig) defaults() {
@@ -58,6 +65,39 @@ func (c *FirecrackerConfig) defaults() {
 	if c.AgentPort == 0 {
 		c.AgentPort = 9000
 	}
+	if c.MaxLive == 0 {
+		// Leave the host a third of its memory for containers, page cache and
+		// the control plane.
+		if total := hostMemMiB(); total > 0 && c.MemSizeMiB > 0 {
+			c.MaxLive = (total * 2 / 3) / c.MemSizeMiB
+		}
+		if c.MaxLive < 4 {
+			c.MaxLive = 4
+		}
+	}
+}
+
+// hostMemMiB reads total system memory; 0 when it cannot be determined.
+func hostMemMiB() int {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			return 0
+		}
+		kb, err := strconv.Atoi(f[1])
+		if err != nil {
+			return 0
+		}
+		return kb / 1024
+	}
+	return 0
 }
 
 type FirecrackerDriver struct {
@@ -484,7 +524,53 @@ func (d *FirecrackerDriver) sockPath(ref string) string {
 // spawn launches the firecracker VMM inside the VM's namespace with the VM
 // dir as cwd (the rootfs symlink is relative, which is what lets one template
 // snapshot restore onto any clone).
+// makeRoom keeps the number of running VMs under the cap by stopping the
+// longest-running ones. Stopping is a kill, not a snapshot: it frees memory
+// immediately (a snapshot under memory pressure is exactly what fails), and
+// the workload boots again on its next request. Boot age is a proxy for
+// idleness — the manager's reaper handles genuinely idle workloads properly;
+// this is the backstop that keeps the host from thrashing.
+func (d *FirecrackerDriver) makeRoom(exclude string) {
+	if d.cfg.MaxLive <= 0 {
+		return
+	}
+	type vm struct {
+		ref  string
+		age  time.Time
+		meta *vmMeta
+	}
+	var live []vm
+	entries, err := os.ReadDir(filepath.Join(d.cfg.Root, "vms"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Name() == exclude {
+			continue
+		}
+		m, err := d.meta(e.Name())
+		if err != nil || m.PID == 0 || !pidAlive(m.PID) {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(d.vmDir(m.Ref), "meta.json"))
+		if err != nil {
+			continue
+		}
+		live = append(live, vm{m.Ref, st.ModTime(), m})
+	}
+	if len(live) < d.cfg.MaxLive {
+		return
+	}
+	sort.Slice(live, func(i, j int) bool { return live[i].age.Before(live[j].age) })
+	for i := 0; i <= len(live)-d.cfg.MaxLive; i++ {
+		log.Printf("fc: at capacity (%d/%d live) — stopping %s to make room",
+			len(live), d.cfg.MaxLive, live[i].ref)
+		d.kill(live[i].meta)
+	}
+}
+
 func (d *FirecrackerDriver) spawn(m *vmMeta) error {
+	d.makeRoom(m.Ref)
 	// The rootfs mapping can be missing (reboot, operator cleanup); recreate it
 	// from the recorded device id rather than failing the boot.
 	if _, err := os.Stat("/dev/mapper/" + d.dmName(m.Ref)); err != nil {
