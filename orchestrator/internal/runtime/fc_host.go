@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -108,6 +109,58 @@ func (p *thinPool) activate(devID int, dmName string) error {
 	table := fmt.Sprintf("0 %d thin %s %d", p.sectors, p.dev(), devID)
 	return sh("dmsetup", "create", dmName, "--table", table)
 }
+
+// ensurePool (re)creates the loopback-backed thin pool if its device-mapper
+// table is gone — which is exactly the state after a reboot: the backing files
+// persist, the loop attachments and dm tables do not. The pool's METADATA file
+// persists too, so recreating the table over the same backing files restores
+// every thin device id that was ever allocated; only activation is lost.
+//
+// A deployment using a real LV instead of loopback files can skip this
+// entirely: the LV is already there, and the function no-ops once the pool
+// device exists.
+func (p *thinPool) ensurePool() error {
+	if _, err := os.Stat(p.dev()); err == nil {
+		return nil
+	}
+	data := filepath.Join(p.root, "pool-data.img")
+	meta := filepath.Join(p.root, "pool-meta.img")
+	st, err := os.Stat(data)
+	if err != nil {
+		return fmt.Errorf("thin pool backing file missing: %w", err)
+	}
+	ld, err := ensureLoop(data)
+	if err != nil {
+		return err
+	}
+	lm, err := ensureLoop(meta)
+	if err != nil {
+		return err
+	}
+	sectors := st.Size() / 512
+	table := fmt.Sprintf("0 %d thin-pool %s %s 2048 32768", sectors, lm, ld)
+	if err := sh("dmsetup", "create", p.Name, "--table", table); err != nil {
+		return fmt.Errorf("recreate thin pool: %w", err)
+	}
+	log.Printf("firecracker: thin pool %s reactivated (%s over %s/%s)", p.Name, humanSectors(sectors), ld, lm)
+	return nil
+}
+
+// ensureLoop returns the loop device backing a file, attaching one if needed.
+func ensureLoop(file string) (string, error) {
+	if out, err := shOut("losetup", "-j", file); err == nil && out != "" {
+		if i := strings.Index(out, ":"); i > 0 {
+			return out[:i], nil
+		}
+	}
+	dev, err := shOut("losetup", "--find", "--show", file)
+	if err != nil {
+		return "", fmt.Errorf("losetup %s: %w", file, err)
+	}
+	return dev, nil
+}
+
+func humanSectors(s int64) string { return fmt.Sprintf("%dGiB", s*512/(1024*1024*1024)) }
 
 func (p *thinPool) remove(devID int, dmName string) error {
 	_ = sh("dmsetup", "remove", dmName)

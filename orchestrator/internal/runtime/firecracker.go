@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -107,7 +108,70 @@ func NewFirecrackerDriver(cfg FirecrackerConfig) (*FirecrackerDriver, error) {
 		idx:     map[string]*vmMeta{},
 		bootSem: make(chan struct{}, 3),
 	}
+	// Storage is in-kernel state: after a reboot the pool table and every
+	// volume mapping are gone while their backing files remain. Rebuild them at
+	// startup so workloads wake normally instead of failing on a missing rootfs
+	// device — and so the box needs no manual step after a restart.
+	if err := d.ensureStorage(); err != nil {
+		log.Printf("firecracker: storage reactivation incomplete: %v", err)
+	}
 	return d, nil
+}
+
+// ensureStorage reactivates the thin pool and every known volume (image
+// base/warm volumes first, then per-VM rootfs clones). Idempotent: activation
+// is skipped for anything already mapped, so it is cheap on a normal restart.
+func (d *FirecrackerDriver) ensureStorage() error {
+	if err := d.pool.ensurePool(); err != nil {
+		return err
+	}
+	activated, failed := 0, 0
+	imagesDir := filepath.Join(d.cfg.Root, "images")
+	if entries, err := os.ReadDir(imagesDir); err == nil {
+		for _, e := range entries {
+			im, err := d.imageMeta(e.Name())
+			if err != nil {
+				continue
+			}
+			for devID, dmName := range map[int]string{
+				im.BaseDevID: "fcimg-" + sanitizeTagFC(im.Name) + "-base",
+				im.WarmDevID: "fcimg-" + sanitizeTagFC(im.Name) + "-warm",
+			} {
+				if _, err := os.Stat("/dev/mapper/" + dmName); err == nil {
+					continue
+				}
+				if err := d.pool.activate(devID, dmName); err != nil {
+					failed++
+				} else {
+					activated++
+				}
+			}
+		}
+	}
+	vmsDir := filepath.Join(d.cfg.Root, "vms")
+	entries, err := os.ReadDir(vmsDir)
+	if err != nil {
+		return nil
+	}
+	for _, e := range entries {
+		m, err := d.meta(e.Name())
+		if err != nil {
+			continue
+		}
+		dmName := d.dmName(m.Ref)
+		if _, err := os.Stat("/dev/mapper/" + dmName); err == nil {
+			continue
+		}
+		if err := d.pool.activate(m.DevID, dmName); err != nil {
+			failed++
+		} else {
+			activated++
+		}
+	}
+	if activated > 0 || failed > 0 {
+		log.Printf("firecracker: reactivated %d volume(s), %d failed", activated, failed)
+	}
+	return nil
 }
 
 func (d *FirecrackerDriver) Name() string { return "firecracker" }
@@ -198,9 +262,23 @@ func (d *FirecrackerDriver) Start(ctx context.Context, spec Spec) (*Instance, er
 	if err != nil {
 		return d.Create(ctx, spec)
 	}
+	n0 := &vmNet{Ref: spec.Ref, Idx: m.NetIdx}
 	if st, _ := d.Status(ctx, spec.Ref); st == StateRunning {
-		n := &vmNet{Ref: spec.Ref, Idx: m.NetIdx}
-		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: n.Addr(d.cfg.GuestPort), StartedAt: time.Now()}, nil
+		return &Instance{Ref: spec.Ref, State: StateRunning, Addr: n0.Addr(d.cfg.GuestPort), StartedAt: time.Now()}, nil
+	}
+	// Alive but paused (interrupted suspend): resuming is instant and keeps the
+	// dev server's state. Booting instead would spawn a second VMM and fail on
+	// the tap device the live one still holds.
+	if m.PID != 0 && pidAlive(m.PID) {
+		if st, err := d.instanceState(spec.Ref); err == nil && st == "Paused" {
+			if err := d.api(spec.Ref, "PATCH", "vm", `{"state":"Resumed"}`); err == nil {
+				addr := n0.Addr(d.cfg.GuestPort)
+				if err := waitHTTP(ctx, addr, 30*time.Second); err == nil {
+					return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
+				}
+			}
+		}
+		d.kill(m) // unrecoverable: fall through to a fresh boot
 	}
 	if d.hasSnapshot(spec.Ref) {
 		inst, err := d.restore(ctx, m)
@@ -236,8 +314,20 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 	}
 	body := fmt.Sprintf(`{"snapshot_type":"Full","snapshot_path":%q,"mem_file_path":%q}`,
 		d.snapPath(ref, "state"), d.snapPath(ref, "mem"))
-	if err := d.api(ref, "PUT", "snapshot/create", body); err != nil {
-		return fmt.Errorf("snapshot: %w", err)
+	// Writing multiple GB to a busy disk can take minutes; a short timeout here
+	// used to abandon the VM mid-suspend. And whatever goes wrong, the VM must
+	// not be left paused: a paused guest answers nothing while orchd still
+	// believes it is running, so the workload 502s forever with no self-heal
+	// (production incident 2026-08-13, 11 workloads stuck).
+	if err := d.apiTimeout(ref, "PUT", "snapshot/create", body, 15*time.Minute); err != nil {
+		if rerr := d.api(ref, "PATCH", "vm", `{"state":"Resumed"}`); rerr != nil {
+			// cannot resume either — kill it so the next request boots fresh
+			d.kill(m)
+			d.dropSnapshot(ref)
+			return fmt.Errorf("snapshot: %w (resume also failed: %v; killed instead)", err, rerr)
+		}
+		d.dropSnapshot(ref) // a partial snapshot must never be restored
+		return fmt.Errorf("snapshot: %w (VM resumed, still serving)", err)
 	}
 	d.kill(m)
 	// Compress off the caller's path: 3GB of mostly-zero pages zstd to
@@ -305,6 +395,11 @@ func (d *FirecrackerDriver) Status(ctx context.Context, ref string) (State, erro
 		return StateStopped, nil
 	}
 	if m.PID != 0 && pidAlive(m.PID) {
+		// Alive is not the same as serving: a VM paused by an interrupted
+		// suspend must report as not-running so the manager heals it.
+		if st, err := d.instanceState(ref); err == nil && st == "Paused" {
+			return StateSuspended, nil
+		}
 		return StateRunning, nil
 	}
 	if d.hasSnapshot(ref) {
@@ -390,6 +485,13 @@ func (d *FirecrackerDriver) sockPath(ref string) string {
 // dir as cwd (the rootfs symlink is relative, which is what lets one template
 // snapshot restore onto any clone).
 func (d *FirecrackerDriver) spawn(m *vmMeta) error {
+	// The rootfs mapping can be missing (reboot, operator cleanup); recreate it
+	// from the recorded device id rather than failing the boot.
+	if _, err := os.Stat("/dev/mapper/" + d.dmName(m.Ref)); err != nil {
+		if perr := d.pool.ensurePool(); perr == nil {
+			_ = d.pool.activate(m.DevID, d.dmName(m.Ref))
+		}
+	}
 	dir := d.vmDir(m.Ref)
 	_ = os.Remove(d.sockPath(m.Ref))
 	if err := os.Symlink("/dev/mapper/"+d.dmName(m.Ref), filepath.Join(dir, "rootfs.blk")); err != nil && !os.IsExist(err) {
@@ -548,11 +650,39 @@ func (d *FirecrackerDriver) kill(m *vmMeta) {
 
 // api calls the firecracker unix-socket HTTP API for a VM.
 func (d *FirecrackerDriver) api(ref, method, path, body string) error {
+	return d.apiTimeout(ref, method, path, body, 60*time.Second)
+}
+
+// instanceState reports the VMM's own view of itself ("Running", "Paused",
+// "Not started"). Cheap, and the only way to tell a serving VM from one that
+// was paused and never resumed.
+func (d *FirecrackerDriver) instanceState(ref string) (string, error) {
 	client := http.Client{
 		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 			return net.Dial("unix", d.sockPath(ref))
 		}},
-		Timeout: 60 * time.Second,
+		Timeout: 5 * time.Second,
+	}
+	res, err := client.Get("http://fc/")
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	var info struct {
+		State string `json:"state"`
+	}
+	if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
+		return "", err
+	}
+	return info.State, nil
+}
+
+func (d *FirecrackerDriver) apiTimeout(ref, method, path, body string, timeout time.Duration) error {
+	client := http.Client{
+		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return net.Dial("unix", d.sockPath(ref))
+		}},
+		Timeout: timeout,
 	}
 	req, err := http.NewRequest(method, "http://fc/"+path, strings.NewReader(body))
 	if err != nil {
