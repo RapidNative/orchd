@@ -25,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -406,6 +407,10 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	cmd := exec.Command("ip", "netns", "exec", n.ns(), d.cfg.Bin, "--api-sock", d.sockPath(m.Ref))
 	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = logf, logf
+	// Own session/process group: a signal aimed at orchd (Ctrl-C, systemd
+	// stop) must not take tenant VMs with it. Paired with KillMode=process in
+	// the unit file.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return err
 	}
@@ -424,7 +429,25 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	return fmt.Errorf("firecracker api socket never appeared")
 }
 
+// ensureGuestResolver writes /etc/resolv.conf into the VM's rootfs clone while
+// it is down. Runs on every fresh boot, not just at create: nothing in the
+// sandbox hands a resolver out (no DHCP — the guest address arrives on the
+// kernel command line), and clones made before this existed have no resolver
+// on disk, so a boot-time dependency install would fail on DNS.
+func (d *FirecrackerDriver) ensureGuestResolver(m *vmMeta) {
+	mnt := filepath.Join(d.vmDir(m.Ref), "mnt")
+	if err := os.MkdirAll(mnt, 0o755); err != nil {
+		return
+	}
+	if err := sh("mount", "/dev/mapper/"+d.dmName(m.Ref), mnt); err != nil {
+		return // best-effort: a guest that already has one keeps working
+	}
+	defer sh("umount", mnt)
+	_ = os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644)
+}
+
 func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bool) (*Instance, error) {
+	d.ensureGuestResolver(m)
 	select {
 	case d.bootSem <- struct{}{}:
 		defer func() { <-d.bootSem }()
@@ -568,6 +591,9 @@ func (d *FirecrackerDriver) prepareGuest(m *vmMeta, spec Spec) error {
 		b.WriteString(fmt.Sprintf("export %s=%q\n", k, v))
 	}
 	if err := os.WriteFile(filepath.Join(mnt, "etc", "orchd.env"), []byte(b.String()), 0o644); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644); err != nil {
 		return err
 	}
 	src := spec.DataDir
