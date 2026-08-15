@@ -66,26 +66,24 @@ func (d *FirecrackerDriver) PrepareImage(ctx context.Context, dockerTag, runCmd,
 	}
 
 	// 1) clean export -> base thin volume
-	baseID, err := d.pool.nextDevID()
-	if err != nil {
-		return err
-	}
 	baseDM := "fcimg-" + sanitizeTagFC(name) + "-base"
-	if err := d.pool.createThin(baseID, baseDM); err != nil {
-		return err
+	baseID, err := d.pool.allocate(baseDM, func(id int) error { return d.pool.createThin(id, baseDM) })
+	if err != nil {
+		return fmt.Errorf("base volume: %w", err)
 	}
 	if err := d.exportToVolume(ctx, dockerTag, "/dev/mapper/"+baseDM, runCmd); err != nil {
 		return fmt.Errorf("export: %w", err)
 	}
 
 	// 2) warm volume = snapshot of base, boot once, warm, clean shutdown
-	warmID, err := d.pool.nextDevID()
-	if err != nil {
-		return err
-	}
 	warmDM := "fcimg-" + sanitizeTagFC(name) + "-warm"
-	if err := d.pool.snapshotOf(baseID, warmID, warmDM); err != nil {
-		return err
+	// The base was just written, so it must be quiesced for the snapshot to
+	// capture a mountable filesystem.
+	warmID, err := d.pool.allocate(warmDM, func(id int) error {
+		return d.pool.snapshotOfQuiesced(baseID, id, warmDM, baseDM)
+	})
+	if err != nil {
+		return fmt.Errorf("warm volume: %w", err)
 	}
 	meta := &fcImageMeta{Name: name, DockerTag: dockerTag, BaseDevID: baseID, WarmDevID: warmID, CreatedAt: time.Now()}
 

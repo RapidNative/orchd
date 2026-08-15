@@ -62,6 +62,8 @@ type Config struct {
 	FCKernel    string
 	FCRoot      string
 	FCPool      string
+	// FCMaxLive caps concurrently running microVMs; 0 derives it from host RAM.
+	FCMaxLive int
 
 	// DockerRuntime is the Docker runtime for tenant containers. "runsc" selects
 	// gVisor isolation; empty uses runc.
@@ -170,6 +172,7 @@ func Load() Config {
 		FCKernel:        env("ORCHD_FC_KERNEL", "/opt/orchd/fc/vmlinux"),
 		FCRoot:          env("ORCHD_FC_ROOT", "/opt/orchd/data/fc"),
 		FCPool:          env("ORCHD_FC_POOL", "fcorchd"),
+		FCMaxLive:       envInt("ORCHD_FC_MAX_LIVE", 0),
 	}
 }
 

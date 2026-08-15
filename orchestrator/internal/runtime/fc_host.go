@@ -3,6 +3,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -71,10 +72,21 @@ type thinPool struct {
 
 func (p *thinPool) dev() string { return "/dev/mapper/" + p.Name }
 
+// nextDevID hands out a thin-volume device id. The counter file is a hint, not
+// the truth: the pool's own metadata outlives it (and an operator who removes
+// the file, as happened during a cleanup on 2026-08-14, makes the counter walk
+// back over ids the pool still holds — every allocation then fails with
+// "create_snap: File exists" and the workload never gets a rootfs).
+//
+// So the floor is whatever the recorded state already uses, and callers retry
+// on collision via allocate().
 func (p *thinPool) nextDevID() (int, error) {
 	f := filepath.Join(p.root, "next-dev-id")
 	b, _ := os.ReadFile(f)
 	n, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	if hw := p.highWaterMark(); hw >= n {
+		n = hw + 1
+	}
 	if n < 100 {
 		n = 100 // ids below 100 are reserved for image base/warm volumes
 	}
@@ -82,6 +94,64 @@ func (p *thinPool) nextDevID() (int, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// highWaterMark is the largest device id any recorded VM or image is using.
+func (p *thinPool) highWaterMark() int {
+	max := 0
+	consider := func(dir string, pick func(map[string]any) []int) {
+		entries, err := os.ReadDir(filepath.Join(p.root, dir))
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			b, err := os.ReadFile(filepath.Join(p.root, dir, e.Name(), "meta.json"))
+			if err != nil {
+				continue
+			}
+			var m map[string]any
+			if json.Unmarshal(b, &m) != nil {
+				continue
+			}
+			for _, id := range pick(m) {
+				if id > max {
+					max = id
+				}
+			}
+		}
+	}
+	num := func(m map[string]any, k string) int {
+		if v, ok := m[k].(float64); ok {
+			return int(v)
+		}
+		return 0
+	}
+	consider("vms", func(m map[string]any) []int { return []int{num(m, "dev_id")} })
+	consider("images", func(m map[string]any) []int { return []int{num(m, "base_dev_id"), num(m, "warm_dev_id")} })
+	return max
+}
+
+// allocate runs fn with fresh device ids until the pool accepts one. A
+// collision means the pool already holds that id (stale metadata, a counter
+// reset, a volume whose record we lost) — taking the next id is both correct
+// and cheap; ids are 24-bit.
+func (p *thinPool) allocate(dmName string, fn func(devID int) error) (int, error) {
+	var lastErr error
+	for attempt := 0; attempt < 32; attempt++ {
+		devID, err := p.nextDevID()
+		if err != nil {
+			return 0, err
+		}
+		if err := fn(devID); err == nil {
+			return devID, nil
+		} else if !strings.Contains(err.Error(), "File exists") {
+			return 0, err
+		} else {
+			lastErr = err
+			_ = sh("dmsetup", "remove", dmName) // drop any half-made mapping
+		}
+	}
+	return 0, fmt.Errorf("no free thin device id after 32 attempts: %w", lastErr)
 }
 
 // createThin makes a brand-new empty thin volume with the given device id and
@@ -94,8 +164,29 @@ func (p *thinPool) createThin(devID int, dmName string) error {
 }
 
 // snapshotOf creates a CoW snapshot of origin (by device id) and activates it.
-// The origin device must be quiesced (suspended or not actively written).
+//
+// device-mapper requires the origin to be SUSPENDED across create_snap: that is
+// what flushes its in-flight IO into the pool. Skipping it yields a snapshot of
+// whatever happened to be committed — in the worst case an empty device with no
+// filesystem, which then fails to mount ("can't read superblock") or boots into
+// a kernel panic. It went unnoticed while origins were idle, and appeared the
+// moment an image was snapshotted right after being written.
+//
+// originDM is the origin's device-mapper name; when empty the origin is assumed
+// already quiesced.
 func (p *thinPool) snapshotOf(originID, devID int, dmName string) error {
+	return p.snapshotOfQuiesced(originID, devID, dmName, "")
+}
+
+func (p *thinPool) snapshotOfQuiesced(originID, devID int, dmName, originDM string) error {
+	if originDM != "" {
+		if _, err := os.Stat("/dev/mapper/" + originDM); err == nil {
+			if err := sh("dmsetup", "suspend", originDM); err != nil {
+				return fmt.Errorf("suspend origin %s: %w", originDM, err)
+			}
+			defer sh("dmsetup", "resume", originDM)
+		}
+	}
 	if err := sh("dmsetup", "message", p.dev(), "0", fmt.Sprintf("create_snap %d %d", devID, originID)); err != nil {
 		return err
 	}

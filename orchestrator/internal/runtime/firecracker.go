@@ -23,6 +23,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -40,6 +41,12 @@ type FirecrackerConfig struct {
 	MemSizeMiB int
 	GuestPort  int // the workload's in-guest listen port
 	AgentPort  int // in-guest agent port
+	// MaxLive caps concurrently running microVMs. Each guest reserves its full
+	// MemSizeMiB, so an uncapped fleet fills host memory and the box thrashes:
+	// wakes slow down, snapshot-based suspends start failing, which keeps even
+	// more VMs alive — observed 2026-08-14, 93 live VMs on a 125GB host, load
+	// 520. 0 disables the cap.
+	MaxLive int
 }
 
 func (c *FirecrackerConfig) defaults() {
@@ -58,6 +65,39 @@ func (c *FirecrackerConfig) defaults() {
 	if c.AgentPort == 0 {
 		c.AgentPort = 9000
 	}
+	if c.MaxLive == 0 {
+		// Leave the host a third of its memory for containers, page cache and
+		// the control plane.
+		if total := hostMemMiB(); total > 0 && c.MemSizeMiB > 0 {
+			c.MaxLive = (total * 2 / 3) / c.MemSizeMiB
+		}
+		if c.MaxLive < 4 {
+			c.MaxLive = 4
+		}
+	}
+}
+
+// hostMemMiB reads total system memory; 0 when it cannot be determined.
+func hostMemMiB() int {
+	b, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if !strings.HasPrefix(line, "MemTotal:") {
+			continue
+		}
+		f := strings.Fields(line)
+		if len(f) < 2 {
+			return 0
+		}
+		kb, err := strconv.Atoi(f[1])
+		if err != nil {
+			return 0
+		}
+		return kb / 1024
+	}
+	return 0
 }
 
 type FirecrackerDriver struct {
@@ -233,11 +273,11 @@ func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, e
 	if err := os.MkdirAll(d.vmDir(spec.Ref), 0o755); err != nil {
 		return nil, err
 	}
-	devID, err := d.pool.nextDevID()
+	warmDM := "fcimg-" + sanitizeTagFC(img.Name) + "-warm"
+	devID, err := d.pool.allocate(d.dmName(spec.Ref), func(id int) error {
+		return d.pool.snapshotOfQuiesced(img.WarmDevID, id, d.dmName(spec.Ref), warmDM)
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := d.pool.snapshotOf(img.WarmDevID, devID, d.dmName(spec.Ref)); err != nil {
 		return nil, fmt.Errorf("clone rootfs: %w", err)
 	}
 	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: sanitizeTagFC(spec.Image), Ephemeral: spec.Ephemeral}
@@ -484,7 +524,53 @@ func (d *FirecrackerDriver) sockPath(ref string) string {
 // spawn launches the firecracker VMM inside the VM's namespace with the VM
 // dir as cwd (the rootfs symlink is relative, which is what lets one template
 // snapshot restore onto any clone).
+// makeRoom keeps the number of running VMs under the cap by stopping the
+// longest-running ones. Stopping is a kill, not a snapshot: it frees memory
+// immediately (a snapshot under memory pressure is exactly what fails), and
+// the workload boots again on its next request. Boot age is a proxy for
+// idleness — the manager's reaper handles genuinely idle workloads properly;
+// this is the backstop that keeps the host from thrashing.
+func (d *FirecrackerDriver) makeRoom(exclude string) {
+	if d.cfg.MaxLive <= 0 {
+		return
+	}
+	type vm struct {
+		ref  string
+		age  time.Time
+		meta *vmMeta
+	}
+	var live []vm
+	entries, err := os.ReadDir(filepath.Join(d.cfg.Root, "vms"))
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if e.Name() == exclude {
+			continue
+		}
+		m, err := d.meta(e.Name())
+		if err != nil || m.PID == 0 || !pidAlive(m.PID) {
+			continue
+		}
+		st, err := os.Stat(filepath.Join(d.vmDir(m.Ref), "meta.json"))
+		if err != nil {
+			continue
+		}
+		live = append(live, vm{m.Ref, st.ModTime(), m})
+	}
+	if len(live) < d.cfg.MaxLive {
+		return
+	}
+	sort.Slice(live, func(i, j int) bool { return live[i].age.Before(live[j].age) })
+	for i := 0; i <= len(live)-d.cfg.MaxLive; i++ {
+		log.Printf("fc: at capacity (%d/%d live) — stopping %s to make room",
+			len(live), d.cfg.MaxLive, live[i].ref)
+		d.kill(live[i].meta)
+	}
+}
+
 func (d *FirecrackerDriver) spawn(m *vmMeta) error {
+	d.makeRoom(m.Ref)
 	// The rootfs mapping can be missing (reboot, operator cleanup); recreate it
 	// from the recorded device id rather than failing the boot.
 	if _, err := os.Stat("/dev/mapper/" + d.dmName(m.Ref)); err != nil {
@@ -531,25 +617,46 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	return fmt.Errorf("firecracker api socket never appeared")
 }
 
-// ensureGuestResolver writes /etc/resolv.conf into the VM's rootfs clone while
-// it is down. Runs on every fresh boot, not just at create: nothing in the
-// sandbox hands a resolver out (no DHCP — the guest address arrives on the
-// kernel command line), and clones made before this existed have no resolver
-// on disk, so a boot-time dependency install would fail on DNS.
-func (d *FirecrackerDriver) ensureGuestResolver(m *vmMeta) {
+// ensureGuestBoot prepares the rootfs clone while the VM is down: the resolver
+// and any directory the workload's env points at. Host-side on purpose —
+// writes made from inside a running guest are lost when the VMM is killed
+// without a sync, and baking them into the image would leave every existing
+// clone behind.
+//
+// Runs on every fresh boot, not just at create: nothing in the sandbox hands
+// out a resolver (no DHCP — the guest address arrives on the kernel command
+// line), so without this a boot-time dependency install fails on DNS; and a
+// workload whose TMPDIR does not exist loses its build caches on every start
+// ("metro-file-map Cache write error: ENOENT" — cosmetic but it makes every
+// cold start slower).
+func (d *FirecrackerDriver) ensureGuestBoot(m *vmMeta, spec Spec) {
 	mnt := filepath.Join(d.vmDir(m.Ref), "mnt")
 	if err := os.MkdirAll(mnt, 0o755); err != nil {
 		return
 	}
 	if err := sh("mount", "/dev/mapper/"+d.dmName(m.Ref), mnt); err != nil {
-		return // best-effort: a guest that already has one keeps working
+		return // best-effort: a guest that is already set up keeps working
 	}
 	defer sh("umount", mnt)
 	_ = os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644)
+	// Absolute env paths the workload expects to exist. Only paths inside the
+	// guest's own writable areas, and only from env the caller set.
+	for _, key := range []string{"TMPDIR", "HOME", "METRO_CACHE_DIR", "XDG_CACHE_HOME"} {
+		p := spec.Env[key]
+		if p == "" || !strings.HasPrefix(p, "/") || strings.Contains(p, "..") {
+			continue
+		}
+		if !strings.HasPrefix(p, "/data") && !strings.HasPrefix(p, "/tmp") && !strings.HasPrefix(p, "/cache") {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Join(mnt, strings.TrimPrefix(p, "/")), 0o1777); err != nil {
+			log.Printf("fc %s: could not create %s in guest: %v", m.Ref, p, err)
+		}
+	}
 }
 
 func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bool) (*Instance, error) {
-	d.ensureGuestResolver(m)
+	d.ensureGuestBoot(m, spec)
 	select {
 	case d.bootSem <- struct{}{}:
 		defer func() { <-d.bootSem }()
@@ -559,8 +666,16 @@ func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bo
 	if err := d.spawn(m); err != nil {
 		return nil, err
 	}
+	// Dev-server workloads walk very large dependency trees, and a watcher that
+	// runs out of inotify watches takes the whole server down mid-startup
+	// ("ENOSPC: System limit for number of file watchers reached" — observed on
+	// a project whose tree includes ~420k files). The guest kernel's defaults
+	// are far too low for that, and sysctl.* boot parameters let us raise them
+	// without baking anything into the image.
 	bootArgs := fmt.Sprintf(
-		"console=ttyS0 reboot=k panic=1 pci=off init=/sbin/orchd-init ip=%s::%s:255.255.255.240::eth0:off",
+		"console=ttyS0 reboot=k panic=1 pci=off init=/sbin/orchd-init ip=%s::%s:255.255.255.240::eth0:off"+
+			" sysctl.fs.inotify.max_user_watches=1048576 sysctl.fs.inotify.max_user_instances=8192"+
+			" sysctl.fs.file-max=1048576",
 		fcGuestIP, fcTapIP)
 	steps := []struct{ path, body string }{
 		{"boot-source", fmt.Sprintf(`{"kernel_image_path":%q,"boot_args":%q}`, d.cfg.Kernel, bootArgs)},
