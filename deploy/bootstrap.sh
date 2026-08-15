@@ -39,7 +39,7 @@ if [ ! -s /opt/orchd/secrets/admin.key ]; then
 fi
 
 # 5. build workload images (needs images/* synced by deploy.sh first)
-docker build -t tinbase:0.13.0 /opt/orchd/images/tinbase
+docker build -t tinbase:0.13.1 /opt/orchd/images/tinbase
 docker build -t rn-api:dev     /opt/orchd/images/rn-api
 docker build -t rn-vite:dev    /opt/orchd/images/rn-vite
 docker build -t rn-expo:dev    /opt/orchd/images/rn-expo
