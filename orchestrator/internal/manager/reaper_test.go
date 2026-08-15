@@ -67,3 +67,40 @@ func TestReapSuspendsIdleWhenEnabled(t *testing.T) {
 		t.Fatal("idle workload should have been reaped with a positive IdleTimeout")
 	}
 }
+
+// A workload that outlived the orchd process which started it has no live
+// entry, so the map-driven pass cannot see it. It must still be reaped —
+// after one idle interval of grace, and not before.
+func TestReapAdoptsInstancesThatOutlivedRestart(t *testing.T) {
+	m := newReapMgr(t, time.Minute)
+	m.forget("w") // what a restart leaves behind: running in the store, not live
+
+	m.ReapIdle(context.Background())
+	if w, _ := m.store.GetWorkload("w"); w.State != runtime.StateRunning {
+		t.Fatal("reaped on first sight; an in-use workload must get its grace interval")
+	}
+
+	m.mu.Lock()
+	m.unowned["w"] = time.Now().Add(-time.Hour)
+	m.mu.Unlock()
+	m.ReapIdle(context.Background())
+	if w, _ := m.store.GetWorkload("w"); w.State != runtime.StateSuspended {
+		t.Fatalf("still %s after the grace interval; want suspended", w.State)
+	}
+}
+
+// A request during the grace interval re-arms the workload: it goes back to
+// being tracked normally and the stale grace timestamp must not survive.
+func TestGraceResetsWhenWorkloadIsUsedAgain(t *testing.T) {
+	m := newReapMgr(t, time.Minute)
+	m.forget("w")
+	m.ReapIdle(context.Background())
+
+	m.markLive("w", "127.0.0.1:1")
+	m.mu.Lock()
+	_, pending := m.unowned["w"]
+	m.mu.Unlock()
+	if pending {
+		t.Fatal("grace timer survived a wake; the workload would be reaped while in use")
+	}
+}

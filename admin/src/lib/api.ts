@@ -64,10 +64,17 @@ async function reqText(path: string): Promise<string> {
   return res.text()
 }
 
+const withWorkloads = <T extends { workloads?: Project['workloads'] }>(p: T): T =>
+  p.workloads ? p : { ...p, workloads: [] }
+
 export const api = {
   info: () => req<Info>('/v1/info'),
-  projects: () => req<Project[]>('/v1/projects'),
-  project: (id: string) => req<Project>('/v1/projects/' + id),
+  // `workloads` is declared as an array but older servers send null for a
+  // project that has none (mid-create, or all workloads deleted). Normalising
+  // here keeps every consumer free of null checks — the components map over it
+  // in a dozen places and a null took the whole page down.
+  projects: async () => (await req<Project[]>('/v1/projects')).map(withWorkloads),
+  project: async (id: string) => withWorkloads(await req<Project>('/v1/projects/' + id)),
   createProject: (body: {
     name?: string
     region?: string

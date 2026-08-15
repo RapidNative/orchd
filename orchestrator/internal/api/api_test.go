@@ -539,3 +539,40 @@ func TestProjectResetRoute(t *testing.T) {
 		t.Fatalf("routes changed across reset: %v -> %v", routesBefore, proj.Workloads[0].Routes)
 	}
 }
+
+// A project with no workloads must serialize an empty array, never null: the
+// admin panel maps over the field in a dozen places, and a null took down every
+// page that listed projects.
+func TestProjectWithNoWorkloadsSerializesEmptyArray(t *testing.T) {
+	srv := newTestServer(t)
+
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var created struct {
+		ID        string `json:"id"`
+		Workloads []struct {
+			ID string `json:"id"`
+		} `json:"workloads"`
+	}
+	_ = json.Unmarshal(body, &created)
+
+	// Delete every workload, leaving the project itself — the state a project
+	// reaches mid-create, and after its workloads are removed.
+	for _, w := range created.Workloads {
+		if code, out := do(t, srv, "DELETE", "/v1/workloads/"+w.ID, bootstrapKey, nil); code >= 300 {
+			t.Fatalf("delete workload: %d %s", code, out)
+		}
+	}
+
+	for _, path := range []string{"/v1/projects/" + created.ID, "/v1/projects"} {
+		_, raw := do(t, srv, "GET", path, bootstrapKey, nil)
+		if bytes.Contains(raw, []byte(`"workloads":null`)) {
+			t.Fatalf("%s serialized workloads as null: %s", path, raw)
+		}
+		if !bytes.Contains(raw, []byte(`"workloads":[]`)) {
+			t.Fatalf("%s did not contain an empty workloads array: %s", path, raw)
+		}
+	}
+}

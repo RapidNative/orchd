@@ -59,6 +59,12 @@ type Manager struct {
 	live     map[string]*liveInstance // workloadID -> running instance
 	refLocks map[string]*sync.Mutex   // per-workload wake serialization
 
+	// unowned records when the reaper first noticed a workload that is running
+	// but has no live entry — an instance that outlived the orchd process that
+	// started it. There is no request history for those, so the timestamp is
+	// the grace period's start rather than a real lastSeen.
+	unowned map[string]time.Time
+
 	portMu sync.Mutex // serializes host-port allocation (port-addressing mode)
 
 	// buildLocks serializes image builds per template. Two concurrent builds
@@ -116,6 +122,7 @@ func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 		mem:      events.NewMemorySink(500),
 		live:     make(map[string]*liveInstance),
 		refLocks: make(map[string]*sync.Mutex),
+		unowned:  make(map[string]time.Time),
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
 	m.applyWebhookSettings()
@@ -1477,20 +1484,62 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 			stale = append(stale, id)
 		}
 	}
+	// Instances survive an orchd restart (that is the point — a deploy must not
+	// drop tenants), but m.live does not. Anything running without a live entry
+	// is therefore unreachable by the loop above and would stay up forever,
+	// which is how a box ends up with days-old instances and no memory left.
+	// Such a workload gets one idle interval of grace, so one still in use is
+	// re-armed by its next request instead of being suspended out from under a
+	// user; only then does it become reapable.
+	for _, w := range m.store.ListWorkloads("") {
+		if w.State != runtime.StateRunning {
+			delete(m.unowned, w.ID)
+			continue
+		}
+		if _, live := m.live[w.ID]; live {
+			delete(m.unowned, w.ID)
+			continue
+		}
+		first, seen := m.unowned[w.ID]
+		if !seen {
+			m.unowned[w.ID] = now
+			continue
+		}
+		if now.Sub(first) > m.cfg.IdleTimeout {
+			delete(m.unowned, w.ID)
+			stale = append(stale, w.ID)
+		}
+	}
 	m.mu.Unlock()
 
+	// Suspending is not free — a microVM writes a memory snapshot, a container
+	// gets a stop grace period — so a backlog (the first pass after a restart
+	// can cover every workload on the box) runs a few at a time rather than
+	// serially, which would take hours, or all at once, which would stall the
+	// disk for everything still serving.
+	sem := make(chan struct{}, 4)
+	var wg sync.WaitGroup
 	for _, id := range stale {
 		if w, err := m.store.GetWorkload(id); err == nil && w.KeepWarm {
 			continue // always-on: never scale to zero
 		}
-		rl := m.refLock(id)
-		rl.Lock()
-		if err := m.rt.Suspend(ctx, id); err == nil {
+		wg.Add(1)
+		go func(id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			rl := m.refLock(id)
+			rl.Lock()
+			defer rl.Unlock()
+			if err := m.rt.Suspend(ctx, id); err != nil {
+				log.Printf("reap %s: %v", id, err)
+				return
+			}
 			_ = m.store.SetWorkloadState(id, runtime.StateSuspended)
 			m.forget(id)
-		}
-		rl.Unlock()
+		}(id)
 	}
+	wg.Wait()
 }
 
 func (m *Manager) RunReaper(ctx context.Context) {
@@ -1948,6 +1997,7 @@ func (m *Manager) reclaimPath(dir string) {
 func (m *Manager) markLive(id, addr string) {
 	m.mu.Lock()
 	m.live[id] = &liveInstance{addr: addr, lastSeen: time.Now()}
+	delete(m.unowned, id)
 	m.mu.Unlock()
 }
 
