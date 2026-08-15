@@ -273,11 +273,11 @@ func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, e
 	if err := os.MkdirAll(d.vmDir(spec.Ref), 0o755); err != nil {
 		return nil, err
 	}
-	devID, err := d.pool.nextDevID()
+	warmDM := "fcimg-" + sanitizeTagFC(img.Name) + "-warm"
+	devID, err := d.pool.allocate(d.dmName(spec.Ref), func(id int) error {
+		return d.pool.snapshotOfQuiesced(img.WarmDevID, id, d.dmName(spec.Ref), warmDM)
+	})
 	if err != nil {
-		return nil, err
-	}
-	if err := d.pool.snapshotOf(img.WarmDevID, devID, d.dmName(spec.Ref)); err != nil {
 		return nil, fmt.Errorf("clone rootfs: %w", err)
 	}
 	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: sanitizeTagFC(spec.Image), Ephemeral: spec.Ephemeral}
