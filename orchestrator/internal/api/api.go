@@ -264,7 +264,10 @@ func (a *API) workloadView(w *store.Workload) workloadView {
 }
 
 func (a *API) projectView(p *store.Project) projectView {
-	var wl []workloadView
+	// Never nil: a project with no workloads (mid-create, or one whose workloads
+	// were deleted) must still serialize `"workloads": []`. A JSON null here
+	// crashes every consumer that maps over the field, the admin panel included.
+	wl := []workloadView{}
 	for _, w := range a.mgr.Store().ListWorkloads(p.ID) {
 		wl = append(wl, a.workloadView(w))
 	}
