@@ -34,9 +34,17 @@ import (
 // attached needs the volume present to restore.
 
 // depsName derives the family volume name from the manager's shared deps dir
-// (…/shared-deps/<lockhash>-<workspace>), which is content-addressed already.
+// (…/shared-deps/<lockhash>-<workspace>, content-addressed already). The
+// manager hands the per-version path (…/<version>/deps/<workspace>), which is
+// a SYMLINK into shared-deps — resolve it first, or every lockfile's family
+// collapses into one volume named after the workspace and different templates
+// serve each other's trees.
 func depsName(depsHostDir string) string {
-	return sanitizeTagFC(filepath.Base(depsHostDir))
+	resolved, err := filepath.EvalSymlinks(depsHostDir)
+	if err != nil {
+		resolved = depsHostDir
+	}
+	return sanitizeTagFC(filepath.Base(resolved))
 }
 
 func (d *FirecrackerDriver) depsDir(name string) string {
