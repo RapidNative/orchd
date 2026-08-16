@@ -356,6 +356,16 @@ func (d *DockerDriver) inspect(ctx context.Context, host, ref string) (State, st
 
 // waitHTTP blocks until addr returns any HTTP response (not fooled by Docker's
 // port-proxy accepting before the app serves).
+//
+// The probe declares itself a native Expo client. A bare GET / makes an Expo
+// dev server produce the WEB target — SSR-rendering the landing page, which
+// bundles the entire app for web as the very first thing a cold server does.
+// For a workspace whose dependencies diverge from the baked image that build
+// gets no cache hits, exceeds the guest's memory, and is OOM-killed — so the
+// server boots, builds for a minute, dies, and repeats, and the workload never
+// becomes ready even though the app itself is fine. With the header, Expo
+// answers with its native manifest: a few milliseconds, no bundling. Servers
+// that aren't Expo ignore the headers, and any response still means ready.
 func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	url := "http://" + addr + "/"
@@ -365,6 +375,8 @@ func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 			return ctx.Err()
 		}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req.Header.Set("expo-platform", "ios")
+		req.Header.Set("Accept", "application/expo+json,application/json")
 		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
