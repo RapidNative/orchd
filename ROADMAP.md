@@ -47,9 +47,17 @@ the trade-offs decidable.
   versions. A deps-unchanged rebuild now costs ~25 inodes and seconds instead
   of ~160k and minutes. Remaining: clean package-manager caches in-RUN, and GC
   microVM image volumes the same way container images are GC'd.
-- **Dependency registry cache** (e.g. verdaccio) on the box: installs dominate
-  both image builds and first boots, and they re-download the same tarballs
-  every time.
+- **~~Dependency registry cache~~** — done: ORCHD_WORKLOAD_ENV / ORCHD_BUILD_ENV
+  carry a registry URL into every boot install and image build; the proxy
+  itself is operator infrastructure, not orchd's.
+- **Per-project deps families**: the FC shared node_modules volume shares the
+  template's lockfile family; a project that diverges pays only its delta in
+  the overlay upper, but two projects with the SAME divergence still pay it
+  twice. Harvesting a booted project's node_modules into a new family volume
+  would dedupe those — riskier (must quiesce the guest) and unproven demand.
+- **Deps family GC**: family volumes are never deleted automatically; depsInUse
+  enumerates references (running AND suspended VMs — snapshots restore with
+  their drive set). Wire it into image-version GC.
 
 ## Runtime
 
