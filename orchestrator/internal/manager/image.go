@@ -497,7 +497,12 @@ func dockerfileFor(w template.Workload, buildEnv map[string]string) string {
 		fmt.Fprintf(&b, "COPY %s/ /usr/share/nginx/html/\n", strings.TrimSuffix(dir, "/"))
 		b.WriteString("EXPOSE 80\n")
 	default: // node
-		b.WriteString("FROM node:20-slim\n")
+		// node 22: the earliest LTS with native WebSocket, which supabase-js's
+		// realtime client requires at construction — on node 20 a dev server's
+		// web SSR dies with "Node.js 20 detected without native WebSocket
+		// support" the moment the app builds its client. Every preset image in
+		// orchestrator/images is already on 22; this generator was the laggard.
+		b.WriteString("FROM node:22-slim\n")
 		b.WriteString("WORKDIR /app\n")
 		// A stable, writable cache home baked into the image: build steps warm
 		// it (transform caches, prebuilt bundles) and runtime containers reuse
