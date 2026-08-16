@@ -805,10 +805,19 @@ func (d *FirecrackerDriver) api(ref, method, path, body string) error {
 // "Not started"). Cheap, and the only way to tell a serving VM from one that
 // was paused and never resumed.
 func (d *FirecrackerDriver) instanceState(ref string) (string, error) {
+	// DisableKeepAlives: each call builds a throwaway Transport, and a kept-alive
+	// connection in a discarded transport is never closed. Status is polled on
+	// every wake and every reaper pass, so the leaked sockets accumulated until
+	// Firecracker's API server answered 503 "Too many open connections" — at
+	// which point the VM could no longer be paused, silently defeating
+	// scale-to-zero for it.
 	client := http.Client{
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", d.sockPath(ref))
-		}},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", d.sockPath(ref))
+			},
+			DisableKeepAlives: true,
+		},
 		Timeout: 5 * time.Second,
 	}
 	res, err := client.Get("http://fc/")
@@ -827,9 +836,13 @@ func (d *FirecrackerDriver) instanceState(ref string) (string, error) {
 
 func (d *FirecrackerDriver) apiTimeout(ref, method, path, body string, timeout time.Duration) error {
 	client := http.Client{
-		Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return net.Dial("unix", d.sockPath(ref))
-		}},
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return net.Dial("unix", d.sockPath(ref))
+			},
+			// See instanceState: throwaway transports must not keep connections alive.
+			DisableKeepAlives: true,
+		},
 		Timeout: timeout,
 	}
 	req, err := http.NewRequest(method, "http://fc/"+path, strings.NewReader(body))
