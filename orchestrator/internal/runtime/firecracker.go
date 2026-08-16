@@ -564,11 +564,26 @@ func (d *FirecrackerDriver) countLive(exclude string) int {
 			continue
 		}
 		m, err := d.meta(e.Name())
-		if err == nil && m.PID != 0 && pidAlive(m.PID) {
+		if err == nil && m.PID != 0 && pidIsFirecracker(m.PID) {
 			n++
 		}
 	}
 	return n
+}
+
+// pidIsFirecracker reports whether pid is a live firecracker process. A bare
+// liveness check is not enough for capacity accounting: metas left by killed
+// VMs record PIDs the kernel reuses, and each reused PID counts as a phantom
+// VM. Enough phantoms push the count past MaxLive permanently — every spawn
+// then waits its full admission deadline while holding its workload lock, and
+// the gateway wedges for every host behind those locks. (Live incident,
+// 2026-08-16 evening: load 0.6, gateway timing out for everything.)
+func pidIsFirecracker(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(b)) == "firecracker"
 }
 
 // admit blocks until there is capacity for one more VM, then reserves it via
