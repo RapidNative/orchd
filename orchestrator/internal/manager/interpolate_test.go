@@ -308,3 +308,37 @@ func TestWorkspaceMountVolumeRun(t *testing.T) {
 		}
 	}
 }
+
+// Platform env (ORCHD_WORKLOAD_ENV) is the lowest layer: project env overrides
+// it, per-workload env overrides both, and it must never displace the seeded
+// JWT secret.
+func TestSpecForPlatformEnvPrecedence(t *testing.T) {
+	st, _ := store.Open("")
+	cfg := config.Config{
+		DataRoot: t.TempDir(),
+		WorkloadEnv: map[string]string{
+			"npm_config_registry": "http://172.17.0.1:4873",
+			"FROM_PLATFORM":       "platform",
+			"TINBASE_JWT_SECRET":  "must-not-win",
+		},
+	}
+	m := New(cfg, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"FROM_PLATFORM": "project"}})
+	w := &store.Workload{ID: "w", ProjectID: "p", JWTSecret: "real-secret",
+		Env: map[string]string{"OWN": "workload"}}
+	_ = st.PutWorkload(w)
+
+	env := m.specFor(w).Env
+	if env["npm_config_registry"] != "http://172.17.0.1:4873" {
+		t.Fatalf("platform key missing: %v", env)
+	}
+	if env["FROM_PLATFORM"] != "project" {
+		t.Fatalf("project env must override platform: %q", env["FROM_PLATFORM"])
+	}
+	if env["OWN"] != "workload" {
+		t.Fatalf("workload env lost: %q", env["OWN"])
+	}
+	if env["TINBASE_JWT_SECRET"] != "real-secret" {
+		t.Fatal("platform env must not displace the seeded JWT secret")
+	}
+}

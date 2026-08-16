@@ -441,8 +441,19 @@ func (m *Manager) extractImageDeps(ctx context.Context, tag, destDir string) err
 // dockerBuildWorkspace generates a Dockerfile for one workspace and builds it,
 // using the template root as the build context. The generated Dockerfile is kept
 // alongside the tarball for transparency.
+
+// sortedKeys returns a map's keys in stable order (nil-safe).
+func sortedKeys(m map[string]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
 func (m *Manager) dockerBuildWorkspace(ctx context.Context, base string, w template.Workload, tag string) error {
-	dfContent := dockerfileFor(w)
+	dfContent := dockerfileFor(w, m.cfg.BuildEnv)
 	dfName := "Dockerfile.orchd." + sanitizeTag(w.Name)
 	dfPath := filepath.Join(base, dfName)
 	if err := os.WriteFile(dfPath, []byte(dfContent), 0o644); err != nil {
@@ -450,7 +461,13 @@ func (m *Manager) dockerBuildWorkspace(ctx context.Context, base string, w templ
 	}
 	defer os.Remove(dfPath)
 
-	cmd := exec.CommandContext(ctx, "docker", "build", "-f", dfPath, "-t", tag, base)
+	args := []string{"build", "-f", dfPath, "-t", tag}
+	// Deterministic order so repeated builds produce identical commands.
+	for _, k := range sortedKeys(m.cfg.BuildEnv) {
+		args = append(args, "--build-arg", k+"="+m.cfg.BuildEnv[k])
+	}
+	args = append(args, base)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%v: %s", err, tailStr(string(out), 400))
@@ -461,7 +478,14 @@ func (m *Manager) dockerBuildWorkspace(ctx context.Context, base string, w templ
 // dockerfileFor generates a container recipe for a node or static workspace from
 // its orchd.json entry. The internal port is fixed at 8080; the run command's
 // $PORT is expanded by the shell from the PORT env at container start.
-func dockerfileFor(w template.Workload) string {
+//
+// buildEnv keys become ARGs declared before the setup/install RUNs, so build
+// steps see them in their environment (npm reads npm_config_registry from env)
+// while the built image carries none of it — ARG, unlike ENV, does not persist,
+// so runtime behaviour stays governed by the workload spec env alone. An empty
+// map emits nothing and the Dockerfile is byte-identical to before (layer-cache
+// safe).
+func dockerfileFor(w template.Workload, buildEnv map[string]string) string {
 	var b strings.Builder
 	dir := w.Dir
 	if dir == "" {
@@ -480,6 +504,9 @@ func dockerfileFor(w template.Workload) string {
 		// it via copy-on-write (survives suspend/wake; reset on recreate).
 		b.WriteString("ENV HOME=/cache\n")
 		b.WriteString("RUN mkdir -p /cache\n")
+		for _, k := range sortedKeys(buildEnv) {
+			fmt.Fprintf(&b, "ARG %s\n", k)
+		}
 		// Layer ordering is the size/inode story: everything below COPY is
 		// invalidated by ANY template change, so app-independent work stays
 		// above it. Setup (toolchains) first; then the manifest lockfile alone

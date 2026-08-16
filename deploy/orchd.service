@@ -10,6 +10,13 @@ Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
 Environment=ORCHD_IMAGE=tinbase:0.13.2
+# All installs (boot-time and image builds) go through the box's npm registry
+# cache (tools/orchd-box/verdaccio in the website repo). 172.17.0.1 = docker0,
+# reachable from containers, docker-build RUNs, AND Firecracker guests (via
+# their egress NAT). Both env casings: npm reads the lower, bun the upper.
+# Rollback = delete these two lines and restart orchd.
+Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
+Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m
 Environment=ORCHD_DEV_CPUS=4
