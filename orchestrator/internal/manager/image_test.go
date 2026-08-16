@@ -257,7 +257,7 @@ func TestDockerfileForBakesCacheHomeAndBuildSteps(t *testing.T) {
 		Install: []string{"npm", "install"},
 		Run:     []string{"npx", "jetplane", "serve", "--port", "$PORT"},
 		Build:   [][]string{{"npm", "install", "-g", "bun"}, {"sh", "-lc", "warm-caches"}},
-	})
+	}, nil)
 	for _, want := range []string{
 		"ENV HOME=/cache",
 		"RUN mkdir -p /cache",
@@ -271,5 +271,38 @@ func TestDockerfileForBakesCacheHomeAndBuildSteps(t *testing.T) {
 	}
 	if strings.Index(df, `RUN ["npm"`) < strings.Index(df, "RUN npm install\n") {
 		t.Fatal("build steps must come after install")
+	}
+}
+
+// Build env rides in as ARGs: declared before the setup/install RUNs (so npm
+// sees npm_config_registry during install), absent entirely when unset (the
+// Dockerfile must stay byte-identical so layer caches survive), and never an
+// ENV — runtime behaviour belongs to the workload spec env, not the image.
+func TestDockerfileForBuildEnvArgs(t *testing.T) {
+	w := template.Workload{
+		Name: "mobile", Kind: "node", Dir: "mobile",
+		Setup:   [][]string{{"sh", "-lc", "apt-get install -y curl"}},
+		Install: []string{"npm", "install"},
+	}
+
+	plain := dockerfileFor(w, nil)
+	if strings.Contains(plain, "ARG ") {
+		t.Fatalf("no buildEnv must emit no ARGs:\n%s", plain)
+	}
+
+	df := dockerfileFor(w, map[string]string{"npm_config_registry": "http://172.17.0.1:4873"})
+	argAt := strings.Index(df, "ARG npm_config_registry\n")
+	if argAt < 0 {
+		t.Fatalf("ARG missing:\n%s", df)
+	}
+	if setupAt := strings.Index(df, `RUN ["sh","-lc","apt-get`); argAt > setupAt {
+		t.Fatal("ARG must be declared before setup RUNs so they see it")
+	}
+	if strings.Contains(df, "ENV npm_config_registry") {
+		t.Fatal("build env must never persist as ENV in the image")
+	}
+	// The value never enters the Dockerfile — it travels via --build-arg.
+	if strings.Contains(df, "4873") {
+		t.Fatalf("build env value leaked into the Dockerfile:\n%s", df)
 	}
 }

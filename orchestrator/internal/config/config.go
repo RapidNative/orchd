@@ -74,6 +74,17 @@ type Config struct {
 	// IdleTimeout is how long an instance may sit without a request before the
 	// orchestrator scales it to zero (suspends it).
 	IdleTimeout time.Duration
+
+	// WorkloadEnv is injected into every workload's environment at the lowest
+	// precedence (project env, then per-workload env, override it). The place
+	// for platform-wide plumbing like a registry mirror
+	// (npm_config_registry=http://...) that every tenant should use without
+	// any template knowing about it.
+	WorkloadEnv map[string]string
+	// BuildEnv is passed to image builds as docker build args, visible to RUN
+	// steps (installs) but absent from the built image — runtime behaviour
+	// stays governed by WorkloadEnv alone.
+	BuildEnv map[string]string
 	// Region is the single region this orchestrator serves for now.
 	Region string
 
@@ -151,6 +162,8 @@ func Load() Config {
 		DockerRuntime:   env("ORCHD_DOCKER_RUNTIME", "runsc"),
 		DockerHost:      env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:     envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
+		WorkloadEnv:     envMap("ORCHD_WORKLOAD_ENV"),
+		BuildEnv:        envMap("ORCHD_BUILD_ENV"),
 		Region:          env("ORCHD_REGION", "local"),
 		APIKeyFile:      env("ORCHD_API_KEY_FILE", ""),
 		PublicURL:       env("ORCHD_PUBLIC_URL", publicURLDefault),
@@ -174,6 +187,28 @@ func Load() Config {
 		FCPool:          env("ORCHD_FC_POOL", "fcorchd"),
 		FCMaxLive:       envInt("ORCHD_FC_MAX_LIVE", 0),
 	}
+}
+
+// envMap parses "K=V,K2=V2" into a map. Pairs without '=' are skipped, so a
+// typo degrades to a missing key rather than a broken boot. Values cannot
+// contain commas; the intended payload (URLs, flags) never needs them.
+func envMap(name string) map[string]string {
+	pairs := splitCSV(os.Getenv(name))
+	if len(pairs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(pairs))
+	for _, p := range pairs {
+		k, v, ok := strings.Cut(p, "=")
+		if !ok || strings.TrimSpace(k) == "" {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // splitCSV parses a comma-separated env value into a trimmed, non-empty list.

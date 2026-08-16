@@ -40,3 +40,23 @@ func TestDefaultsWithoutLocalMode(t *testing.T) {
 		t.Errorf("PublicURL = %q, want empty", c.PublicURL)
 	}
 }
+
+// ORCHD_WORKLOAD_ENV / ORCHD_BUILD_ENV parse "K=V,K2=V2"; malformed pairs are
+// skipped so a typo degrades to a missing key rather than a broken boot.
+func TestEnvMapParsing(t *testing.T) {
+	t.Setenv("ORCHD_WORKLOAD_ENV", "npm_config_registry=http://172.17.0.1:4873, NPM_CONFIG_REGISTRY=http://172.17.0.1:4873 ,broken,=novalue")
+	t.Setenv("ORCHD_BUILD_ENV", "")
+	cfg := Load()
+	if got := cfg.WorkloadEnv["npm_config_registry"]; got != "http://172.17.0.1:4873" {
+		t.Fatalf("npm_config_registry = %q", got)
+	}
+	if got := cfg.WorkloadEnv["NPM_CONFIG_REGISTRY"]; got != "http://172.17.0.1:4873" {
+		t.Fatalf("NPM_CONFIG_REGISTRY = %q (whitespace not trimmed?)", got)
+	}
+	if len(cfg.WorkloadEnv) != 2 {
+		t.Fatalf("malformed pairs must be skipped, got %v", cfg.WorkloadEnv)
+	}
+	if cfg.BuildEnv != nil {
+		t.Fatalf("empty ORCHD_BUILD_ENV must yield nil, got %v", cfg.BuildEnv)
+	}
+}

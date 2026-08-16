@@ -1862,7 +1862,11 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		}
 	}
 	// Precedence: platform env, then project env, then per-workload env (most specific wins).
-	env := map[string]string{"TINBASE_JWT_SECRET": w.JWTSecret}
+	env := make(map[string]string, len(m.cfg.WorkloadEnv)+1)
+	for k, v := range m.cfg.WorkloadEnv {
+		env[k] = v
+	}
+	env["TINBASE_JWT_SECRET"] = w.JWTSecret
 	for k, v := range projEnv {
 		env[k] = v
 	}
