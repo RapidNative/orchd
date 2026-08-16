@@ -119,10 +119,17 @@ type FirecrackerDriver struct {
 	// Snapshot restores are cheap and skip this.
 	bootSem chan struct{}
 	// pendingSpawns counts spawns that have been admitted but have not yet
-	// recorded a PID — the window in which a live-VM count undercounts. Held
-	// under mu; admission adds pending to the count so a burst of concurrent
-	// spawns cannot all pass the capacity check together (that race is how a
-	// 15-wide provision herd sailed past MaxLive and exhausted host memory).
+	// recorded a PID — the window in which a live-VM count undercounts.
+	// Admission adds pending to the count so a burst of concurrent spawns
+	// cannot all pass the capacity check together (that race is how a 15-wide
+	// provision herd sailed past MaxLive and exhausted host memory).
+	//
+	// Guarded by its OWN mutex, never d.mu: the capacity count reads VM metas,
+	// and meta() takes d.mu — admission holding d.mu while counting deadlocked
+	// the whole driver on its first spawn (every wake on the box queued behind
+	// one self-waiting goroutine; 2026-08-16 evening, the third outage of the
+	// day and the only one with a one-line cause).
+	admitMu       sync.Mutex
 	pendingSpawns int
 }
 
@@ -563,8 +570,14 @@ func (d *FirecrackerDriver) countLive(exclude string) int {
 		if e.Name() == exclude {
 			continue
 		}
-		m, err := d.meta(e.Name())
-		if err == nil && m.PID != 0 && pidIsFirecracker(m.PID) {
+		// Read the meta file directly — d.meta() takes d.mu, and this count
+		// runs under admitMu from code paths that may already hold d.mu.
+		b, err := os.ReadFile(filepath.Join(d.cfg.Root, "vms", e.Name(), "meta.json"))
+		if err != nil {
+			continue
+		}
+		m := &vmMeta{}
+		if json.Unmarshal(b, m) == nil && m.PID != 0 && pidIsFirecracker(m.PID) {
 			n++
 		}
 	}
@@ -601,14 +614,14 @@ func (d *FirecrackerDriver) admit(exclude string) error {
 	deadline := time.Now().Add(10 * time.Minute)
 	logged := false
 	for {
-		d.mu.Lock()
+		d.admitMu.Lock()
 		live := d.countLive(exclude) + d.pendingSpawns
 		if live < d.cfg.MaxLive {
 			d.pendingSpawns++
-			d.mu.Unlock()
+			d.admitMu.Unlock()
 			return nil
 		}
-		d.mu.Unlock()
+		d.admitMu.Unlock()
 		if !logged {
 			log.Printf("fc: at capacity (%d/%d live) — %s waiting for a slot", live, d.cfg.MaxLive, exclude)
 			logged = true
@@ -621,11 +634,11 @@ func (d *FirecrackerDriver) admit(exclude string) error {
 }
 
 func (d *FirecrackerDriver) admitDone() {
-	d.mu.Lock()
+	d.admitMu.Lock()
 	if d.pendingSpawns > 0 {
 		d.pendingSpawns--
 	}
-	d.mu.Unlock()
+	d.admitMu.Unlock()
 }
 
 func (d *FirecrackerDriver) spawn(m *vmMeta) error {
