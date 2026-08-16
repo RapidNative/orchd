@@ -199,6 +199,18 @@ const fcInitTemplate = `#!/bin/bash
 export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 mount -t proc proc /proc; mount -t sysfs sys /sys; mount -t devtmpfs dev /dev 2>/dev/null
 mount -t tmpfs tmpfs /tmp
+# Shared deps drive (strictly optional): a read-only node_modules family volume
+# as /dev/vdb. Overlay it under /app/node_modules with a writable upper on the
+# rootfs, so installs write only their delta and the shared tree is never
+# copied or rewritten into this VM's clone. Any failure falls through to the
+# baked node_modules already present in the rootfs.
+if [ -b /dev/vdb ]; then
+  mkdir -p /deps /data/.deps-upper /data/.deps-work /app/node_modules
+  if mount -o ro /dev/vdb /deps 2>/dev/null && [ -d /deps/node_modules ]; then
+    mount -t overlay overlay -o lowerdir=/deps/node_modules,upperdir=/data/.deps-upper,workdir=/data/.deps-work /app/node_modules \
+      || echo "[orchd-init] deps overlay failed; using baked node_modules"
+  fi
+fi
 [ -f /etc/orchd.env ] && . /etc/orchd.env
 export PORT=${PORT:-8080}
 node /opt/orchd-agent.js > /var/log/orchd-agent.log 2>&1 &

@@ -132,6 +132,11 @@ type vmMeta struct {
 	PID    int    `json:"pid"`     // firecracker pid when running (0 otherwise)
 	// Ephemeral: suspend = teardown (no snapshot); wake = fresh boot.
 	Ephemeral bool `json:"ephemeral,omitempty"`
+	// Deps names the shared read-only node_modules family volume attached as
+	// the VM's second drive (empty = no deps drive; boots as before). Recorded
+	// so spawn/restore can recreate the deps.blk symlink — a memory snapshot
+	// restores with its drive set and needs the file present.
+	Deps string `json:"deps,omitempty"`
 }
 
 func NewFirecrackerDriver(cfg FirecrackerConfig) (*FirecrackerDriver, error) {
@@ -281,6 +286,13 @@ func (d *FirecrackerDriver) Create(ctx context.Context, spec Spec) (*Instance, e
 		return nil, fmt.Errorf("clone rootfs: %w", err)
 	}
 	m := &vmMeta{Ref: spec.Ref, DevID: devID, NetIdx: devID, Image: sanitizeTagFC(spec.Image), Ephemeral: spec.Ephemeral}
+	// Shared deps: attach the family volume when the manager extracted one for
+	// this workspace. Best-effort — any failure boots without the drive.
+	if deps, err := d.ensureDepsVolume(spec.DepsHostDir); err != nil {
+		log.Printf("fc deps volume for %s: %v (booting without)", spec.Ref, err)
+	} else {
+		m.Deps = deps
+	}
 	if err := d.saveMeta(m); err != nil {
 		return nil, err
 	}
@@ -583,6 +595,22 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	if err := os.Symlink("/dev/mapper/"+d.dmName(m.Ref), filepath.Join(dir, "rootfs.blk")); err != nil && !os.IsExist(err) {
 		return err
 	}
+	if m.Deps != "" {
+		if d.ensureDepsActive(m.Deps) {
+			_ = os.Remove(filepath.Join(dir, "deps.blk"))
+			if err := os.Symlink("/dev/mapper/"+d.depsDM(m.Deps), filepath.Join(dir, "deps.blk")); err != nil && !os.IsExist(err) {
+				return err
+			}
+		} else {
+			// The family volume vanished. A fresh boot survives without it (the
+			// baked tree is still in the rootfs), but a snapshot restore would
+			// fail on the missing drive — clear the field so future boots are
+			// consistent, and let the boot path skip the drive.
+			log.Printf("fc deps volume %q missing for %s; booting without", m.Deps, m.Ref)
+			m.Deps = ""
+			_ = d.saveMeta(m)
+		}
+	}
 	logf, err := os.OpenFile(filepath.Join(dir, "fc.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -680,10 +708,15 @@ func (d *FirecrackerDriver) boot(ctx context.Context, m *vmMeta, spec Spec, _ bo
 	steps := []struct{ path, body string }{
 		{"boot-source", fmt.Sprintf(`{"kernel_image_path":%q,"boot_args":%q}`, d.cfg.Kernel, bootArgs)},
 		{"drives/rootfs", `{"drive_id":"rootfs","path_on_host":"rootfs.blk","is_root_device":true,"is_read_only":false}`},
+	}
+	if m.Deps != "" {
+		steps = append(steps, struct{ path, body string }{"drives/deps", depsDriveBody()})
+	}
+	steps = append(steps, []struct{ path, body string }{
 		{"network-interfaces/eth0", fmt.Sprintf(`{"iface_id":"eth0","guest_mac":"06:00:AC:10:00:02","host_dev_name":%q}`, fcTapName)},
 		{"machine-config", fmt.Sprintf(`{"vcpu_count":%d,"mem_size_mib":%d}`, d.cfg.VcpuCount, d.cfg.MemSizeMiB)},
 		{"actions", `{"action_type":"InstanceStart"}`},
-	}
+	}...)
 	for _, s := range steps {
 		if err := d.api(m.Ref, "PUT", s.path, s.body); err != nil {
 			d.kill(m)
