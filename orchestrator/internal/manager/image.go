@@ -130,6 +130,16 @@ func (m *Manager) BuildImage(ctx context.Context, tmpl string) (*store.Image, er
 			if w.Kind != "node" && w.Kind != "static" {
 				continue // tinbase workloads run the platform image, not a per-template build
 			}
+			if w.UsesPresetImage() {
+				// The manifest image runs verbatim: no bake, no fc prep, no deps
+				// extraction. The workspace's files still travel in the project
+				// tarball (bundled above, independent of this loop) and are
+				// volume-mounted at boot. Lost once in a merge collision — the
+				// freeze half survived, this half did not, and the resulting
+				// image baked a CMD whose binary wasn't installed. The test
+				// below this change pins both halves together.
+				continue
+			}
 			tag := fmt.Sprintf("orchd-%s-%s:%s", sanitizeTag(tmpl), sanitizeTag(w.Name), version)
 			if err := m.dockerBuildWorkspace(ctx, base, w, tag); err != nil {
 				log.Printf("BuildImage %s@%s: workspace %q docker build skipped: %v", tmpl, version, w.Name, err)
