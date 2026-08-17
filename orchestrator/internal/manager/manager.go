@@ -1260,6 +1260,13 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 		return "", err
 	}
 
+	// A suspend in progress holds this workload's lock for as long as its
+	// memory snapshot takes to write (minutes for multiple GB). This wake is a
+	// better outcome than that snapshot — the VM resumes and serves — so cancel
+	// it before queueing on the lock.
+	if p, ok := m.rt.(interface{ PreemptSuspend(string) }); ok {
+		p.PreemptSuspend(workloadID)
+	}
 	rl := m.refLock(workloadID)
 	rl.Lock()
 	defer rl.Unlock()
@@ -1541,6 +1548,10 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 			rl.Lock()
 			defer rl.Unlock()
 			if err := m.rt.Suspend(ctx, id); err != nil {
+				if errors.Is(err, runtime.ErrSuspendPreempted) {
+					// A wake won the race; the instance is serving. Exactly right.
+					return
+				}
 				log.Printf("reap %s: %v", id, err)
 				return
 			}

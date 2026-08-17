@@ -17,6 +17,11 @@ import (
 // errUnsupported reports a driver capability the active runtime lacks.
 var errUnsupported = errors.New("not supported by this runtime")
 
+// ErrSuspendPreempted reports a suspend abandoned because a wake arrived: the
+// instance was resumed and is serving. Callers must not mark the workload
+// suspended — the wake won, which is the outcome everyone wanted.
+var ErrSuspendPreempted = errors.New("suspend preempted by a wake; instance resumed")
+
 // WorkloadType is the generic primitive that lets one orchestrator run more than
 // one kind of tenant. tinbase-cloud projects and RapidNative dev environments are
 // both just workloads with different images and routing.

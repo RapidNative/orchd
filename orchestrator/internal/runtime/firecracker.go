@@ -131,6 +131,22 @@ type FirecrackerDriver struct {
 	// day and the only one with a one-line cause).
 	admitMu       sync.Mutex
 	pendingSpawns int
+
+	// suspending maps ref -> cancel for an in-flight suspend's snapshot, so a
+	// wake can preempt it (PreemptSuspend). Snapshotting multiple GB takes up
+	// to minutes and holds the workload's lock the whole time; before this, a
+	// user pausing just past the idle timeout and coming back paid that whole
+	// wait — stalled behind their own suspend.
+	suspending sync.Map
+}
+
+// PreemptSuspend cancels an in-flight suspend's snapshot for ref, if any. The
+// suspend path resumes the VM and returns ErrSuspendPreempted, releasing the
+// workload lock in ~a second instead of after a multi-GB snapshot write.
+func (d *FirecrackerDriver) PreemptSuspend(ref string) {
+	if c, ok := d.suspending.Load(ref); ok {
+		c.(context.CancelFunc)()
+	}
 }
 
 func (d *FirecrackerDriver) lockFor(ref string) *sync.Mutex {
@@ -380,6 +396,12 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 	if err := d.api(ref, "PATCH", "vm", `{"state":"Paused"}`); err != nil {
 		return fmt.Errorf("pause: %w", err)
 	}
+	// The snapshot is preemptible: a wake for this workload cancels sctx and we
+	// resume instead of finishing — the resumed VM is exactly what the wake
+	// wants, minutes sooner.
+	sctx, cancelSuspend := context.WithCancel(ctx)
+	d.suspending.Store(ref, cancelSuspend)
+	defer func() { d.suspending.Delete(ref); cancelSuspend() }()
 	body := fmt.Sprintf(`{"snapshot_type":"Full","snapshot_path":%q,"mem_file_path":%q}`,
 		d.snapPath(ref, "state"), d.snapPath(ref, "mem"))
 	// Writing multiple GB to a busy disk can take minutes; a short timeout here
@@ -387,7 +409,8 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 	// not be left paused: a paused guest answers nothing while orchd still
 	// believes it is running, so the workload 502s forever with no self-heal
 	// (production incident 2026-08-13, 11 workloads stuck).
-	if err := d.apiTimeout(ref, "PUT", "snapshot/create", body, 15*time.Minute); err != nil {
+	if err := d.apiCtx(sctx, ref, "PUT", "snapshot/create", body, 15*time.Minute); err != nil {
+		preempted := sctx.Err() != nil
 		if rerr := d.api(ref, "PATCH", "vm", `{"state":"Resumed"}`); rerr != nil {
 			// cannot resume either — kill it so the next request boots fresh
 			d.kill(m)
@@ -395,6 +418,9 @@ func (d *FirecrackerDriver) Suspend(ctx context.Context, ref string) error {
 			return fmt.Errorf("snapshot: %w (resume also failed: %v; killed instead)", err, rerr)
 		}
 		d.dropSnapshot(ref) // a partial snapshot must never be restored
+		if preempted {
+			return ErrSuspendPreempted
+		}
 		return fmt.Errorf("snapshot: %w (VM resumed, still serving)", err)
 	}
 	d.kill(m)
@@ -905,6 +931,10 @@ func (d *FirecrackerDriver) instanceState(ref string) (string, error) {
 }
 
 func (d *FirecrackerDriver) apiTimeout(ref, method, path, body string, timeout time.Duration) error {
+	return d.apiCtx(context.Background(), ref, method, path, body, timeout)
+}
+
+func (d *FirecrackerDriver) apiCtx(ctx context.Context, ref, method, path, body string, timeout time.Duration) error {
 	client := http.Client{
 		Transport: &http.Transport{
 			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
@@ -915,7 +945,7 @@ func (d *FirecrackerDriver) apiTimeout(ref, method, path, body string, timeout t
 		},
 		Timeout: timeout,
 	}
-	req, err := http.NewRequest(method, "http://fc/"+path, strings.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, method, "http://fc/"+path, strings.NewReader(body))
 	if err != nil {
 		return err
 	}

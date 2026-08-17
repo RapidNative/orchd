@@ -169,3 +169,11 @@ func (m *Mux) PicksFC(tmpl, workspace string) bool { return m.allow[tmpl+"/"+wor
 func (m *Mux) PrepareFCImage(ctx context.Context, dockerTag, runCmd, warmPath string) error {
 	return m.fc.PrepareImage(ctx, dockerTag, runCmd, warmPath)
 }
+
+// PreemptSuspend forwards to the microVM driver when it owns the ref; the
+// default driver's suspends are fast (container pause) and need no preemption.
+func (m *Mux) PreemptSuspend(ref string) {
+	if m.fc.Knows(ref) {
+		m.fc.PreemptSuspend(ref)
+	}
+}
