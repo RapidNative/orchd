@@ -18,7 +18,12 @@ Environment=ORCHD_IMAGE=tinbase:0.13.2
 Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_DOCKER_RUNTIME=runsc
-Environment=ORCHD_IDLE_TIMEOUT=15m
+# 5m, down from 15m: the scarce resource is live-VM slots (20 on this host —
+# half of RAM at 3GiB per guest), and a wake from a memory snapshot costs
+# 0.1-3.4s, so idle instances are expensive to keep and nearly free to revive.
+# At 15m, two back-to-back test waves stacked into an OOM before the first
+# wave ever idled out (2026-08-16).
+Environment=ORCHD_IDLE_TIMEOUT=5m
 Environment=ORCHD_DEV_CPUS=4
 Environment=ORCHD_DEV_MEM_MB=4096
 Environment=ORCHD_API_KEY_FILE=/opt/orchd/secrets/admin.key
