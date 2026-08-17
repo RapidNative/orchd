@@ -957,6 +957,17 @@ func (d *FirecrackerDriver) prepareGuest(m *vmMeta, spec Spec) error {
 	if err := os.WriteFile(filepath.Join(mnt, "etc", "resolv.conf"), []byte(fcResolvConf), 0o644); err != nil {
 		return err
 	}
+	// Host aliases beat the guest's public resolvers for the named hosts, so a
+	// well-known hostname (a CDN, a registry) can be steered to an on-box
+	// cache for guests only. Written whole each boot: config is the source of
+	// truth, and a removed alias must actually go away.
+	hosts := "127.0.0.1 localhost\n"
+	for h, ip := range spec.HostAliases {
+		hosts += ip + " " + h + "\n"
+	}
+	if err := os.WriteFile(filepath.Join(mnt, "etc", "hosts"), []byte(hosts), 0o644); err != nil {
+		return err
+	}
 	src := spec.DataDir
 	if spec.WorkspaceDir != "" {
 		src = filepath.Join(spec.DataDir, spec.WorkspaceDir)

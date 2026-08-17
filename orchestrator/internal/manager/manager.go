@@ -1917,6 +1917,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		AppMount:     appMount,
 		DepsPath:     depsPath,
 		DepsHostDir:  depsHost,
+		HostAliases:  m.cfg.HostAliases,
 		ReadyTimeout: ready,
 		DockerHost:   dockerHost,
 		Env:          env,

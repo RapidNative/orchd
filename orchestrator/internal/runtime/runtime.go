@@ -89,6 +89,12 @@ type Spec struct {
 	// rebundle at boot need more headroom.
 	ReadyTimeout time.Duration
 
+	// HostAliases maps hostnames to IPs inside the instance (/etc/hosts entry
+	// for microVMs, --add-host for containers). The platform's tool for
+	// steering a well-known host to an on-box service — e.g. a caching proxy —
+	// for guests only, without touching public DNS or guest trust stores.
+	HostAliases map[string]string
+
 	// DepsHostDir, when set, is a host directory holding the image's extracted
 	// dependencies, bind-mounted read-only at DepsPath and shared by every
 	// workload of the image version. Empty falls back to a per-workload named

@@ -17,6 +17,10 @@ Environment=ORCHD_IMAGE=tinbase:0.13.2
 # Rollback = delete these two lines and restart orchd.
 Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
+# Guests resolve esm.reactnative.run to the on-box nginx cache (a real LE cert
+# via DNS-01 — we own the domain; see tools/orchd-box/esm-cache in the website
+# repo). Guests only: public DNS untouched.
+Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m
 Environment=ORCHD_DEV_CPUS=4
