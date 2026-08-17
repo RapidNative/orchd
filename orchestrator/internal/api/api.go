@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
@@ -276,6 +277,9 @@ func (a *API) projectView(p *store.Project) projectView {
 
 // ---- handlers ----
 
+// createNameLocks serializes creates per project name (see createProject).
+var createNameLocks sync.Map
+
 func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name      string            `json:"name"`
@@ -289,6 +293,26 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.ContentLength > 0 {
 		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	// Named projects are unique, enforced here because this is the only create
+	// entry point. Callers use the name as their own foreign key (one project
+	// per app), and clients running on several instances race their
+	// check-then-create: both list, neither sees the other, and the app ends up
+	// split-brained across twin projects — half its hostnames serving one
+	// workspace, half the other. That race shipped three separate incidents
+	// before this guard. The per-name lock is held across the whole create so
+	// two concurrent requests serialize; the loser gets a 409 naming the
+	// winner, which is exactly what an adopting client needs.
+	if body.Name != "" {
+		lk, _ := createNameLocks.LoadOrStore(body.Name, &sync.Mutex{})
+		lk.(*sync.Mutex).Lock()
+		defer lk.(*sync.Mutex).Unlock()
+		for _, p := range a.mgr.Store().ListProjects() {
+			if p.Name == body.Name {
+				writeErr(w, http.StatusConflict, fmt.Errorf("project name %q already exists as %s", body.Name, p.ID))
+				return
+			}
+		}
 	}
 	delta, err := mergeDelta(body.Delta, body.DeltaB64)
 	if err != nil {
