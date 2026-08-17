@@ -9,7 +9,7 @@ RUN apt-get update \
       libreadline8 libedit2 zlib1g libxml2 liblz4-1 libzstd1 \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g tinbase@0.13.2
+RUN npm install -g tinbase@0.14.0
 
 # Warm the native Postgres 17 binaries into the image as the unprivileged `node`
 # user (Postgres initdb refuses to run as root), so the cache lands in
