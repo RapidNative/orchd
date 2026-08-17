@@ -272,6 +272,11 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	for k, v := range spec.Env {
 		args = append(args, "-e", k+"="+v)
 	}
+	// Host aliases: steer well-known hostnames to on-box services (a cache, a
+	// mirror) for this container only — public DNS stays untouched.
+	for h, ip := range spec.HostAliases {
+		args = append(args, "--add-host", h+":"+ip)
+	}
 	args = append(args, image)
 
 	if out, err := d.docker(ctx, host, args...).CombinedOutput(); err != nil {

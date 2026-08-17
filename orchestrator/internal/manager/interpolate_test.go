@@ -342,3 +342,21 @@ func TestSpecForPlatformEnvPrecedence(t *testing.T) {
 		t.Fatal("platform env must not displace the seeded JWT secret")
 	}
 }
+
+// ORCHD_HOST_ALIASES must reach every instance spec — it's how a well-known
+// hostname (a CDN, a registry) is steered to an on-box cache for guests only.
+func TestSpecForCarriesHostAliases(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{
+		DataRoot:    t.TempDir(),
+		HostAliases: map[string]string{"esm.example.test": "10.201.255.1"},
+	}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	w := &store.Workload{ID: "w", ProjectID: "p"}
+	_ = st.PutWorkload(w)
+
+	got := m.specFor(w).HostAliases
+	if got["esm.example.test"] != "10.201.255.1" {
+		t.Fatalf("aliases missing from spec: %v", got)
+	}
+}

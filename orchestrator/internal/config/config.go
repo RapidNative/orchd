@@ -85,6 +85,11 @@ type Config struct {
 	// steps (installs) but absent from the built image — runtime behaviour
 	// stays governed by WorkloadEnv alone.
 	BuildEnv map[string]string
+	// HostAliases ("host=ip,host2=ip2") are injected into every instance:
+	// /etc/hosts for microVMs, --add-host for containers. For steering a
+	// well-known hostname to an on-box service (a cache, a mirror) for guests
+	// only — public DNS and guest trust stores stay untouched.
+	HostAliases map[string]string
 	// Region is the single region this orchestrator serves for now.
 	Region string
 
@@ -164,6 +169,7 @@ func Load() Config {
 		IdleTimeout:     envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
 		WorkloadEnv:     envMap("ORCHD_WORKLOAD_ENV"),
 		BuildEnv:        envMap("ORCHD_BUILD_ENV"),
+		HostAliases:     envMap("ORCHD_HOST_ALIASES"),
 		Region:          env("ORCHD_REGION", "local"),
 		APIKeyFile:      env("ORCHD_API_KEY_FILE", ""),
 		PublicURL:       env("ORCHD_PUBLIC_URL", publicURLDefault),
