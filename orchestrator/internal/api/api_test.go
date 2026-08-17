@@ -576,3 +576,32 @@ func TestProjectWithNoWorkloadsSerializesEmptyArray(t *testing.T) {
 		}
 	}
 }
+
+// A named project is unique: two creates with the same name must not both
+// succeed. Clients on separate instances race their check-then-create, and
+// twin projects split an app's hostnames across two workspaces — three real
+// incidents. The loser's 409 names the winner so it can adopt.
+func TestCreateProjectNameConflict(t *testing.T) {
+	srv := newTestServer(t)
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"name": "app-1"})
+	if code != http.StatusCreated {
+		t.Fatalf("first create: %d %s", code, body)
+	}
+	var first struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &first)
+
+	code, body = do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"name": "app-1"})
+	if code != http.StatusConflict {
+		t.Fatalf("duplicate name: got %d %s, want 409", code, body)
+	}
+	if !bytes.Contains(body, []byte(first.ID)) {
+		t.Fatalf("409 must name the existing project (%s) for adoption: %s", first.ID, body)
+	}
+
+	// Unnamed projects stay unconstrained.
+	if code, body = do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{}); code != http.StatusCreated {
+		t.Fatalf("unnamed create: %d %s", code, body)
+	}
+}
