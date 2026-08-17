@@ -9,7 +9,7 @@ WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
-Environment=ORCHD_IMAGE=tinbase:0.13.2
+Environment=ORCHD_IMAGE=tinbase:0.14.0
 # All installs (boot-time and image builds) go through the box's npm registry
 # cache (tools/orchd-box/verdaccio in the website repo). 172.17.0.1 = docker0,
 # reachable from containers, docker-build RUNs, AND Firecracker guests (via
