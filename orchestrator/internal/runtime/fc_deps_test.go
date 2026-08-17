@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The manager hands the per-version deps path, which is a symlink into the
@@ -49,5 +50,39 @@ func TestInitTemplateDepsOverlayIsGuarded(t *testing.T) {
 	}
 	if strings.Index(fcInitTemplate, "/dev/vdb") > strings.Index(fcInitTemplate, "orchd.env") {
 		t.Fatal("overlay must mount before the workload env/exec")
+	}
+}
+
+// Admission must include spawns that have been admitted but have no PID yet —
+// the undercount window through which a concurrent provision burst previously
+// sailed past MaxLive and exhausted host memory. And it must never evict.
+func TestAdmitCountsPendingSpawns(t *testing.T) {
+	d := &FirecrackerDriver{cfg: FirecrackerConfig{MaxLive: 2, Root: t.TempDir()}}
+	if err := os.MkdirAll(filepath.Join(d.cfg.Root, "vms"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.admit("a"); err != nil {
+		t.Fatalf("first admit: %v", err)
+	}
+	if err := d.admit("b"); err != nil {
+		t.Fatalf("second admit: %v", err)
+	}
+	// Third must block on pending count alone (no live PIDs exist at all).
+	done := make(chan error, 1)
+	go func() { done <- d.admit("c") }()
+	select {
+	case err := <-done:
+		t.Fatalf("third admit should have waited, returned %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	d.admitDone() // one spawn finishes registering
+	// The pending count dropped from 2 to 1 with zero live PIDs, so c admits.
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("third admit after release: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("third admit still blocked after a slot freed")
 	}
 }

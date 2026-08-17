@@ -23,7 +23,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -66,10 +65,14 @@ func (c *FirecrackerConfig) defaults() {
 		c.AgentPort = 9000
 	}
 	if c.MaxLive == 0 {
-		// Leave the host a third of its memory for containers, page cache and
-		// the control plane.
+		// Half of host memory for microVMs. Two-thirds was tried and melted the
+		// box: the "remaining third" also has to hold every container (db/api/
+		// web for the same fleet), Metro's bundling spikes inside guests pinning
+		// their full reservation, and the page cache. 2026-08-16: 27 VMs under
+		// the 2/3 budget plus ~90 containers took a 125GB host to OOM and 30+
+		// minutes of unreachability.
 		if total := hostMemMiB(); total > 0 && c.MemSizeMiB > 0 {
-			c.MaxLive = (total * 2 / 3) / c.MemSizeMiB
+			c.MaxLive = (total / 2) / c.MemSizeMiB
 		}
 		if c.MaxLive < 4 {
 			c.MaxLive = 4
@@ -115,6 +118,19 @@ type FirecrackerDriver struct {
 	// fallbacks (S2's load-735 lesson, re-observed with live traffic).
 	// Snapshot restores are cheap and skip this.
 	bootSem chan struct{}
+	// pendingSpawns counts spawns that have been admitted but have not yet
+	// recorded a PID — the window in which a live-VM count undercounts.
+	// Admission adds pending to the count so a burst of concurrent spawns
+	// cannot all pass the capacity check together (that race is how a 15-wide
+	// provision herd sailed past MaxLive and exhausted host memory).
+	//
+	// Guarded by its OWN mutex, never d.mu: the capacity count reads VM metas,
+	// and meta() takes d.mu — admission holding d.mu while counting deadlocked
+	// the whole driver on its first spawn (every wake on the box queued behind
+	// one self-waiting goroutine; 2026-08-16 evening, the third outage of the
+	// day and the only one with a one-line cause).
+	admitMu       sync.Mutex
+	pendingSpawns int
 }
 
 func (d *FirecrackerDriver) lockFor(ref string) *sync.Mutex {
@@ -542,47 +558,99 @@ func (d *FirecrackerDriver) sockPath(ref string) string {
 // the workload boots again on its next request. Boot age is a proxy for
 // idleness — the manager's reaper handles genuinely idle workloads properly;
 // this is the backstop that keeps the host from thrashing.
-func (d *FirecrackerDriver) makeRoom(exclude string) {
-	if d.cfg.MaxLive <= 0 {
-		return
-	}
-	type vm struct {
-		ref  string
-		age  time.Time
-		meta *vmMeta
-	}
-	var live []vm
+// countLive counts VMs with a live VMM process, excluding one ref (the VM
+// being spawned may already have stale state on disk).
+func (d *FirecrackerDriver) countLive(exclude string) int {
 	entries, err := os.ReadDir(filepath.Join(d.cfg.Root, "vms"))
 	if err != nil {
-		return
+		return 0
 	}
+	n := 0
 	for _, e := range entries {
 		if e.Name() == exclude {
 			continue
 		}
-		m, err := d.meta(e.Name())
-		if err != nil || m.PID == 0 || !pidAlive(m.PID) {
-			continue
-		}
-		st, err := os.Stat(filepath.Join(d.vmDir(m.Ref), "meta.json"))
+		// Read the meta file directly — d.meta() takes d.mu, and this count
+		// runs under admitMu from code paths that may already hold d.mu.
+		b, err := os.ReadFile(filepath.Join(d.cfg.Root, "vms", e.Name(), "meta.json"))
 		if err != nil {
 			continue
 		}
-		live = append(live, vm{m.Ref, st.ModTime(), m})
+		m := &vmMeta{}
+		if json.Unmarshal(b, m) == nil && m.PID != 0 && pidIsFirecracker(m.PID) {
+			n++
+		}
 	}
-	if len(live) < d.cfg.MaxLive {
-		return
+	return n
+}
+
+// pidIsFirecracker reports whether pid is a live firecracker process. A bare
+// liveness check is not enough for capacity accounting: metas left by killed
+// VMs record PIDs the kernel reuses, and each reused PID counts as a phantom
+// VM. Enough phantoms push the count past MaxLive permanently — every spawn
+// then waits its full admission deadline while holding its workload lock, and
+// the gateway wedges for every host behind those locks. (Live incident,
+// 2026-08-16 evening: load 0.6, gateway timing out for everything.)
+func pidIsFirecracker(pid int) bool {
+	b, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", pid))
+	if err != nil {
+		return false
 	}
-	sort.Slice(live, func(i, j int) bool { return live[i].age.Before(live[j].age) })
-	for i := 0; i <= len(live)-d.cfg.MaxLive; i++ {
-		log.Printf("fc: at capacity (%d/%d live) — stopping %s to make room",
-			len(live), d.cfg.MaxLive, live[i].ref)
-		d.kill(live[i].meta)
+	return strings.TrimSpace(string(b)) == "firecracker"
+}
+
+// admit blocks until there is capacity for one more VM, then reserves it via
+// pendingSpawns (released by the caller once the PID is recorded, or on spawn
+// failure). It deliberately never evicts: the previous behaviour killed the
+// oldest VM to admit the newest, which under a provision burst became a
+// kill/boot churn loop — every admission destroyed a VM that was itself still
+// bundling, the work restarted on its next request, and the box melted doing
+// nothing twice. Waiting is honest: the reaper and finished workloads free
+// capacity, and a caller that cannot be admitted in time fails loudly.
+func (d *FirecrackerDriver) admit(exclude string) error {
+	if d.cfg.MaxLive <= 0 {
+		return nil
+	}
+	deadline := time.Now().Add(10 * time.Minute)
+	logged := false
+	for {
+		d.admitMu.Lock()
+		live := d.countLive(exclude) + d.pendingSpawns
+		if live < d.cfg.MaxLive {
+			d.pendingSpawns++
+			d.admitMu.Unlock()
+			return nil
+		}
+		d.admitMu.Unlock()
+		if !logged {
+			log.Printf("fc: at capacity (%d/%d live) — %s waiting for a slot", live, d.cfg.MaxLive, exclude)
+			logged = true
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("at capacity: %d/%d VMs live for 10m — refusing to overcommit host memory", live, d.cfg.MaxLive)
+		}
+		time.Sleep(2 * time.Second)
 	}
 }
 
+func (d *FirecrackerDriver) admitDone() {
+	d.admitMu.Lock()
+	if d.pendingSpawns > 0 {
+		d.pendingSpawns--
+	}
+	d.admitMu.Unlock()
+}
+
 func (d *FirecrackerDriver) spawn(m *vmMeta) error {
-	d.makeRoom(m.Ref)
+	if err := d.admit(m.Ref); err != nil {
+		return err
+	}
+	admitted := true
+	defer func() {
+		if admitted {
+			d.admitDone()
+		}
+	}()
 	// The rootfs mapping can be missing (reboot, operator cleanup); recreate it
 	// from the recorded device id rather than failing the boot.
 	if _, err := os.Stat("/dev/mapper/" + d.dmName(m.Ref)); err != nil {
@@ -632,6 +700,8 @@ func (d *FirecrackerDriver) spawn(m *vmMeta) error {
 	}
 	go cmd.Wait() // reap
 	m.PID = cmd.Process.Pid
+	d.admitDone()
+	admitted = false
 	if err := d.saveMeta(m); err != nil {
 		return err
 	}
