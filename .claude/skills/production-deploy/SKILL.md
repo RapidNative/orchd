@@ -56,7 +56,7 @@ user asks, and say plainly in your report that checks were skipped.
 ssh root@HOST 'docker build -t <tag> /opt/orchd/images/<name>'
 ```
 
-Tags in use: `tinbase:0.13.2`, `rn-api:dev`, `rn-vite:dev`, `rn-expo:dev`.
+Tags in use: `tinbase:0.14.0`, `rn-api:dev`, `rn-vite:dev`, `rn-expo:dev`.
 
 ## Provision a fresh box
 
