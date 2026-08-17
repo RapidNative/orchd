@@ -100,7 +100,7 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_DRIVER` | `local` | runtime substrate: `local` (processes) or `docker` (containers) |
 | `ORCHD_TINBASE_BIN` | `tinbase` | tinbase executable the LocalDriver spawns |
 | `ORCHD_ENGINE` | (tinbase default) | `native` \| `wasm` \| `pgmem` (LocalDriver) |
-| `ORCHD_IMAGE` | `tinbase:0.13.2` | container image the DockerDriver runs |
+| `ORCHD_IMAGE` | `tinbase:0.14.0` | container image the DockerDriver runs |
 | `ORCHD_DOCKER_RUNTIME` | `runsc` | Docker runtime for tenant containers (`runsc` = gVisor; empty = runc) |
 | `ORCHD_DOCKER_HOST` | (local daemon) | point the docker CLI at a remote daemon |
 | `ORCHD_IDLE_TIMEOUT` | `5m` | idle time before an instance scales to zero |

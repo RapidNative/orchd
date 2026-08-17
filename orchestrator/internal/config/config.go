@@ -158,7 +158,7 @@ func Load() Config {
 		Driver:          env("ORCHD_DRIVER", "local"),
 		TinbaseBin:      env("ORCHD_TINBASE_BIN", "tinbase"),
 		Engine:          env("ORCHD_ENGINE", ""),
-		Image:           env("ORCHD_IMAGE", "tinbase:0.13.2"),
+		Image:           env("ORCHD_IMAGE", "tinbase:0.14.0"),
 		DockerRuntime:   env("ORCHD_DOCKER_RUNTIME", "runsc"),
 		DockerHost:      env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:     envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
