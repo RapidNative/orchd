@@ -206,11 +206,25 @@ func (m *Manager) gcImageVersions(ctx context.Context, tmpl string, keep int) {
 			continue
 		}
 		referenced := false
+		// A workload pinning this version in the store keeps it alive even with
+		// no container to show for it: microVM-era workloads never had docker
+		// containers (the ancestor check below is blind to them), and a
+		// container removed out-of-band must not orphan the record its workload
+		// still boots from — specFor falling back past a deleted image record
+		// ends at the platform default image, which is a database.
+		for _, w := range m.store.ListWorkloads("") {
+			if w.Template == tmpl && w.ImageVer == v.im.Version {
+				referenced = true
+				break
+			}
+		}
 		for _, tag := range v.im.Dockers {
+			if referenced {
+				break
+			}
 			out, err := exec.CommandContext(ctx, "docker", "ps", "-aq", "--filter", "ancestor="+tag).Output()
 			if err != nil || len(strings.TrimSpace(string(out))) > 0 {
 				referenced = true
-				break
 			}
 		}
 		if referenced {
@@ -233,6 +247,12 @@ func (m *Manager) gcImageVersions(ctx context.Context, tmpl string, keep int) {
 func imageWorkloads(man *template.Manifest) []store.ImageWorkload {
 	out := make([]store.ImageWorkload, 0, len(man.Workloads))
 	for _, w := range man.Workloads {
+		port := workspaceImagePort(w)
+		if w.Port != 0 {
+			// A preset image bakes its own listener; the manifest is the only
+			// authority on which port that is.
+			port = w.Port
+		}
 		out = append(out, store.ImageWorkload{
 			Name:      w.Name,
 			Kind:      w.Kind,
@@ -240,8 +260,11 @@ func imageWorkloads(man *template.Manifest) []store.ImageWorkload {
 			Image:     w.Image,
 			Env:       w.Env,
 			Primary:   w.Primary,
-			Port:      workspaceImagePort(w),
+			Port:      port,
 			Dir:       w.Dir,
+			Preset:    w.UsesPresetImage(),
+			MemoryMB:  w.MemoryMB,
+			CPUs:      w.CPUs,
 		})
 	}
 	return out

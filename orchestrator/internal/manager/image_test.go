@@ -306,3 +306,90 @@ func TestDockerfileForBuildEnvArgs(t *testing.T) {
 		t.Fatalf("build env value leaked into the Dockerfile:\n%s", df)
 	}
 }
+
+// A preset-image workspace is excluded from the per-workspace docker bake (no
+// Dockers entry — the manifest image runs verbatim) while its files still
+// travel in the tarball, and the frozen shape carries Preset, the manifest
+// port, and the per-workload limits.
+func TestBuildImageSkipsPresetWorkspace(t *testing.T) {
+	tmplDir := t.TempDir()
+	manifest := `{"name":"demo","workloads":[
+		{"name":"db","kind":"tinbase"},
+		{"name":"mobile","kind":"node","dir":"mobile","image":"rn-run:dev",
+		 "run":["rnrun","start","--port","$PORT"],"port":8080,"memory_mb":1024,"primary":true}]}`
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmplDir, "mobile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmplDir, "mobile", "app.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir()}, st, reapStub{})
+	if err := m.SetTemplate("demo", tmplDir); err != nil {
+		t.Fatal(err)
+	}
+	im, err := m.BuildImage(context.Background(), "demo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, baked := im.Dockers["mobile"]; baked {
+		t.Fatal("preset workspace must not get a per-template docker bake")
+	}
+	var mob *store.ImageWorkload
+	for i := range im.Workloads {
+		if im.Workloads[i].Workspace == "mobile" {
+			mob = &im.Workloads[i]
+		}
+	}
+	if mob == nil {
+		t.Fatal("mobile missing from frozen shape")
+	}
+	if !mob.Preset || mob.Port != 8080 || mob.MemoryMB != 1024 || mob.Image != "rn-run:dev" {
+		t.Fatalf("frozen shape = %+v", *mob)
+	}
+	if _, err := os.Stat(im.Tarball); err != nil {
+		t.Fatalf("tarball must still include the preset workspace's files: %v", err)
+	}
+}
+
+// gcImageVersions must treat a version as referenced while any workload pins
+// it in the store: workloads without docker containers (microVM-era, or
+// containers removed out-of-band) were invisible to the ancestor check, and
+// losing the record sends specFor's fallback to the platform default image —
+// a database — on the workload's next wake.
+func TestImageGCKeepsStorePinnedVersions(t *testing.T) {
+	tmplDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"),
+		[]byte(`{"name":"demo","workloads":[{"name":"db","kind":"tinbase"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir()}, st, reapStub{})
+	if err := m.SetTemplate("demo", tmplDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.BuildImage(context.Background(), "demo"); err != nil {
+		t.Fatal(err)
+	}
+	// Pin v1 the way a real workload does, BEFORE later builds run their GC.
+	_ = st.PutProject(&store.Project{ID: "p"})
+	_ = st.PutWorkload(&store.Workload{ID: "w", ProjectID: "p", Template: "demo", ImageVer: "v1"})
+	for i := 0; i < 2; i++ {
+		if _, err := m.BuildImage(context.Background(), "demo"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// v1 is beyond keep=2 and has no docker containers — only the store pin
+	// protects it. (The collection of unpinned versions is exercised by
+	// TestBuildImageFreezesTarballAndVersions's environment and not asserted
+	// here: without a docker daemon the ancestor check is deliberately
+	// conservative and never collects.)
+	m.gcImageVersions(context.Background(), "demo", 2)
+	if _, err := m.BuiltImage("demo", "v1"); err != nil {
+		t.Fatal("v1 is pinned by a live workload and must survive GC")
+	}
+}

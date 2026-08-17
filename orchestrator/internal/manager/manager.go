@@ -906,6 +906,19 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 			s.Type = runtime.WorkloadTinbaseProject
 		} else {
 			s.Type = runtime.WorkloadRapidNativeDev
+			// The container port was never set on the template path — masked in
+			// production because everything boots from frozen images, but a
+			// template boot on the docker driver published the tinbase default
+			// (54321) against a workspace image listening on 8080.
+			s.Port = w.Port
+			if s.Port == 0 {
+				if w.Kind == "static" {
+					s.Port = 80
+				} else {
+					s.Port = 8080
+				}
+			}
+			s.MemoryMB, s.CPUs = w.MemoryMB, w.CPUs
 		}
 		if w.Name == primary {
 			s.Name = "" // primary owns the bare <ref>.<base> route
@@ -946,7 +959,7 @@ func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projNa
 	primary := imagePrimaryName(shape)
 	specs := make([]WorkloadSpec, 0, len(shape))
 	for _, w := range shape {
-		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Workspace, Name: w.Name, Image: w.Image, Port: w.Port, Env: w.Env, SeedDelta: delta, SeedDeleted: deleted}
+		s := WorkloadSpec{Template: tmplName, ImageVersion: version, Workspace: w.Workspace, Name: w.Name, Image: w.Image, Port: w.Port, Env: w.Env, MemoryMB: w.MemoryMB, CPUs: w.CPUs, SeedDelta: delta, SeedDeleted: deleted}
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
 		} else {
@@ -1902,6 +1915,13 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	var ready time.Duration
 	if w.Type == runtime.WorkloadRapidNativeDev {
 		ready = 15 * time.Minute
+		if m.workloadIsPreset(w) {
+			// A preset image has no boot install and answers its manifest
+			// immediately; 120s is gVisor start plus generous headroom. Keeping
+			// 15m here would let one genuinely broken container pin a wake (and
+			// its caller) for a quarter of an hour.
+			ready = 120 * time.Second
+		}
 	}
 	return runtime.Spec{
 		Type:         w.Type,
@@ -1945,12 +1965,12 @@ func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, 
 		return "", "", "", "" // no materialized tree (docker-only imported image)
 	}
 
-	kind, dir := "", w.Workspace // legacy fallback: dir == workspace name
+	kind, dir, preset := "", w.Workspace, false // legacy fallback: dir == workspace name
 	if w.ImageVer != "" {
 		if im, err := m.store.GetImage(w.Template, w.ImageVer); err == nil {
 			for _, iw := range im.Workloads {
 				if iw.Workspace == w.Workspace {
-					kind = iw.Kind
+					kind, preset = iw.Kind, iw.Preset
 					if iw.Dir != "" || iw.Kind == "tinbase" {
 						dir = iw.Dir
 					}
@@ -1963,7 +1983,7 @@ func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, 
 		if base := m.templatePath(w.Template); base != "" {
 			if man, err := template.Load(base); err == nil {
 				if tw, ok := man.Find(w.Workspace); ok {
-					kind, dir = tw.Kind, tw.Dir
+					kind, dir, preset = tw.Kind, tw.Dir, tw.UsesPresetImage()
 				}
 			}
 		}
@@ -1971,6 +1991,14 @@ func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, 
 
 	switch kind {
 	case "node":
+		if preset {
+			// Preset image: mount the seeded tree at /app and NOTHING over
+			// node_modules. The default node arm would hand the driver an empty
+			// deps path and the driver would mount an empty named volume there,
+			// shadowing both the image's global tools and any node_modules the
+			// project itself carries (reanimated resolves its plugin from it).
+			return dir, "/app", "", ""
+		}
 		// Prefer the shared read-only deps extraction (one per image version);
 		// absent that, the driver falls back to a per-workload named volume.
 		if w.ImageVer != "" {
@@ -1983,6 +2011,32 @@ func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, 
 		return dir, "/usr/share/nginx/html", "", ""
 	}
 	return "", "", "", ""
+}
+
+// workloadIsPreset reports whether a workload's workspace runs a preset image
+// (see template.Workload.UsesPresetImage), resolved the same way
+// workspaceMount resolves kind: frozen image record first, template fallback.
+func (m *Manager) workloadIsPreset(w *store.Workload) bool {
+	if w.Type != runtime.WorkloadRapidNativeDev || w.Template == "" || w.Workspace == "" {
+		return false
+	}
+	if w.ImageVer != "" {
+		if im, err := m.store.GetImage(w.Template, w.ImageVer); err == nil {
+			for _, iw := range im.Workloads {
+				if iw.Workspace == w.Workspace {
+					return iw.Preset
+				}
+			}
+		}
+	}
+	if base := m.templatePath(w.Template); base != "" {
+		if man, err := template.Load(base); err == nil {
+			if tw, ok := man.Find(w.Workspace); ok {
+				return tw.UsesPresetImage()
+			}
+		}
+	}
+	return false
 }
 
 func dirExists(p string) bool {

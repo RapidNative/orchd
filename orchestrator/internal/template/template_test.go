@@ -83,3 +83,28 @@ func TestBuildStepsValidation(t *testing.T) {
 		t.Fatal("empty build step accepted")
 	}
 }
+
+// A preset-image workspace runs its manifest image verbatim: image set, and no
+// build machinery at all. Any setup/install/build step means the image must be
+// baked per template, so the predicate must refuse.
+func TestUsesPresetImage(t *testing.T) {
+	base := Workload{Name: "app", Kind: "node", Image: "rn-run:dev", Run: []string{"rnrun", "start"}}
+	if !base.UsesPresetImage() {
+		t.Fatal("image-only workload must be preset")
+	}
+	withInstall := base
+	withInstall.Install = []string{"bun", "install"}
+	if withInstall.UsesPresetImage() {
+		t.Fatal("an install step means a per-template bake")
+	}
+	withBuild := base
+	withBuild.Build = [][]string{{"sh", "-lc", "warm"}}
+	if withBuild.UsesPresetImage() {
+		t.Fatal("a build step means a per-template bake")
+	}
+	noImage := base
+	noImage.Image = ""
+	if noImage.UsesPresetImage() {
+		t.Fatal("no image, nothing to run verbatim")
+	}
+}

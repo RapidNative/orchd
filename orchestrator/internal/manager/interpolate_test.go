@@ -360,3 +360,79 @@ func TestSpecForCarriesHostAliases(t *testing.T) {
 		t.Fatalf("aliases missing from spec: %v", got)
 	}
 }
+
+// A preset-image workspace (manifest image, no setup/install/build) mounts its
+// seeded tree at /app with NOTHING over node_modules — the default node arm
+// would shadow both the image's global tools and any node_modules the project
+// carries with an empty volume. It also boots the manifest image, publishes
+// the manifest port, gets the short ready window, and carries its own limits.
+func TestPresetImageWorkspaceSpec(t *testing.T) {
+	tmplDir := t.TempDir()
+	manifest := `{"name":"demo","workloads":[
+		{"name":"db","kind":"tinbase"},
+		{"name":"mobile","kind":"node","dir":"mobile","image":"rn-run:dev",
+		 "run":["rnrun","start","--port","$PORT"],"port":8080,"memory_mb":1024,"cpus":2,"primary":true}]}`
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmplDir, "mobile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	m := newInterpManager(t, reapStub{})
+	if err := m.SetTemplate("demo", tmplDir); err != nil {
+		t.Fatal(err)
+	}
+	_, wls, err := m.CreateFromTemplate(context.Background(), "demo", "", "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range wls {
+		if w.Workspace != "mobile" {
+			continue
+		}
+		spec := m.specFor(w)
+		if spec.Image != "rn-run:dev" {
+			t.Fatalf("preset must boot the manifest image, got %q", spec.Image)
+		}
+		if spec.AppMount != "/app" || spec.DepsPath != "" || spec.DepsHostDir != "" {
+			t.Fatalf("preset mounts = app:%q deps:%q host:%q (deps must be empty)", spec.AppMount, spec.DepsPath, spec.DepsHostDir)
+		}
+		if spec.Port != 8080 {
+			t.Fatalf("manifest port must flow to the spec, got %d", spec.Port)
+		}
+		if spec.ReadyTimeout != 120*time.Second {
+			t.Fatalf("preset ready window = %v, want 120s", spec.ReadyTimeout)
+		}
+		if spec.Limits.MemoryMB != 1024 {
+			t.Fatalf("manifest memory_mb must flow to limits, got %d", spec.Limits.MemoryMB)
+		}
+		return
+	}
+	t.Fatal("mobile workload not created")
+}
+
+// Baked workspaces keep the long ready window: their first boot can run a real
+// install, and tearing that down at 120s put boot loops into production once.
+func TestBakedWorkspaceKeepsLongReadyWindow(t *testing.T) {
+	tmplDir := t.TempDir()
+	manifest := `{"name":"demo","workloads":[
+		{"name":"api","kind":"node","dir":"api","install":["bun","install"],"run":["node","x.js"],"primary":true}]}`
+	if err := os.WriteFile(filepath.Join(tmplDir, "orchd.json"), []byte(manifest), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmplDir, "api"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := newInterpManager(t, reapStub{})
+	if err := m.SetTemplate("demo", tmplDir); err != nil {
+		t.Fatal(err)
+	}
+	_, wls, err := m.CreateFromTemplate(context.Background(), "demo", "", "", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.specFor(wls[0]).ReadyTimeout; got != 15*time.Minute {
+		t.Fatalf("baked workspace ready window = %v, want 15m", got)
+	}
+}
