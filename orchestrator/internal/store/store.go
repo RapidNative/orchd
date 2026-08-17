@@ -101,6 +101,12 @@ type ImageWorkload struct {
 	Primary   bool              `json:"primary,omitempty"` // owns the bare <ref>.<base> route
 	Port      int               `json:"port,omitempty"`    // container port the workspace image listens on
 	Dir       string            `json:"dir,omitempty"`     // workspace subdir within the template tree
+	// Preset: the manifest image runs verbatim (no per-template bake, no deps
+	// volume; the image CMD is the entrypoint). Old frozen images lack the
+	// field and unmarshal to false — the baked behavior.
+	Preset   bool    `json:"preset,omitempty"`
+	MemoryMB int     `json:"memory_mb,omitempty"` // per-workload cap override
+	CPUs     float64 `json:"cpus,omitempty"`
 }
 
 // ImageID is the "template@version" key for an image.

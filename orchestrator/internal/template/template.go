@@ -64,6 +64,26 @@ type Workload struct {
 	// one workload may be primary. Absent everywhere = legacy behavior: the
 	// first tinbase workload is primary.
 	Primary bool `json:"primary,omitempty"`
+
+	// Port is the container port the workload's image listens on. Preset
+	// images (see UsesPresetImage) bake their own listener, so the manifest
+	// must say which port that is; baked images get the generator's default.
+	Port int `json:"port,omitempty"`
+	// MemoryMB / CPUs cap this workload's instances, overriding the
+	// platform-wide defaults. A dev server that ships without a bundler can
+	// run in a quarter of the memory the default assumes.
+	MemoryMB int     `json:"memory_mb,omitempty"`
+	CPUs     float64 `json:"cpus,omitempty"`
+}
+
+// UsesPresetImage reports that this workspace runs its manifest `image:`
+// verbatim: no per-template docker bake, no dependency extraction, the image's
+// own CMD as the entrypoint. The shape for generic runtime images (a dev
+// server installed globally in the image, project files mounted at /app) —
+// everything the template contributes is files, not layers. The run command
+// stays required for kind:node because the local/process driver still uses it.
+func (w Workload) UsesPresetImage() bool {
+	return w.Image != "" && len(w.Setup) == 0 && len(w.Install) == 0 && len(w.Build) == 0
 }
 
 // PrimaryName returns the manifest name of the workload that should own the
@@ -121,6 +141,12 @@ func Load(dir string) (*Manifest, error) {
 		}
 		if len(w.Build) > 0 && w.Kind == "tinbase" {
 			return nil, fmt.Errorf("%s: workload %q: build steps are for node/static workspaces", FileName, w.Name)
+		}
+		if w.Port < 0 || w.Port > 65535 {
+			return nil, fmt.Errorf("%s: workload %q: port %d out of range", FileName, w.Name, w.Port)
+		}
+		if w.MemoryMB < 0 || w.CPUs < 0 {
+			return nil, fmt.Errorf("%s: workload %q: negative resource limits", FileName, w.Name)
 		}
 		for j, step := range w.Build {
 			if len(step) == 0 {
