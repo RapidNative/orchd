@@ -21,12 +21,6 @@ Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFI
 # via DNS-01 — we own the domain; see tools/orchd-box/esm-cache in the website
 # repo). Guests only: public DNS untouched.
 Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
-# 12, not the memory-derived 20: each VM gets 4 vCPUs, and cold boots pin them
-# bundling. 20 concurrently-active VMs = 80 vCPUs on 40 cores; measured 2026-08-17
-# evening rush: load 85+, API timeouts, mint subprocesses OOM-killed. 12x4=48
-# stays near the core count; excess wakes queue in admission instead of
-# starving everyone. Memory was never the binding constraint (12x3GiB = 36GiB).
-Environment=ORCHD_FC_MAX_LIVE=12
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m
 Environment=ORCHD_DEV_CPUS=4
@@ -35,11 +29,6 @@ Environment=ORCHD_API_KEY_FILE=/opt/orchd/secrets/admin.key
 Environment=ORCHD_BASE_DOMAIN=rapidnative.app
 # Firecracker pilot: mobile dev servers run as microVMs (wake=snapshot
 # restore ~0.1-3s vs 60-90s docker rebundle). Other workloads stay docker.
-# Placeholder during the rnrun cutover: keeps the FC mux alive so DELETES of
-# existing microVM workloads still reach the fc driver (ownership-routed), while
-# no NEW creates match — everything new lands on the docker driver. Removed
-# entirely once the fleet is wiped and FC state is cleaned.
-Environment=ORCHD_FC_WORKLOADS=retired/none
 Environment=ORCHD_ALT_DOMAINS=rnproject.dev,tinbase.dev
 Environment=ORCHD_PUBLIC_SCHEME=https
 Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
