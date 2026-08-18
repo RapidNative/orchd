@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.3.1 && npm cache clean --force
+RUN npm install -g rnrun@0.3.2 && npm cache clean --force
 
 # HOME holds rnrun's pkg-cache. It lives in the ephemeral writable layer (gVisor
 # resets it on stop/start) — fine, because a bundle-cache hit doesn't need it and
@@ -32,17 +32,17 @@ RUN mkdir -p /cache
 # packages (from the on-box esm cache, fast). Verified: wake 0.6s, cache survives.
 ENV RNRUN_BUNDLE_CACHE_DIR=/data/.rnrun/bundle-cache
 ENV RNRUN_TOOLS_DIR=/data/.rnrun/tools
+# 0.3.2+: the package cache is relocatable too. Co-locate it on /data so a
+# wake stops re-fetching packages into the ephemeral layer entirely.
+ENV RNRUN_PKG_CACHE_DIR=/data/.rnrun/pkg
 
 WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
-# No --prewarm: 0.3.x persists the assembled bundle to disk (~/.rnrun/bundle-cache,
-# keyed by platform + sources + env + flags.
-# (the cache is redirected to /data above so it survives the wake). On a wake the
-# serve path finds that cache and returns in ~0.5s. --prewarm would
-# instead force an unconditional rebuild on every start, and a scan arriving mid-
-# rebuild coalesces onto it (~32s) rather than reading the cache — measured, it
-# defeats the cache on exactly the wake path we care about. A brand-new project
-# still builds once on its first request; warm it at provision time with
-# `rnrun bundle --platform ios` rather than paying it per wake.
-CMD ["rnrun", "start", "--port", "8080"]
+# --prewarm ios: warms a genuinely-cold project during idle so its first-ever
+# scan isn't the one paying the ~38s build. Safe on a warm cache as of 0.3.2:
+# the Fast-Refresh graph rebuild that used to fire on every cache hit is now
+# lazy (built on first edit), so a hit is a true no-op serve (~270ms) rather
+# than a background full build. Bundle cache lives on /data (above) so it
+# survives the gVisor writable-layer wipe on stop/start.
+CMD ["rnrun", "start", "--port", "8080", "--prewarm", "ios"]
