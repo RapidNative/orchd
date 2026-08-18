@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.2.1 && npm cache clean --force
+RUN npm install -g rnrun@0.2.3 && npm cache clean --force
 
 # A writable, stable home: rnrun's package cache (~/.rnrun/pkg-cache) lands in
 # the container layer and survives stop/start cycles (scale-to-zero wakes).
