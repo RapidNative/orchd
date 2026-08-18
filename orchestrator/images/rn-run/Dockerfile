@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.2.3 && npm cache clean --force
+RUN npm install -g rnrun@0.2.5 && npm cache clean --force
 
 # A writable, stable home: rnrun's package cache (~/.rnrun/pkg-cache) lands in
 # the container layer and survives stop/start cycles (scale-to-zero wakes).
@@ -24,4 +24,15 @@ RUN mkdir -p /cache
 WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
-CMD ["rnrun", "start", "--port", "8080"]
+# Pre-warm iOS only. Lazy first-request building is right for a laptop, wrong
+# here: a scale-to-zero container boots, sits idle, and then the first device to
+# scan pays for the whole cold build — which reads as breakage and provokes
+# retries. This moves that work into the idle window instead.
+#
+# Deliberately not android: a cold build is CPU-bound at the package server, and
+# build time tracks concurrency far more than dep count (measured: the same
+# 42-dep set took 121s with a quiet slice and 746s while overlapping five other
+# builds). Warming a second platform doubles the heaviest work per wake to buy
+# latency on a target most projects are never scanned on. Android still builds
+# on first request.
+CMD ["rnrun", "start", "--port", "8080", "--prewarm", "ios"]
