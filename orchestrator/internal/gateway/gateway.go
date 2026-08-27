@@ -27,11 +27,14 @@ func New(mgr *manager.Manager) *Gateway {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-API-Key, Content-Type, apikey, Prefer, Range, x-client-info, x-supabase-api-version, accept-profile, content-profile, x-upsert, cache-control")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
-	w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Range")
+	// Handle CORS preflight at the gateway so OPTIONS never reaches the
+	// upstream. For non-preflight requests the upstream sets its own CORS
+	// headers — we must NOT duplicate them or the browser sees "*, *".
 	if r.Method == http.MethodOptions {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-API-Key, Content-Type, apikey, Prefer, Range, x-client-info, x-supabase-api-version, accept-profile, content-profile, x-upsert, cache-control")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Range")
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
