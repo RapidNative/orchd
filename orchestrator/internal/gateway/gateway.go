@@ -27,6 +27,15 @@ func New(mgr *manager.Manager) *Gateway {
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-API-Key, Content-Type, apikey, Prefer, Range")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
+	w.Header().Set("Access-Control-Expose-Headers", "Content-Range, Range")
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	workload, err := g.resolve(r)
 	if err != nil {
 		http.Error(w, "no route for request", http.StatusNotFound)
