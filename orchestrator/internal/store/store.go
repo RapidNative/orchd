@@ -172,9 +172,14 @@ type BackupTarget struct {
 	SecretKey string `json:"secret_key,omitempty"`
 }
 
-// Webhook forwards platform events to an external URL (empty = off).
+// Webhook forwards platform events to an external URL (empty = off). It also
+// backs the synchronous reprovision-on-miss call the gateway makes when a host
+// has no route. APIKey is sent as the X-Webhook-Key header so the receiver can
+// verify the source; it is persisted plaintext on disk (like BackupTarget's
+// SecretKey) and masked by the API.
 type Webhook struct {
-	URL string `json:"url,omitempty"`
+	URL    string `json:"url,omitempty"`
+	APIKey string `json:"api_key,omitempty"`
 }
 
 // MetricsTarget selects where the platform metrics snapshot is published.

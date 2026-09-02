@@ -775,11 +775,14 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 	t := a.mgr.GetBackupTarget()
 	secretSet := t.SecretKey != ""
 	t.SecretKey = "" // never return the secret
+	wh := a.mgr.GetWebhookConfig()
+	webhookKeySet := wh.APIKey != ""
 	writeJSON(w, http.StatusOK, map[string]any{
 		"instance_name":     a.mgr.GetInstanceName(),
 		"backup":            t,
 		"backup_secret_set": secretSet,
-		"webhook":           map[string]string{"url": a.mgr.GetWebhook()},
+		"webhook":           map[string]string{"url": wh.URL},
+		"webhook_key_set":   webhookKeySet,
 		"metrics":           a.mgr.GetMetricsTarget(),
 		"registry":          a.mgr.GetRegistry(),
 	})
@@ -1098,17 +1101,23 @@ func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) setWebhook(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		URL string `json:"url"`
+		URL    string `json:"url"`
+		APIKey string `json:"api_key"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := a.mgr.SetWebhook(body.URL); err != nil {
+	// Blank api_key keeps the existing one, so the admin can edit the URL
+	// without re-entering the secret (mirrors the backup secret behaviour).
+	if body.APIKey == "" {
+		body.APIKey = a.mgr.GetWebhookConfig().APIKey
+	}
+	if err := a.mgr.SetWebhook(body.URL, body.APIKey); err != nil {
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"url": body.URL})
+	writeJSON(w, http.StatusOK, map[string]any{"url": body.URL, "webhook_key_set": body.APIKey != ""})
 }
 
 func (a *API) events(w http.ResponseWriter, r *http.Request) {

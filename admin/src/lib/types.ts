@@ -64,6 +64,7 @@ export interface SettingsResp {
   backup: BackupTarget
   backup_secret_set: boolean
   webhook: { url: string }
+  webhook_key_set: boolean
   metrics: MetricsTarget
   registry: string
 }

@@ -200,8 +200,11 @@ export const api = {
       body: JSON.stringify({ registry }),
     }),
   backupState: () => req<Backup>('/v1/system/backup', { method: 'POST' }),
-  setWebhook: (url: string) =>
-    req<{ url: string }>('/v1/settings/webhook', { method: 'PUT', body: JSON.stringify({ url }) }),
+  setWebhook: (url: string, apiKey: string) =>
+    req<{ url: string; webhook_key_set: boolean }>('/v1/settings/webhook', {
+      method: 'PUT',
+      body: JSON.stringify({ url, api_key: apiKey }),
+    }),
   setMetrics: (t: MetricsTarget) =>
     req<MetricsTarget>('/v1/settings/metrics', { method: 'PUT', body: JSON.stringify(t) }),
   events: (limit = 100) => req<Event[]>('/v1/events?limit=' + limit),
