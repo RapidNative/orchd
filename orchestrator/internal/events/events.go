@@ -72,11 +72,12 @@ func (m *MemorySink) Recent(n int) []Event {
 // so it never blocks a control-plane action.
 type WebhookSink struct {
 	url    string
+	apiKey string
 	client *http.Client
 }
 
-func NewWebhookSink(url string) *WebhookSink {
-	return &WebhookSink{url: url, client: &http.Client{Timeout: 10 * time.Second}}
+func NewWebhookSink(url, apiKey string) *WebhookSink {
+	return &WebhookSink{url: url, apiKey: apiKey, client: &http.Client{Timeout: 10 * time.Second}}
 }
 
 func (w *WebhookSink) Emit(e Event) {
@@ -89,6 +90,9 @@ func (w *WebhookSink) Emit(e Event) {
 			return
 		}
 		req.Header.Set("Content-Type", "application/json")
+		if w.apiKey != "" {
+			req.Header.Set("X-Webhook-Key", w.apiKey)
+		}
 		resp, err := w.client.Do(req)
 		if err == nil {
 			resp.Body.Close()

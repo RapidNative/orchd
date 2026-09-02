@@ -55,9 +55,10 @@ type Manager struct {
 	sink    events.Sink        // fan-out sink (mem + optional webhook)
 	metrics metrics.Sink       // metrics publish target
 
-	mu       sync.Mutex
-	live     map[string]*liveInstance // workloadID -> running instance
-	refLocks map[string]*sync.Mutex   // per-workload wake serialization
+	mu        sync.Mutex
+	live      map[string]*liveInstance // workloadID -> running instance
+	refLocks  map[string]*sync.Mutex   // per-workload wake serialization
+	hostLocks map[string]*sync.Mutex   // per-host reprovision-on-miss serialization
 
 	// unowned records when the reaper first noticed a workload that is running
 	// but has no live entry — an instance that outlived the orchd process that
@@ -121,13 +122,14 @@ var Catalog = map[string]preset{
 
 func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 	m := &Manager{
-		cfg:      cfg,
-		store:    st,
-		rt:       rt,
-		mem:      events.NewMemorySink(500),
-		live:     make(map[string]*liveInstance),
-		refLocks: make(map[string]*sync.Mutex),
-		unowned:  make(map[string]time.Time),
+		cfg:       cfg,
+		store:     st,
+		rt:        rt,
+		mem:       events.NewMemorySink(500),
+		live:      make(map[string]*liveInstance),
+		refLocks:  make(map[string]*sync.Mutex),
+		hostLocks: make(map[string]*sync.Mutex),
+		unowned:   make(map[string]time.Time),
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
 	m.applyWebhookSettings()
@@ -392,10 +394,10 @@ func (m *Manager) emit(evType, projectID, workloadID, msg string) {
 }
 
 func (m *Manager) applyWebhookSettings() {
-	url := m.store.GetSettings().Webhook.URL
+	wh := m.store.GetSettings().Webhook
 	m.mu.Lock()
-	if url != "" {
-		m.sink = events.NewMultiSink(m.mem, events.NewWebhookSink(url))
+	if wh.URL != "" {
+		m.sink = events.NewMultiSink(m.mem, events.NewWebhookSink(wh.URL, wh.APIKey))
 	} else {
 		m.sink = m.mem
 	}
@@ -428,9 +430,14 @@ func (m *Manager) SetRegistry(prefix string) error {
 
 func (m *Manager) GetWebhook() string { return m.store.GetSettings().Webhook.URL }
 
-func (m *Manager) SetWebhook(url string) error {
+// GetWebhookConfig returns the full webhook config (URL + API key).
+func (m *Manager) GetWebhookConfig() store.Webhook { return m.store.GetSettings().Webhook }
+
+// SetWebhook sets the event/reprovision webhook URL and API key.
+func (m *Manager) SetWebhook(url, apiKey string) error {
 	s := m.store.GetSettings()
 	s.Webhook.URL = url
+	s.Webhook.APIKey = apiKey
 	if err := m.store.SetSettings(s); err != nil {
 		return err
 	}

@@ -41,8 +41,18 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	workload, err := g.resolve(r)
 	if err != nil {
-		http.Error(w, "no route for request", http.StatusNotFound)
-		return
+		// No route for this host. Ask the reprovision webhook (if configured)
+		// to re-create the missing workload, holding the request until its
+		// route reappears, then continue proxying below.
+		workload, err = g.mgr.RequestReprovision(r.Context(), hostOnly(r.Host))
+		if err != nil {
+			if errors.Is(err, manager.ErrReprovisionTimeout) {
+				http.Error(w, "reprovision timed out", http.StatusGatewayTimeout)
+				return
+			}
+			http.Error(w, "no route for request", http.StatusNotFound)
+			return
+		}
 	}
 
 	addr, err := g.mgr.EnsureRunning(r.Context(), workload.ID)

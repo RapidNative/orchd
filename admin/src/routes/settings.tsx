@@ -318,21 +318,24 @@ export function Settings() {
   const [t, setT] = useState<BackupTarget>({ type: 'local' })
   const [secret, setSecret] = useState('')
   const [webhook, setWebhook] = useState('')
+  const [webhookKey, setWebhookKey] = useState('')
   const [mType, setMType] = useState('nop')
   const [mURL, setMURL] = useState('')
   const secretSet = settings.data?.backup_secret_set
+  const webhookKeySet = settings.data?.webhook_key_set
 
   useEffect(() => {
     if (settings.data) {
       setT({ ...settings.data.backup, type: settings.data.backup.type || 'local' })
       setWebhook(settings.data.webhook?.url ?? '')
+      setWebhookKey('')
       setMType(settings.data.metrics?.type || 'nop')
       setMURL(settings.data.metrics?.url ?? '')
     }
   }, [settings.data])
 
   const saveWebhook = useMutation({
-    mutationFn: () => api.setWebhook(webhook),
+    mutationFn: () => api.setWebhook(webhook, webhookKey),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
   })
   const saveMetrics = useMutation({
@@ -442,11 +445,22 @@ export function Settings() {
           <Badge variant={webhook ? 'running' : 'neutral'}>{webhook ? 'on' : 'off'}</Badge>
         </CardHeader>
         <CardContent className="grid gap-4">
-          <Field label="Webhook URL" hint="control-plane events (project/backup/restore …) are POSTed here as JSON. Blank = off.">
+          <Field label="Webhook URL" hint="control-plane events (project/backup/restore …) are POSTed here as JSON, and the gateway calls it to reprovision a host with no route. Blank = off.">
             <Input
               value={webhook}
               onChange={(e) => setWebhook(e.target.value)}
               placeholder="https://example.com/hooks/orchd"
+            />
+          </Field>
+          <Field
+            label="API key"
+            hint={webhookKeySet ? 'a key is set — leave blank to keep it. Sent as the X-Webhook-Key header.' : 'sent as the X-Webhook-Key header so the receiver can verify the source.'}
+          >
+            <Input
+              type="password"
+              value={webhookKey}
+              onChange={(e) => setWebhookKey(e.target.value)}
+              placeholder={webhookKeySet ? '•••••••• (unchanged)' : ''}
             />
           </Field>
           <div className="flex items-center gap-3">
