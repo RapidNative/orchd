@@ -189,6 +189,42 @@ certificates are preferable where the DNS provider allows DNS-01: per-hostname
 issuance hits Let's Encrypt's 50-certs-per-week-per-domain cap quickly when
 every tenant mints several hostnames.
 
+## Reprovision-on-miss webhook
+
+A route-table miss need not be a dead end. When `Settings.Webhook.URL` is set,
+the gateway's 404 path calls `Manager.RequestReprovision(host)`
+(`internal/manager/reprovision.go`) instead of returning immediately: it POSTs
+`{type:"domain.not_found", host}` to the webhook (header `X-Webhook-Key` =
+`Settings.Webhook.APIKey`), **holds the request** while the receiver re-creates
+the project, polls `ResolveHost` until the route reappears, then falls through to
+`EnsureRunning` + proxy so the original request completes. The receiver is
+RapidNative's Next.js API, which maps the host back to a project and re-runs its
+own idempotent provisioning.
+
+- **Per-host single-flight** — a burst of misses for the same host fires ONE
+  webhook; the rest block on the same lock, then re-resolve.
+- **`context.WithoutCancel` + `ORCHD_REPROVISION_HOOK_TIMEOUT`** (default 30s) —
+  a client disconnect must not abort the reprovision it triggered. On timeout the
+  gateway returns **504**, distinct from the plain **404** you still get when the
+  webhook is unset or the receiver reports no such project.
+- **Config rides the existing "Event webhook" setting** — `PUT /v1/settings/webhook
+  {url, api_key}`; the key is masked (`webhook_key_set`), blank-on-write keeps the
+  stored one. The same URL+key also carry the async event feed (with `X-Webhook-Key`).
+
+Operating rules, each learned the hard way:
+
+- **Set the webhook URL LAST.** Point it at the receiver only after the receiver is
+  deployed. A URL whose endpoint is down (or absent) turns every genuine miss into a
+  ~30s hold → 504 instead of an instant 404.
+- **Delete is not reversible by reprovision.** Recreation rebuilds code and routes
+  from the caller's files, but `DELETE /v1/projects/{ref}` releases the data dir — the
+  new stack boots a FRESH database. Suspend (scale-to-zero) keeps data and is adopted
+  back losslessly; delete loses it. "Sweep-delete everything and let URLs recreate it"
+  wipes every tenant's DB.
+- **Success is silent.** Only failures log (`reprovision: hook for <host> failed: …`).
+  A recovered project leaves no ORCHD line — confirm via the recreated project
+  (`GET /v1/projects`, a new orchd id whose `name` == the caller's project id).
+
 ## Debugging order
 
 1. `systemctl is-active orchd caddy`; `journalctl -u orchd -n 100`.
