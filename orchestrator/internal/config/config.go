@@ -129,6 +129,14 @@ type Config struct {
 	// the reprovision webhook re-creates a missing workload's route.
 	ReprovisionHookTimeout time.Duration
 
+	// LRU eviction reaper (gated on Settings.LRUKeepMax > 0). LRUInterval is how
+	// often it runs; LRUMinAge is a floor — a project active within this window is
+	// never evicted regardless of rank; LRUBatch caps evictions per tick so a
+	// large backlog drains gradually rather than as one mass-delete.
+	LRUInterval time.Duration
+	LRUMinAge   time.Duration
+	LRUBatch    int
+
 	// StateDSN, when set, stores control-plane state in Postgres instead of the
 	// local JSON file (e.g. postgres://user:pass@host/db).
 	StateDSN string
@@ -188,6 +196,9 @@ func Load() Config {
 		BackupRetain:           envInt("ORCHD_BACKUP_RETAIN", 5),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
+		LRUInterval:            envDuration("ORCHD_LRU_INTERVAL", 5*time.Minute),
+		LRUMinAge:              envDuration("ORCHD_LRU_MIN_AGE", 24*time.Hour),
+		LRUBatch:               envInt("ORCHD_LRU_BATCH", 25),
 		StateDSN:               env("ORCHD_STATE_DSN", ""),
 		StateSQLite:            env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin:        envInt("ORCHD_RATE_LIMIT", 0),
