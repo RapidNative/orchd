@@ -60,6 +60,10 @@ type Manager struct {
 	refLocks  map[string]*sync.Mutex   // per-workload wake serialization
 	hostLocks map[string]*sync.Mutex   // per-host reprovision-on-miss serialization
 
+	// activityPersist coalesces LastActiveAt writes: projectID -> when it was last
+	// persisted, so a warm project's LRU clock is flushed at most once per window.
+	activityPersist map[string]time.Time
+
 	// unowned records when the reaper first noticed a workload that is running
 	// but has no live entry — an instance that outlived the orchd process that
 	// started it. There is no request history for those, so the timestamp is
@@ -122,14 +126,15 @@ var Catalog = map[string]preset{
 
 func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 	m := &Manager{
-		cfg:       cfg,
-		store:     st,
-		rt:        rt,
-		mem:       events.NewMemorySink(500),
-		live:      make(map[string]*liveInstance),
-		refLocks:  make(map[string]*sync.Mutex),
-		hostLocks: make(map[string]*sync.Mutex),
-		unowned:   make(map[string]time.Time),
+		cfg:             cfg,
+		store:           st,
+		rt:              rt,
+		mem:             events.NewMemorySink(500),
+		live:            make(map[string]*liveInstance),
+		refLocks:        make(map[string]*sync.Mutex),
+		hostLocks:       make(map[string]*sync.Mutex),
+		activityPersist: make(map[string]time.Time),
+		unowned:         make(map[string]time.Time),
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
 	m.applyWebhookSettings()
@@ -459,18 +464,49 @@ func (m *Manager) SetLRUKeepMax(n int) error {
 	return m.store.SetSettings(s)
 }
 
-// touchProjectActive stamps a project's LastActiveAt = now (best-effort). Called
-// on wake and on suspend so the eviction reaper can order projects by real use.
-func (m *Manager) touchProjectActive(projectID string) {
+// SetProjectLastActive advances a project's LRU clock to t. Monotonic — it never
+// moves the clock backwards, so a backfilled or stale value can't clobber a
+// fresher one. Used by the activity path and the backfill endpoint.
+func (m *Manager) SetProjectLastActive(id string, t time.Time) error {
+	p, err := m.store.GetProject(id)
+	if err != nil {
+		return err
+	}
+	if !t.After(p.LastActiveAt) {
+		return nil
+	}
+	p.LastActiveAt = t
+	return m.store.PutProject(p)
+}
+
+// noteProjectActivity records that a project served a request — the LRU clock.
+// This is the SAME signal scale-to-zero uses (a gateway request keeps a workload
+// from suspending), now persisted so eviction ranks by real last use, not
+// creation time. force persists immediately (wake/suspend); otherwise the write
+// is coalesced to at most once per LRUActivityCoalesce window, so the per-request
+// hot path is a map check, not a store flush. The persist runs off the request
+// goroutine.
+func (m *Manager) noteProjectActivity(projectID string, force bool) {
 	if projectID == "" {
 		return
 	}
-	p, err := m.store.GetProject(projectID)
-	if err != nil {
-		return
+	now := time.Now()
+	m.mu.Lock()
+	persist := shouldPersistActivity(m.activityPersist[projectID], now, m.cfg.LRUActivityCoalesce, force)
+	if persist {
+		m.activityPersist[projectID] = now
 	}
-	p.LastActiveAt = time.Now()
-	_ = m.store.PutProject(p)
+	m.mu.Unlock()
+	if persist {
+		go func() { _ = m.SetProjectLastActive(projectID, now) }()
+	}
+}
+
+// shouldPersistActivity decides whether a per-request activity note is flushed:
+// always on force (wake/suspend), otherwise only once the coalesce window since
+// the last flush has elapsed.
+func shouldPersistActivity(lastPersist, now time.Time, window time.Duration, force bool) bool {
+	return force || now.Sub(lastPersist) >= window
 }
 
 // backupStore returns the current backup store (nil = disabled), guarded so it
@@ -1318,6 +1354,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 	if ok {
 		if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
 			m.touch(workloadID)
+			m.noteProjectActivity(w.ProjectID, false) // per-request LRU clock (coalesced)
 			return li.addr, nil
 		}
 	}
@@ -1328,7 +1365,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 	}
 	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
 	m.markLive(workloadID, inst.Addr)
-	m.touchProjectActive(w.ProjectID) // refresh LRU clock on wake
+	m.noteProjectActivity(w.ProjectID, true) // refresh LRU clock on wake
 	return inst.Addr, nil
 }
 
@@ -1596,7 +1633,7 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 			_ = m.store.SetWorkloadState(id, runtime.StateSuspended)
 			m.forget(id)
 			if w, err := m.store.GetWorkload(id); err == nil {
-				m.touchProjectActive(w.ProjectID) // stamp idle-time as the LRU clock
+				m.noteProjectActivity(w.ProjectID, true) // stamp idle-time as the LRU clock
 			}
 		}(id)
 	}

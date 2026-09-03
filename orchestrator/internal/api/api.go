@@ -61,6 +61,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/projects/{id}/restart", a.projectRestart)
 	mux.HandleFunc("POST /v1/projects/{id}/reset", a.projectReset)
 	mux.HandleFunc("PUT /v1/projects/{id}/env", a.setProjectEnv)
+	mux.HandleFunc("PUT /v1/projects/{id}/activity", a.setProjectActivity)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
@@ -1120,6 +1121,29 @@ func (a *API) setWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"url": body.URL, "webhook_key_set": body.APIKey != ""})
+}
+
+// setProjectActivity seeds/advances a project's LRU clock (LastActiveAt). Used to
+// backfill real last-use into projects that predate activity tracking; the setter
+// is monotonic, so this never moves a project's clock backwards.
+func (a *API) setProjectActivity(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	var body struct {
+		LastActiveAt time.Time `json:"last_active_at"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if body.LastActiveAt.IsZero() {
+		writeErr(w, http.StatusBadRequest, errors.New("last_active_at required (RFC3339)"))
+		return
+	}
+	if err := a.mgr.SetProjectLastActive(id, body.LastActiveAt); err != nil {
+		writeErr(w, http.StatusNotFound, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (a *API) setLRU(w http.ResponseWriter, r *http.Request) {
