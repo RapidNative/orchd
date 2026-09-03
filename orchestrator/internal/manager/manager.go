@@ -445,6 +445,34 @@ func (m *Manager) SetWebhook(url, apiKey string) error {
 	return nil
 }
 
+// GetLRUKeepMax returns the resident-project ceiling for the eviction reaper
+// (0 = eviction disabled; orchd never deletes a project on its own).
+func (m *Manager) GetLRUKeepMax() int { return m.store.GetSettings().LRUKeepMax }
+
+// SetLRUKeepMax sets the resident-project ceiling. 0 disables eviction.
+func (m *Manager) SetLRUKeepMax(n int) error {
+	if n < 0 {
+		n = 0
+	}
+	s := m.store.GetSettings()
+	s.LRUKeepMax = n
+	return m.store.SetSettings(s)
+}
+
+// touchProjectActive stamps a project's LastActiveAt = now (best-effort). Called
+// on wake and on suspend so the eviction reaper can order projects by real use.
+func (m *Manager) touchProjectActive(projectID string) {
+	if projectID == "" {
+		return
+	}
+	p, err := m.store.GetProject(projectID)
+	if err != nil {
+		return
+	}
+	p.LastActiveAt = time.Now()
+	_ = m.store.PutProject(p)
+}
+
 // backupStore returns the current backup store (nil = disabled), guarded so it
 // can be swapped at runtime when the target is reconfigured.
 func (m *Manager) backupStore() backup.Store {
@@ -1300,6 +1328,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 	}
 	_ = m.store.SetWorkloadState(workloadID, runtime.StateRunning)
 	m.markLive(workloadID, inst.Addr)
+	m.touchProjectActive(w.ProjectID) // refresh LRU clock on wake
 	return inst.Addr, nil
 }
 
@@ -1566,6 +1595,9 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 			}
 			_ = m.store.SetWorkloadState(id, runtime.StateSuspended)
 			m.forget(id)
+			if w, err := m.store.GetWorkload(id); err == nil {
+				m.touchProjectActive(w.ProjectID) // stamp idle-time as the LRU clock
+			}
 		}(id)
 	}
 	wg.Wait()

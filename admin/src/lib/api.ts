@@ -207,6 +207,8 @@ export const api = {
     }),
   setMetrics: (t: MetricsTarget) =>
     req<MetricsTarget>('/v1/settings/metrics', { method: 'PUT', body: JSON.stringify(t) }),
+  setLRU: (keepMax: number) =>
+    req<{ lru_keep_max: number }>('/v1/settings/lru', { method: 'PUT', body: JSON.stringify({ keep_max: keepMax }) }),
   events: (limit = 100) => req<Event[]>('/v1/events?limit=' + limit),
   images: (region?: string) =>
     req<Image[]>('/v1/images' + (region ? '?region=' + encodeURIComponent(region) : '')),

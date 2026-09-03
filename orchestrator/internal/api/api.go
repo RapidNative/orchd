@@ -104,6 +104,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/system/backup", a.backupState)
 	mux.HandleFunc("PUT /v1/settings/backup", a.setBackupTarget)
 	mux.HandleFunc("PUT /v1/settings/webhook", a.setWebhook)
+	mux.HandleFunc("PUT /v1/settings/lru", a.setLRU)
 	mux.HandleFunc("PUT /v1/settings/metrics", a.setMetrics)
 	mux.HandleFunc("GET /v1/metrics", a.metrics)
 	mux.HandleFunc("GET /v1/events", a.events)
@@ -785,6 +786,7 @@ func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
 		"webhook_key_set":   webhookKeySet,
 		"metrics":           a.mgr.GetMetricsTarget(),
 		"registry":          a.mgr.GetRegistry(),
+		"lru_keep_max":      a.mgr.GetLRUKeepMax(),
 	})
 }
 
@@ -1118,6 +1120,21 @@ func (a *API) setWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"url": body.URL, "webhook_key_set": body.APIKey != ""})
+}
+
+func (a *API) setLRU(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		KeepMax int `json:"keep_max"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err := a.mgr.SetLRUKeepMax(body.KeepMax); err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"lru_keep_max": a.mgr.GetLRUKeepMax()})
 }
 
 func (a *API) events(w http.ResponseWriter, r *http.Request) {

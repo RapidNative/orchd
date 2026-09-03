@@ -321,6 +321,7 @@ export function Settings() {
   const [webhookKey, setWebhookKey] = useState('')
   const [mType, setMType] = useState('nop')
   const [mURL, setMURL] = useState('')
+  const [lruKeepMax, setLruKeepMax] = useState('')
   const secretSet = settings.data?.backup_secret_set
   const webhookKeySet = settings.data?.webhook_key_set
 
@@ -331,6 +332,7 @@ export function Settings() {
       setWebhookKey('')
       setMType(settings.data.metrics?.type || 'nop')
       setMURL(settings.data.metrics?.url ?? '')
+      setLruKeepMax(settings.data.lru_keep_max ? String(settings.data.lru_keep_max) : '')
     }
   }, [settings.data])
 
@@ -340,6 +342,10 @@ export function Settings() {
   })
   const saveMetrics = useMutation({
     mutationFn: () => api.setMetrics({ type: mType as never, url: mURL || undefined }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
+  })
+  const saveLRU = useMutation({
+    mutationFn: () => api.setLRU(parseInt(lruKeepMax, 10) || 0),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['settings'] }),
   })
 
@@ -499,6 +505,35 @@ export function Settings() {
               {saveMetrics.isPending ? 'Saving…' : 'Save'}
             </Button>
             {saveMetrics.isSuccess && <span className="text-sm text-primary">Saved.</span>}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className="mt-6 max-w-2xl">
+        <CardHeader className="flex-row items-center justify-between">
+          <CardTitle className="text-base">Project eviction (LRU)</CardTitle>
+          <Badge variant={lruKeepMax && parseInt(lruKeepMax, 10) > 0 ? 'running' : 'neutral'}>
+            {lruKeepMax && parseInt(lruKeepMax, 10) > 0 ? 'on' : 'off'}
+          </Badge>
+        </CardHeader>
+        <CardContent className="grid gap-4">
+          <Field
+            label="Keep most-recently-active projects"
+            hint="Blank or 0 = OFF (never evict). When set, the least-recently-active projects beyond this count are DELETED to free disk; the reprovision webhook re-creates one on its next request — with a fresh database."
+          >
+            <Input
+              type="number"
+              min={0}
+              value={lruKeepMax}
+              onChange={(e) => setLruKeepMax(e.target.value)}
+              placeholder="0 (disabled)"
+            />
+          </Field>
+          <div className="flex items-center gap-3">
+            <Button onClick={() => saveLRU.mutate()} disabled={saveLRU.isPending}>
+              {saveLRU.isPending ? 'Saving…' : 'Save'}
+            </Button>
+            {saveLRU.isSuccess && <span className="text-sm text-primary">Saved.</span>}
           </div>
         </CardContent>
       </Card>

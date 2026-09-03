@@ -131,6 +131,10 @@ type Project struct {
 	Region    string            `json:"region"`
 	Env       map[string]string `json:"env,omitempty"` // env injected into every workload of the project
 	CreatedAt time.Time         `json:"created_at"`
+	// LastActiveAt is refreshed when the project is woken or suspended. It is the
+	// LRU ordering key for the eviction reaper. Zero for projects that predate the
+	// field — the reaper falls back to CreatedAt.
+	LastActiveAt time.Time `json:"last_active_at,omitempty"`
 }
 
 // Workload is a single routable instance. It is what the runtime driver operates
@@ -203,6 +207,12 @@ type Settings struct {
 	// Registry is the container registry prefix that `push` re-tags images under,
 	// e.g. "ghcr.io/acme". Empty = pushing is disabled.
 	Registry string `json:"registry,omitempty"`
+	// LRUKeepMax bounds how many projects stay resident on the box. When > 0 the
+	// eviction reaper deletes the least-recently-active projects beyond this count
+	// (freeing their disk), and the reprovision-on-miss webhook re-creates one on
+	// its next request. 0 (the default) disables eviction entirely — orchd never
+	// deletes a project on its own unless an operator sets this.
+	LRUKeepMax int `json:"lru_keep_max,omitempty"`
 }
 
 // Route maps a workload to a hostname and a stable key. Host drives subdomain

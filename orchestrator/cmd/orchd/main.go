@@ -67,6 +67,7 @@ func main() {
 	defer stop()
 
 	go mgr.RunReaper(ctx)
+	go mgr.RunEvictionReaper(ctx)
 	go mgr.RunBackupScheduler(ctx)
 	go mgr.RunMetricsPublisher(ctx)
 	go mgr.WakeKeepWarm(ctx)
