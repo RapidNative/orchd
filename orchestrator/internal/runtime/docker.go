@@ -311,6 +311,25 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 		return d.Create(ctx, spec) // no container yet
 	}
 
+	// The container exists but is suspended (scale-to-zero). A plain `docker
+	// start` resumes it on the image it was CREATED with -- so after a workload
+	// image is rebuilt and retagged (e.g. rn-run:dev bumped to a newer rnrun), a
+	// woken tenant would keep running the OLD image indefinitely. If the target
+	// tag now resolves to a different image id than the container was built from,
+	// recreate instead so the wake picks up the new image. Create remounts the
+	// same /data volume, so no project state is lost. Fall through to `docker
+	// start` whenever we cannot confidently tell the ids apart (missing or
+	// unreadable) -- a wake must never fail over this.
+	targetImage := d.Image
+	if spec.Image != "" {
+		targetImage = spec.Image
+	}
+	if want := d.imageID(ctx, host, targetImage); want != "" {
+		if got := d.containerImageID(ctx, host, spec.Ref); got != "" && got != want {
+			return d.Create(ctx, spec)
+		}
+	}
+
 	if out, err := d.docker(ctx, host, "start", containerName(spec.Ref)).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker start: %w: %s", err, strings.TrimSpace(string(out)))
 	}
@@ -336,6 +355,27 @@ func (d *DockerDriver) Stop(ctx context.Context, ref string) error {
 func (d *DockerDriver) Status(ctx context.Context, ref string) (State, error) {
 	state, _ := d.inspect(ctx, d.hostFor(ref), ref)
 	return state, nil
+}
+
+// imageID resolves a tag or ref (e.g. "rn-run:dev") to docker's canonical image
+// id on the given daemon, or "" if the image is unknown/unreadable.
+func (d *DockerDriver) imageID(ctx context.Context, host, ref string) string {
+	out, err := d.docker(ctx, host, "image", "inspect", "-f", "{{.Id}}", ref).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// containerImageID returns the image id a container was CREATED from (which does
+// not change when its tag is later repointed), or "" if unreadable. Compared
+// against imageID(targetTag) to detect that a workload's image was rebuilt.
+func (d *DockerDriver) containerImageID(ctx context.Context, host, ref string) string {
+	out, err := d.docker(ctx, host, "inspect", "-f", "{{.Image}}", containerName(ref)).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // inspect returns the lifecycle state and published host port for a ref on the
