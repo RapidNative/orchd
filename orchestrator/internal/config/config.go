@@ -136,6 +136,11 @@ type Config struct {
 	LRUInterval time.Duration
 	LRUMinAge   time.Duration
 	LRUBatch    int
+	// LRUActivityCoalesce bounds how often a project's LastActiveAt is persisted
+	// from the per-request activity signal: a warm project refreshes it at most
+	// once per window, so true LRU tracking costs at most one store write per
+	// active project per window rather than one per request.
+	LRUActivityCoalesce time.Duration
 
 	// StateDSN, when set, stores control-plane state in Postgres instead of the
 	// local JSON file (e.g. postgres://user:pass@host/db).
@@ -199,6 +204,7 @@ func Load() Config {
 		LRUInterval:            envDuration("ORCHD_LRU_INTERVAL", 5*time.Minute),
 		LRUMinAge:              envDuration("ORCHD_LRU_MIN_AGE", 24*time.Hour),
 		LRUBatch:               envInt("ORCHD_LRU_BATCH", 25),
+		LRUActivityCoalesce:    envDuration("ORCHD_LRU_ACTIVITY_COALESCE", 10*time.Minute),
 		StateDSN:               env("ORCHD_STATE_DSN", ""),
 		StateSQLite:            env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin:        envInt("ORCHD_RATE_LIMIT", 0),
