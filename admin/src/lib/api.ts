@@ -64,6 +64,18 @@ async function reqText(path: string): Promise<string> {
   return res.text()
 }
 
+// reqPaged is like req but also surfaces the X-Total-Count header (the
+// pre-pagination total), for server-paginated list endpoints.
+async function reqPaged<T>(path: string): Promise<{ items: T; total: number }> {
+  const res = await fetch(BASE + path, {
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+  })
+  if (res.status === 401) throw new ApiError('unauthorized', 401)
+  if (!res.ok) throw new ApiError(res.statusText, res.status)
+  const total = Number(res.headers.get('X-Total-Count') ?? 0)
+  return { items: (await res.json()) as T, total }
+}
+
 const withWorkloads = <T extends { workloads?: Project['workloads'] }>(p: T): T =>
   p.workloads ? p : { ...p, workloads: [] }
 
@@ -74,6 +86,20 @@ export const api = {
   // here keeps every consumer free of null checks — the components map over it
   // in a dozen places and a null took the whole page down.
   projects: async () => (await req<Project[]>('/v1/projects')).map(withWorkloads),
+  // Server-paginated project list (sorted most-recently-active by default), with
+  // the total count. Used by the dashboard (recent) and the /projects page.
+  projectsPage: async (opts: { page: number; pageSize: number; q?: string; sort?: string }) => {
+    const params = new URLSearchParams({
+      limit: String(opts.pageSize),
+      offset: String(opts.page * opts.pageSize),
+      sort: opts.sort ?? 'recent',
+    })
+    if (opts.q) params.set('q', opts.q)
+    const { items, total } = await reqPaged<Project[]>('/v1/projects?' + params.toString())
+    return { items: items.map(withWorkloads), total }
+  },
+  metrics: () =>
+    req<{ projects: number; workloads: number; running: number; suspended: number }>('/v1/metrics'),
   project: async (id: string) => withWorkloads(await req<Project>('/v1/projects/' + id)),
   createProject: (body: {
     name?: string

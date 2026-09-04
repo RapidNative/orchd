@@ -15,7 +15,15 @@ const rootRoute = createRootRoute({ component: RootLayout })
 
 const routeTree = rootRoute.addChildren([
   createRoute({ getParentRoute: () => rootRoute, path: '/', component: Dashboard }),
-  createRoute({ getParentRoute: () => rootRoute, path: '/projects', component: Projects }),
+  createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/projects',
+    component: Projects,
+    validateSearch: (s: Record<string, unknown>): { page: number; q: string } => ({
+      page: Math.max(0, Math.floor(Number(s.page)) || 0),
+      q: typeof s.q === 'string' ? s.q : '',
+    }),
+  }),
   createRoute({ getParentRoute: () => rootRoute, path: '/projects/$id', component: ProjectDetail }),
   createRoute({ getParentRoute: () => rootRoute, path: '/backups', component: Backups }),
   createRoute({ getParentRoute: () => rootRoute, path: '/activity', component: Activity }),
