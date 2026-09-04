@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.4.0 && npm cache clean --force
+RUN npm install -g rnrun@0.4.1 && npm cache clean --force
 
 # HOME holds rnrun's pkg-cache. It lives in the ephemeral writable layer (gVisor
 # resets it on stop/start) — fine, because a bundle-cache hit doesn't need it and
@@ -35,6 +35,10 @@ ENV RNRUN_TOOLS_DIR=/data/.rnrun/tools
 # 0.3.2+: the package cache is relocatable too. Co-locate it on /data so a
 # wake stops re-fetching packages into the ephemeral layer entirely.
 ENV RNRUN_PKG_CACHE_DIR=/data/.rnrun/pkg
+
+# Hosted preview over a public URL: serve an anonymous manifest so Expo Go on
+# physical iOS skips the SDK 57 sign-in gate (trades away Fast Refresh).
+ENV RNRUN_EXPO_GO_ANONYMOUS=1
 
 WORKDIR /app
 ENV PORT=8080
