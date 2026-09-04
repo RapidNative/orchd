@@ -64,7 +64,7 @@ func TestSetProjectLastActive_Monotonic(t *testing.T) {
 	if !get().Equal(t2) {
 		t.Fatalf("want %v got %v", t2, get())
 	}
-	// Unknown project errors (so the backfill endpoint returns 404).
+	// Unknown project errors (monotonic setter reports a missing project).
 	if err := m.SetProjectLastActive("nope", t1); err == nil {
 		t.Fatal("expected error for unknown project")
 	}

@@ -465,8 +465,9 @@ func (m *Manager) SetLRUKeepMax(n int) error {
 }
 
 // SetProjectLastActive advances a project's LRU clock to t. Monotonic — it never
-// moves the clock backwards, so a backfilled or stale value can't clobber a
-// fresher one. Used by the activity path and the backfill endpoint.
+// moves the clock backwards, so an out-of-order activity note can't clobber a
+// fresher one. Internal: the clock is driven only by signals orchd observes
+// itself (gateway requests, file writes, wake/suspend), never set externally.
 func (m *Manager) SetProjectLastActive(id string, t time.Time) error {
 	p, err := m.store.GetProject(id)
 	if err != nil {
@@ -689,6 +690,7 @@ func (m *Manager) WriteWorkloadFile(id, rel string, content []byte) error {
 		return err
 	}
 	m.notifyContainerWrite(w, rel, content)
+	m.noteProjectActivity(w.ProjectID, false) // a file write = the project is in use (editor sync)
 	return nil
 }
 
@@ -797,6 +799,9 @@ func (m *Manager) ApplyWorkloadFiles(id string, ops []FileOp) (written, deleted 
 		}
 		m.notifyContainerWrite(w, op.Path, op.Content)
 		written++
+	}
+	if written > 0 || deleted > 0 {
+		m.noteProjectActivity(w.ProjectID, false) // file sync = the project is in use
 	}
 	return written, deleted, nil
 }
