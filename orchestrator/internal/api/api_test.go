@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
@@ -603,5 +605,63 @@ func TestCreateProjectNameConflict(t *testing.T) {
 	// Unnamed projects stay unconstrained.
 	if code, body = do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{}); code != http.StatusCreated {
 		t.Fatalf("unnamed create: %d %s", code, body)
+	}
+}
+
+func TestListProjectsPaginationSortFilter(t *testing.T) {
+	cfg := config.Load()
+	cfg.DataRoot = t.TempDir()
+	cfg.BaseDomain = "test.local"
+	st, err := store.Open("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
+	// p0..p4 with increasing last-active (p4 newest).
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("proj%d", i)
+		if err := st.PutProject(&store.Project{ID: id, CreatedAt: base, LastActiveAt: base.Add(time.Duration(i) * time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mgr := manager.New(cfg, st, stubRuntime{})
+	srv := httptest.NewServer(api.New(mgr, cfg, bootstrapKey).Handler())
+	defer srv.Close()
+
+	get := func(query string) (ids []string, total string) {
+		req, _ := http.NewRequest("GET", srv.URL+"/v1/projects"+query, nil)
+		req.Header.Set("Authorization", "Bearer "+bootstrapKey)
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var rows []struct {
+			ID string `json:"id"`
+		}
+		if err := json.NewDecoder(res.Body).Decode(&rows); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range rows {
+			ids = append(ids, r.ID)
+		}
+		return ids, res.Header.Get("X-Total-Count")
+	}
+
+	// No params: all 5, total header = 5.
+	if ids, total := get(""); len(ids) != 5 || total != "5" {
+		t.Fatalf("no params: got %v total=%q", ids, total)
+	}
+	// sort=recent + limit=2: newest two (proj4, proj3); total still 5.
+	if ids, total := get("?sort=recent&limit=2"); total != "5" || len(ids) != 2 || ids[0] != "proj4" || ids[1] != "proj3" {
+		t.Fatalf("recent page1: got %v total=%q", ids, total)
+	}
+	// offset into the recent order.
+	if ids, _ := get("?sort=recent&limit=2&offset=2"); len(ids) != 2 || ids[0] != "proj2" || ids[1] != "proj1" {
+		t.Fatalf("recent page2: got %v", ids)
+	}
+	// q filter narrows the total and the result.
+	if ids, total := get("?q=proj3"); total != "1" || len(ids) != 1 || ids[0] != "proj3" {
+		t.Fatalf("filter: got %v total=%q", ids, total)
 	}
 }

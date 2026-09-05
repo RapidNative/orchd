@@ -141,6 +141,7 @@ func (a *API) auth(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Authorization, X-API-Key, Content-Type")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Expose-Headers", "X-Total-Count")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -364,13 +365,66 @@ func mergeDelta(text, b64 map[string]string) (map[string][]byte, error) {
 	return out, nil
 }
 
+// listProjects returns projects, optionally filtered/sorted/paginated. With no
+// query params it returns every project (unchanged; the orphan-scan path relies
+// on it). `q` filters by id/name substring; `sort=recent` orders by last-active
+// (the LRU clock, falling back to created); `offset`/`limit` page the result.
+// The pre-pagination total is returned in the X-Total-Count header.
 func (a *API) listProjects(w http.ResponseWriter, r *http.Request) {
 	list := a.mgr.Store().ListProjects()
+
+	if q := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("q"))); q != "" {
+		kept := make([]*store.Project, 0, len(list))
+		for _, p := range list {
+			if strings.Contains(strings.ToLower(p.ID), q) || strings.Contains(strings.ToLower(p.Name), q) {
+				kept = append(kept, p)
+			}
+		}
+		list = kept
+	}
+
+	if r.URL.Query().Get("sort") == "recent" {
+		sort.SliceStable(list, func(i, j int) bool {
+			return projectActiveKey(list[i]).After(projectActiveKey(list[j]))
+		})
+	}
+
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(list)))
+
+	offset := atoiClamp(r.URL.Query().Get("offset"), 0, 0, len(list))
+	list = list[offset:]
+	if limit := atoiClamp(r.URL.Query().Get("limit"), 0, 0, len(list)); limit > 0 {
+		list = list[:limit]
+	}
+
 	views := make([]projectView, 0, len(list))
 	for _, p := range list {
 		views = append(views, a.projectView(p))
 	}
 	writeJSON(w, http.StatusOK, views)
+}
+
+// projectActiveKey is the recency key: LastActiveAt when set, else CreatedAt.
+func projectActiveKey(p *store.Project) time.Time {
+	if !p.LastActiveAt.IsZero() {
+		return p.LastActiveAt
+	}
+	return p.CreatedAt
+}
+
+// atoiClamp parses s (def on empty/invalid) and clamps it to [lo, hi].
+func atoiClamp(s string, def, lo, hi int) int {
+	n := def
+	if v, err := strconv.Atoi(s); err == nil {
+		n = v
+	}
+	if n < lo {
+		n = lo
+	}
+	if n > hi {
+		n = hi
+	}
+	return n
 }
 
 func (a *API) getProject(w http.ResponseWriter, r *http.Request) {

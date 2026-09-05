@@ -8,10 +8,15 @@ import { relativeTime } from '@/lib/utils'
 
 export function Dashboard() {
   const info = useQuery({ queryKey: ['info'], queryFn: api.info })
-  const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 5000 })
-
-  const workloads = (projects.data ?? []).flatMap((p) => p.workloads)
-  const running = workloads.filter((w) => w.state === 'running').length
+  // Counts come from the lightweight metrics snapshot; the list fetches only the
+  // 6 most-recently-active projects — the dashboard no longer pulls the whole fleet.
+  const metrics = useQuery({ queryKey: ['metrics'], queryFn: api.metrics, refetchInterval: 5000 })
+  const recent = useQuery({
+    queryKey: ['projects', 'recent'],
+    queryFn: () => api.projectsPage({ page: 0, pageSize: 6, sort: 'recent' }),
+    refetchInterval: 5000,
+  })
+  const recentProjects = recent.data?.items ?? []
 
   return (
     <div>
@@ -21,8 +26,12 @@ export function Dashboard() {
       />
 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <StatCard label="Projects" value={projects.data?.length ?? '—'} />
-        <StatCard label="Workloads" value={workloads.length || '—'} sub={`${running} running`} />
+        <StatCard label="Projects" value={metrics.data?.projects ?? '—'} />
+        <StatCard
+          label="Workloads"
+          value={metrics.data?.workloads ?? '—'}
+          sub={`${metrics.data?.running ?? 0} running`}
+        />
         <StatCard
           label="Idle timeout"
           value={info.data?.idle_timeout ?? '—'}
@@ -43,11 +52,11 @@ export function Dashboard() {
           </Link>
         </CardHeader>
         <CardContent>
-          {!projects.data?.length ? (
+          {!recentProjects.length ? (
             <p className="text-sm text-muted-foreground">No projects yet.</p>
           ) : (
             <div className="flex flex-col divide-y divide-border/60">
-              {projects.data.slice(0, 6).map((p) => {
+              {recentProjects.map((p) => {
                 const run = p.workloads.filter((w) => w.state === 'running').length
                 return (
                   <Link
@@ -68,7 +77,7 @@ export function Dashboard() {
                         {run ? `${run} running` : 'idle'}
                       </Badge>
                       <span className="w-16 text-right text-xs text-muted-foreground">
-                        {relativeTime(p.created_at)}
+                        {relativeTime(p.last_active_at ?? p.created_at)}
                       </span>
                     </div>
                   </Link>
