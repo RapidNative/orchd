@@ -31,6 +31,7 @@ say "ensure dirs on $HOST"
 ssh "$HOST" 'mkdir -p /opt/orchd/admin /opt/orchd/site \
   /opt/orchd/images/tinbase /opt/orchd/images/rn-api \
   /opt/orchd/images/rn-vite /opt/orchd/images/rn-expo \
+  /opt/orchd/images/rn-run \
   /etc/caddy'
 
 say "sync static + image sources"
@@ -38,7 +39,7 @@ ssh "$HOST" 'rm -rf /opt/orchd/site/*'
 scp -qr site/out/. "$HOST:/opt/orchd/site/"
 ssh "$HOST" 'rm -rf /opt/orchd/admin/*'
 scp -qr admin/dist/. "$HOST:/opt/orchd/admin/"
-for i in tinbase rn-api rn-vite rn-expo; do
+for i in tinbase rn-api rn-vite rn-expo rn-run; do
   scp -q "orchestrator/images/$i/Dockerfile" "$HOST:/opt/orchd/images/$i/Dockerfile"
 done
 
