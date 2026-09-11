@@ -50,16 +50,22 @@
 	import /etc/caddy/conf.d/{args[0]}/*.caddy
 
 	# every other subdomain -> gateway (host-based workload routing)
-	# If the gateway has no route (X-Orchd-No-Route header), redirect to the
-	# staging orchd instance at rapidnative.dev. Normal upstream 404s pass through.
+	# If the gateway has no route (X-Orchd-No-Route header), transparently
+	# proxy to the staging orchd instance instead of redirecting. A redirect
+	# breaks CORS on POST/PUT (cross-origin 302 → browser rejects).
 	handle {
 		reverse_proxy 127.0.0.1:8081 {
 			@no_route header X-Orchd-No-Route 1
 			handle_response @no_route {
-				# Caddy labels index from the right: for slug.rapidnative.app,
-				# labels.2=slug, labels.1=rapidnative, labels.0=app.
-				# Redirect slug.rapidnative.app -> slug.rapidnative.dev
-				redir https://{http.request.host.labels.2}.rapidnative.dev{uri} 302
+				# Proxy to staging; keep the original .rapidnative.app host —
+				# the staging gateway resolves it via alt-domain alias lookup.
+				reverse_proxy {env.ORCHD_STAGING_UPSTREAM} {
+					header_up Host {http.request.host}
+					transport http {
+						tls
+						tls_server_name {http.request.host}
+					}
+				}
 			}
 		}
 	}

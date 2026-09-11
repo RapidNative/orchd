@@ -66,11 +66,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			if errors.Is(err, manager.ErrReprovisionTimeout) {
 				w.Header().Set("X-Orchd-No-Route", "1")
-				http.Error(w, "reprovision timed out", http.StatusGatewayTimeout)
+				corsError(w, "reprovision timed out", http.StatusGatewayTimeout)
 				return
 			}
 			w.Header().Set("X-Orchd-No-Route", "1")
-			http.Error(w, "no route for request", http.StatusNotFound)
+			corsError(w, "no route for request", http.StatusNotFound)
 			return
 		}
 	}
@@ -79,20 +79,25 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			w.Header().Set("X-Orchd-No-Route", "1")
-			http.Error(w, "workload not found", http.StatusNotFound)
+			corsError(w, "workload not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, r.Host, err)
 		w.Header().Set("X-Orchd-No-Route", "1")
-		http.Error(w, "workload unavailable", http.StatusBadGateway)
+		corsError(w, "workload unavailable", http.StatusBadGateway)
 		return
 	}
 
 	target := &url.URL{Scheme: "http", Host: addr}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ModifyResponse = func(resp *http.Response) error {
+		resp.Header.Del("X-Frame-Options")
+		resp.Header.Set("Content-Security-Policy", "frame-ancestors *")
+		return nil
+	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
 		log.Printf("gateway: proxy %s -> %s error: %v", workload.ID, addr, e)
-		http.Error(w, "upstream error", http.StatusBadGateway)
+		corsError(w, "upstream error", http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
 }
@@ -167,6 +172,13 @@ func parseSubroute(path string) (key, rest string, ok bool) {
 		return "", "", false
 	}
 	return key, rest, true
+}
+
+// corsError writes an error response with Access-Control-Allow-Origin so
+// browsers don't mask the real status code behind a CORS failure.
+func corsError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	http.Error(w, msg, code)
 }
 
 // hostOnly strips any port from the Host header and lowercases it.
