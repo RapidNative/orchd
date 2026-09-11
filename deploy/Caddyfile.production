@@ -50,12 +50,12 @@
 	import /etc/caddy/conf.d/{args[0]}/*.caddy
 
 	# every other subdomain -> gateway (host-based workload routing)
-	# If the gateway returns 404/502 (project not provisioned on production),
-	# redirect to the staging orchd instance at rapidnative.dev.
+	# If the gateway has no route (X-Orchd-No-Route header), redirect to the
+	# staging orchd instance at rapidnative.dev. Normal upstream 404s pass through.
 	handle {
 		reverse_proxy 127.0.0.1:8081 {
-			@staging_fallback status 404 502
-			handle_response @staging_fallback {
+			@no_route header X-Orchd-No-Route 1
+			handle_response @no_route {
 				# Caddy labels index from the right: for slug.rapidnative.app,
 				# labels.2=slug, labels.1=rapidnative, labels.0=app.
 				# Redirect slug.rapidnative.app -> slug.rapidnative.dev

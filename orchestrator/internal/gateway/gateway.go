@@ -65,9 +65,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		workload, err = g.mgr.RequestReprovision(r.Context(), hostOnly(r.Host))
 		if err != nil {
 			if errors.Is(err, manager.ErrReprovisionTimeout) {
+				w.Header().Set("X-Orchd-No-Route", "1")
 				http.Error(w, "reprovision timed out", http.StatusGatewayTimeout)
 				return
 			}
+			w.Header().Set("X-Orchd-No-Route", "1")
 			http.Error(w, "no route for request", http.StatusNotFound)
 			return
 		}
@@ -76,10 +78,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	addr, err := g.mgr.EnsureRunning(r.Context(), workload.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			w.Header().Set("X-Orchd-No-Route", "1")
 			http.Error(w, "workload not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, r.Host, err)
+		w.Header().Set("X-Orchd-No-Route", "1")
 		http.Error(w, "workload unavailable", http.StatusBadGateway)
 		return
 	}
