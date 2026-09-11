@@ -90,10 +90,21 @@ https://cloud.rapidnative.com {
 	import wildcard tinbase.dev
 }
 
-# rapidnative.app — the production pretty-domain base (<slug>.rapidnative.app,
-# <id>-preview.rapidnative.app). The apex stays on Vercel (marketing site);
-# only the wildcard points here. Same Vercel DNS-01 wildcard cert setup as
-# rnproject.dev.
+# rapidnative.dev — the staging pretty-domain base (<slug>.rapidnative.dev,
+# <id>-preview.rapidnative.dev). Production pretty-domains live on
+# rapidnative.app (served by the production orchd instance).
+*.rapidnative.dev {
+	tls {
+		dns vercel {env.VERCEL_API_TOKEN}
+		resolvers 1.1.1.1
+	}
+	import wildcard rapidnative.dev
+}
+
+# TRANSITION: existing workloads still have *.rapidnative.app routes in
+# orchd state. Keep serving them here until routes are migrated to
+# rapidnative.dev. New projects use rapidnative.dev (ORCHD_BASE_DOMAIN).
+# TODO: remove once all staging routes are migrated to rapidnative.dev.
 *.rapidnative.app {
 	tls {
 		dns vercel {env.VERCEL_API_TOKEN}
@@ -113,6 +124,10 @@ http://*.rnproject.dev {
 
 http://*.tinbase.dev {
 	import wildcard tinbase.dev
+}
+
+http://*.rapidnative.dev {
+	import wildcard rapidnative.dev
 }
 
 http://*.rapidnative.app {
