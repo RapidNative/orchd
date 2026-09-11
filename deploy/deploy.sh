@@ -3,13 +3,13 @@
 # this repo to the box, then reload services. The repo is the source of truth;
 # nothing on the server should diverge from what is tracked here.
 #
-# Usage: deploy/deploy.sh [user@host]     (default: root@167.233.215.115)
+# Usage: deploy/deploy.sh [user@host]     (default: ubuntu@103.252.242.189)
 #
 # Does NOT rebuild workload images (they change rarely) — use bootstrap.sh or
 # `docker build` on the box for that.
 set -euo pipefail
 
-HOST="${1:-root@167.233.215.115}"
+HOST="${1:-ubuntu@103.252.242.189}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
