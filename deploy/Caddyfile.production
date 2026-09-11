@@ -1,0 +1,79 @@
+# Production orchd Caddyfile.
+#
+# rapidnative.app — the production pretty-domain base (<slug>.rapidnative.app).
+# Staging previews live on rapidnative.dev (separate orchd instance).
+#
+# When a project hasn't been provisioned on production yet, we temporarily
+# redirect to the staging instance so existing links keep working during
+# the domain migration.
+{
+	auto_https disable_redirects
+	on_demand_tls {
+		ask http://127.0.0.1:8080/internal/tls-allow
+	}
+}
+
+(cloudsite) {
+	handle_path /api/* {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle /w/* {
+		reverse_proxy 127.0.0.1:8081
+	}
+	handle /admin* {
+		redir https://admin.rapidnative.app 302
+	}
+	handle {
+		root * /opt/orchd/site
+		encode gzip
+		file_server
+	}
+}
+
+(wildcard) {
+	@admin host admin.{args[0]}
+	@api host api.{args[0]}
+
+	handle @admin {
+		handle_path /api/* {
+			reverse_proxy 127.0.0.1:8080
+		}
+		handle {
+			root * /opt/orchd/admin
+			try_files {path} /index.html
+			file_server
+		}
+	}
+	handle @api {
+		reverse_proxy 127.0.0.1:8080
+	}
+	import /etc/caddy/conf.d/{args[0]}/*.caddy
+
+	# every other subdomain -> gateway (host-based workload routing)
+	# If the gateway has no route (X-Orchd-No-Route header), redirect to the
+	# staging orchd instance at rapidnative.dev. Normal upstream 404s pass through.
+	handle {
+		reverse_proxy 127.0.0.1:8081 {
+			@no_route header X-Orchd-No-Route 1
+			handle_response @no_route {
+				# Caddy labels index from the right: for slug.rapidnative.app,
+				# labels.2=slug, labels.1=rapidnative, labels.0=app.
+				# Redirect slug.rapidnative.app -> slug.rapidnative.dev
+				redir https://{http.request.host.labels.2}.rapidnative.dev{uri} 302
+			}
+		}
+	}
+}
+
+# rapidnative.app — production pretty-domain base. Wildcard DNS-01 cert.
+*.rapidnative.app {
+	tls {
+		dns vercel {env.VERCEL_API_TOKEN}
+		resolvers 1.1.1.1
+	}
+	import wildcard rapidnative.app
+}
+
+http://*.rapidnative.app {
+	import wildcard rapidnative.app
+}

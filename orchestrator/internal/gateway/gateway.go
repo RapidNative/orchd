@@ -14,16 +14,34 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
 
 type Gateway struct {
 	mgr *manager.Manager
+	// allDomains is [BaseDomain] + AltDomains. When an exact host lookup
+	// misses, the gateway tries swapping the suffix with each other domain
+	// in this list so routes registered under an old base domain still
+	// resolve after a domain rename.
+	allDomains []string
 }
 
-func New(mgr *manager.Manager) *Gateway {
-	return &Gateway{mgr: mgr}
+func New(mgr *manager.Manager, cfg ...config.Config) *Gateway {
+	g := &Gateway{mgr: mgr}
+	if len(cfg) > 0 {
+		c := cfg[0]
+		seen := map[string]bool{}
+		for _, d := range append([]string{c.BaseDomain}, c.AltDomains...) {
+			d = strings.ToLower(d)
+			if d != "" && !seen[d] {
+				g.allDomains = append(g.allDomains, d)
+				seen[d] = true
+			}
+		}
+	}
+	return g
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -47,9 +65,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		workload, err = g.mgr.RequestReprovision(r.Context(), hostOnly(r.Host))
 		if err != nil {
 			if errors.Is(err, manager.ErrReprovisionTimeout) {
+				w.Header().Set("X-Orchd-No-Route", "1")
 				http.Error(w, "reprovision timed out", http.StatusGatewayTimeout)
 				return
 			}
+			w.Header().Set("X-Orchd-No-Route", "1")
 			http.Error(w, "no route for request", http.StatusNotFound)
 			return
 		}
@@ -58,10 +78,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	addr, err := g.mgr.EnsureRunning(r.Context(), workload.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
+			w.Header().Set("X-Orchd-No-Route", "1")
 			http.Error(w, "workload not found", http.StatusNotFound)
 			return
 		}
 		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, r.Host, err)
+		w.Header().Set("X-Orchd-No-Route", "1")
 		http.Error(w, "workload unavailable", http.StatusBadGateway)
 		return
 	}
@@ -76,11 +98,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // resolve finds the workload for a request, first by Host (subdomain routing),
-// then by a /w/<key>/... path prefix (subroute routing, the interim before
-// wildcard subdomains). Subroute matches rewrite the path to strip /w/<key> so
+// then by trying domain alias substitutions (so routes registered under an old
+// base domain still match after a rename), then by a /w/<key>/... path prefix
+// (subroute routing). Subroute matches rewrite the path to strip /w/<key> so
 // the upstream sees a normal root-relative path.
 func (g *Gateway) resolve(r *http.Request) (*store.Workload, error) {
-	if wl, err := g.mgr.ResolveHost(hostOnly(r.Host)); err == nil {
+	host := hostOnly(r.Host)
+	if wl, err := g.mgr.ResolveHost(host); err == nil {
+		return wl, nil
+	}
+	// Try swapping the domain suffix with each known alias.
+	if wl, ok := g.resolveAlias(host); ok {
 		return wl, nil
 	}
 	if key, rest, ok := parseSubroute(r.URL.Path); ok {
@@ -93,6 +121,28 @@ func (g *Gateway) resolve(r *http.Request) (*store.Workload, error) {
 		return wl, nil
 	}
 	return nil, store.ErrNotFound
+}
+
+// resolveAlias tries replacing the domain suffix in host with each known
+// domain alias. For example, if host is "slug.rapidnative.dev" and
+// allDomains contains ["rapidnative.dev", "rapidnative.app"], it tries
+// looking up "slug.rapidnative.app" in the route table.
+func (g *Gateway) resolveAlias(host string) (*store.Workload, bool) {
+	for _, d := range g.allDomains {
+		if !strings.HasSuffix(host, "."+d) {
+			continue
+		}
+		prefix := host[:len(host)-len(d)] // includes trailing dot
+		for _, alt := range g.allDomains {
+			if alt == d {
+				continue
+			}
+			if wl, err := g.mgr.ResolveHost(prefix + alt); err == nil {
+				return wl, true
+			}
+		}
+	}
+	return nil, false
 }
 
 // parseSubroute splits "/w/<key>/rest..." into ("<key>", "/rest...", true).

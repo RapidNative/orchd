@@ -96,7 +96,7 @@ func main() {
 		rt.Name(), cfg.Region, cfg.BaseDomain, cfg.IdleTimeout, cfg.DataRoot, authState)
 
 	// Data plane gateway (blocks until shutdown).
-	gw := gateway.New(mgr)
+	gw := gateway.New(mgr, cfg)
 	if err := gw.Serve(ctx, cfg.GatewayAddr); err != nil {
 		log.Fatalf("gateway: %v", err)
 	}
