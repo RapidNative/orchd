@@ -82,8 +82,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			corsError(w, "workload not found", http.StatusNotFound)
 			return
 		}
+		// The host IS routed here; the workload just failed to start. Do not
+		// set X-Orchd-No-Route: the front door treats that header as "this
+		// project lives on another instance" and redirects to staging, which
+		// would send a production project's users to the wrong environment.
+		// Surface the failure as a plain 502 instead.
 		log.Printf("gateway: wake %s (%s) failed: %v", workload.ID, r.Host, err)
-		w.Header().Set("X-Orchd-No-Route", "1")
 		corsError(w, "workload unavailable", http.StatusBadGateway)
 		return
 	}
