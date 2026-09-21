@@ -14,9 +14,10 @@ import (
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
 
-// ErrReprovisionTimeout means the reprovision webhook responded but the route
-// for the host did not appear before the hold deadline. The gateway maps this
-// to 504 (distinct from a plain 404) so the client/CDN can retry.
+// ErrReprovisionTimeout means the route for the host did not appear before
+// the hold deadline — whether the reprovision webhook had already responded or
+// was still running. The gateway maps this to 504 (distinct from a plain 404)
+// so the client/CDN can retry; a reload a few seconds later usually succeeds.
 var ErrReprovisionTimeout = errors.New("reprovision timed out waiting for route")
 
 // reprovisionRequest is the body posted to the configured webhook when a host
@@ -61,20 +62,47 @@ func (m *Manager) RequestReprovision(ctx context.Context, host string) (*store.W
 	ctx, cancel := context.WithTimeout(ctx, m.cfg.ReprovisionHookTimeout)
 	defer cancel()
 
-	if err := m.postReprovisionHook(ctx, wh, host); err != nil {
-		log.Printf("reprovision: hook for %s failed: %v", host, err)
-		return nil, store.ErrNotFound
-	}
+	// Fire the hook and watch for the route in parallel. The receiver's
+	// /projects/create registers the route within seconds and then keeps the
+	// HTTP response open while it pushes files and attaches convention routes,
+	// which regularly outlasts our hold window (Vercel allows it 60s; we hold
+	// 30s). Waiting for the response before looking for the route turned that
+	// into a 404 for the first visitor even though the project already existed
+	// (109 occurrences in 7 days on staging). So: return as soon as the route
+	// exists. The hook keeps its own lifetime — an early return must not cancel
+	// the receiver's in-flight provisioning — and its outcome only matters if
+	// the route never appears.
+	hookDone := make(chan error, 1)
+	go func() {
+		hctx, hcancel := context.WithTimeout(context.WithoutCancel(ctx), m.cfg.ReprovisionHookTimeout)
+		defer hcancel()
+		hookDone <- m.postReprovisionHook(hctx, wh, host)
+	}()
 
-	// The receiver re-creates the project synchronously (its /projects/create
-	// registers the route before the async boot), so the route usually appears
-	// immediately; poll to cover the small window. EnsureRunning then waits for
-	// the boot itself.
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
+	hookPending := true
 	for {
 		if wl, err := m.ResolveHost(host); err == nil {
 			return wl, nil
+		}
+		if hookPending {
+			select {
+			case err := <-hookDone:
+				hookPending = false
+				if err != nil {
+					log.Printf("reprovision: hook for %s failed: %v", host, err)
+					return nil, store.ErrNotFound
+				}
+				// Hook succeeded but the route is not visible yet: keep polling
+				// until the deadline.
+				continue
+			case <-ctx.Done():
+				log.Printf("reprovision: hook for %s still in flight at hold deadline; route not yet registered", host)
+				return nil, ErrReprovisionTimeout
+			case <-ticker.C:
+			}
+			continue
 		}
 		select {
 		case <-ctx.Done():
