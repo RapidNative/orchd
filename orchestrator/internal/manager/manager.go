@@ -1956,9 +1956,21 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		}
 	}
 	// Precedence: platform env, then project env, then per-workload env (most specific wins).
-	env := make(map[string]string, len(m.cfg.WorkloadEnv)+1)
+	env := make(map[string]string, len(m.cfg.WorkloadEnv)+len(m.cfg.TinbaseEnv)+2)
 	for k, v := range m.cfg.WorkloadEnv {
 		env[k] = v
+	}
+	if w.Type == runtime.WorkloadTinbaseProject {
+		// The URL tinbase builds emailed links (magic link, password reset)
+		// on. Left to itself it uses its bind address, which inside the
+		// container is 0.0.0.0:<port> — unreachable from a user's mail
+		// client. Platform tinbase env and project/workload env still win.
+		if ep := m.PublicEndpoint(w); ep != "" {
+			env["TINBASE_SITE_URL"] = ep
+		}
+		for k, v := range m.cfg.TinbaseEnv {
+			env[k] = v
+		}
 	}
 	env["TINBASE_JWT_SECRET"] = w.JWTSecret
 	for k, v := range projEnv {
