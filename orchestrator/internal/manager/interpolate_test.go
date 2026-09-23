@@ -98,7 +98,7 @@ func TestInterpolateEnvTokens(t *testing.T) {
 		{"${project.ref}", proj.ID},
 		{"${base_domain}", "test.local"},
 		{"prefix-${project.ref}-suffix", "prefix-" + proj.ID + "-suffix"},
-		{"${route.missing}", ""},              // known namespace, no such sibling
+		{"${route.missing}", ""},                                         // known namespace, no such sibling
 		{"${workload.db.no_such_field}", "${workload.db.no_such_field}"}, // unknown field: untouched
 		{"${SOME_OTHER_VAR}", "${SOME_OTHER_VAR}"},                       // unknown namespace: untouched
 		{"plain value", "plain value"},
@@ -340,6 +340,52 @@ func TestSpecForPlatformEnvPrecedence(t *testing.T) {
 	}
 	if env["TINBASE_JWT_SECRET"] != "real-secret" {
 		t.Fatal("platform env must not displace the seeded JWT secret")
+	}
+}
+
+// ORCHD_TINBASE_ENV reaches tinbase workloads only: it carries the Resend key
+// for auth email, which must never land in a tenant's api container. tinbase
+// also gets its public route as TINBASE_SITE_URL so emailed links are
+// reachable, unless the platform or project says otherwise.
+func TestSpecForTinbaseOnlyEnv(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{
+		DataRoot:    t.TempDir(),
+		WorkloadEnv: map[string]string{"FROM_PLATFORM": "platform"},
+		TinbaseEnv: map[string]string{
+			"TINBASE_RESEND_API_KEY": "re_secret",
+			"TINBASE_MAIL_FROM":      "App <noreply@example.com>",
+		},
+	}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s", HostPort: 54321}
+	api := &store.Workload{ID: "api", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "api"}
+	_ = st.PutWorkload(db)
+	_ = st.PutWorkload(api)
+
+	dbEnv := m.specFor(db).Env
+	if dbEnv["TINBASE_RESEND_API_KEY"] != "re_secret" || dbEnv["TINBASE_MAIL_FROM"] != "App <noreply@example.com>" {
+		t.Fatalf("tinbase env missing from the db workload: %v", dbEnv)
+	}
+	if dbEnv["FROM_PLATFORM"] != "platform" {
+		t.Fatal("tinbase must still receive the platform-wide env")
+	}
+	if dbEnv["TINBASE_SITE_URL"] != "http://localhost:54321" {
+		t.Fatalf("tinbase should get its public endpoint as TINBASE_SITE_URL, got %q", dbEnv["TINBASE_SITE_URL"])
+	}
+
+	apiEnv := m.specFor(api).Env
+	if _, leaked := apiEnv["TINBASE_RESEND_API_KEY"]; leaked {
+		t.Fatal("the Resend key must not reach a tenant's api container")
+	}
+	if _, ok := apiEnv["TINBASE_SITE_URL"]; ok {
+		t.Fatal("TINBASE_SITE_URL is tinbase-only")
+	}
+
+	// A project can still pin its own site URL (custom domain).
+	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"TINBASE_SITE_URL": "https://db.custom.example"}})
+	if got := m.specFor(db).Env["TINBASE_SITE_URL"]; got != "https://db.custom.example" {
+		t.Fatalf("project env must override the derived site URL, got %q", got)
 	}
 }
 
