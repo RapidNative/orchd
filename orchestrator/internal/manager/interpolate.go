@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
@@ -43,6 +44,38 @@ func (m *Manager) PublicEndpoint(w *store.Workload) string {
 		return fmt.Sprintf("http://localhost:%d", w.HostPort)
 	}
 	return m.EndpointForHost(m.defaultHost(w))
+}
+
+// projectRedirectOrigins lists every origin this project is served on, as a
+// comma-separated TINBASE_URI_ALLOW_LIST for its tinbase workload.
+//
+// tinbase enforces its redirect allowlist as soon as it binds a non-loopback
+// host, which every container does. Without this, a password-reset link could
+// only ever come back to the database's own origin: the app is served on a
+// different hostname, and the project's committed config.toml cannot name
+// hostnames the platform minted after the fact. Each route contributes a `/**`
+// glob, so any path on it (a `/reset-password.html` page, an OAuth landing) is
+// a valid target while other origins stay refused.
+func (m *Manager) projectRedirectOrigins(projectID string) string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(origin string) {
+		if origin == "" || seen[origin] {
+			return
+		}
+		seen[origin] = true
+		out = append(out, strings.TrimSuffix(origin, "/")+"/**")
+	}
+	for _, s := range m.store.ListWorkloads(projectID) {
+		add(m.PublicEndpoint(s))
+		// A workload can answer on several hostnames (a project-ref route and a
+		// longer per-deployment one); PublicEndpoint only names the default.
+		for _, r := range m.store.ListRoutesForWorkload(s.ID) {
+			add(m.EndpointForHost(r.Host))
+		}
+	}
+	sort.Strings(out)
+	return strings.Join(out, ",")
 }
 
 // EndpointForHost builds the public URL for a routed hostname.

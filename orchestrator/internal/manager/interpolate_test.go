@@ -389,6 +389,46 @@ func TestSpecForTinbaseOnlyEnv(t *testing.T) {
 	}
 }
 
+// A tinbase workload must be told every origin its project is served on, or
+// tinbase's redirect allowlist (enforced on any non-loopback bind) sends a
+// password-reset link back to the database host instead of the app's page.
+func TestSpecForTinbaseRedirectAllowList(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, reapStub{})
+	proj, wls, err := m.CreateProject(context.Background(), "demo", "", []WorkloadSpec{
+		{Type: runtime.WorkloadTinbaseProject, Workspace: "db"},
+		{Type: runtime.WorkloadRapidNativeDev, Name: "web", Workspace: "web"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, web := wls[0], wls[1]
+
+	got := m.specFor(db).Env["TINBASE_URI_ALLOW_LIST"]
+	for _, want := range []string{
+		"https://" + proj.ID + ".test.local/**",     // the tinbase primary's own route
+		"https://" + proj.ID + "-web.test.local/**", // where the reset page is served
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("allow list %q is missing %q", got, want)
+		}
+	}
+
+	// An extra hostname added later (a second deployment route) must be covered
+	// too — it is a perfectly valid place for the app to be opened from.
+	if err := m.AddRoute("custom-web.test.local", web.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got := m.specFor(db).Env["TINBASE_URI_ALLOW_LIST"]; !strings.Contains(got, "https://custom-web.test.local/**") {
+		t.Fatalf("added route missing from allow list: %q", got)
+	}
+
+	// It is tinbase-only: a tenant workload has no business receiving it.
+	if _, ok := m.specFor(web).Env["TINBASE_URI_ALLOW_LIST"]; ok {
+		t.Fatal("TINBASE_URI_ALLOW_LIST must not be set on non-tinbase workloads")
+	}
+}
+
 // ORCHD_HOST_ALIASES must reach every instance spec — it's how a well-known
 // hostname (a CDN, a registry) is steered to an on-box cache for guests only.
 func TestSpecForCarriesHostAliases(t *testing.T) {

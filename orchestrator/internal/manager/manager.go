@@ -1968,6 +1968,9 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		if ep := m.PublicEndpoint(w); ep != "" {
 			env["TINBASE_SITE_URL"] = ep
 		}
+		if allow := m.projectRedirectOrigins(w.ProjectID); allow != "" {
+			env["TINBASE_URI_ALLOW_LIST"] = allow
+		}
 		for k, v := range m.cfg.TinbaseEnv {
 			env[k] = v
 		}
