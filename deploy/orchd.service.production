@@ -9,10 +9,17 @@ WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
-Environment=ORCHD_IMAGE=tinbase:0.14.0
+Environment=ORCHD_IMAGE=tinbase:0.15.0
 Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
+# Env for tinbase workloads only (never the tenant api container): the Resend
+# credentials tinbase delivers auth email with. Lives in a root-only file so the
+# key is not in this unit:
+#   ORCHD_TINBASE_ENV=TINBASE_RESEND_API_KEY=re_...,TINBASE_MAIL_FROM=RapidNative <noreply@rnproject.dev>
+# Without it, every tenant's reset/magic-link email lands in tinbase's dev
+# inbox and is never sent. Optional (leading -): orchd still boots without it.
+EnvironmentFile=-/opt/orchd/secrets/tinbase.env
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m
 Environment=ORCHD_DEV_CPUS=4
