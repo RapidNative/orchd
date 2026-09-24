@@ -19,6 +19,13 @@ Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
 #   ORCHD_TINBASE_ENV=TINBASE_RESEND_API_KEY=re_...,TINBASE_MAIL_FROM=RapidNative <noreply@rnproject.dev>
 # Without it, every tenant's reset/magic-link email lands in tinbase's dev
 # inbox and is never sent. Optional (leading -): orchd still boots without it.
+# Where tinbase workloads send auth email. The password is each project's own
+# service key, read from its env, so only the destination is set here. Leave
+# ORCHD_TINBASE_SMTP_HOST empty to keep sending via the provider directly.
+Environment=ORCHD_TINBASE_SMTP_HOST=services.rapidnative.app
+Environment=ORCHD_TINBASE_SMTP_PORT=587
+Environment=ORCHD_TINBASE_SMTP_ADMIN_EMAIL=noreply@rnproject.dev
+Environment=ORCHD_TINBASE_SMTP_SENDER_NAME=RapidNative
 EnvironmentFile=-/opt/orchd/secrets/tinbase.env
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m

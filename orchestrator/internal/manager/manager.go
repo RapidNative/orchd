@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1970,6 +1971,31 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		}
 		if allow := m.projectRedirectOrigins(w.ProjectID); allow != "" {
 			env["TINBASE_URI_ALLOW_LIST"] = allow
+		}
+		// Point tinbase's SMTP transport at the platform's mail relay, with
+		// this project's own service key as the password.
+		//
+		// Derived here rather than pushed in with the rest of a project's env
+		// because the database workload is deliberately excluded from those
+		// pushes: rebooting a tenant's database because their app's
+		// configuration changed is the worst failure mode available. The key is
+		// already in the project's env for the app workloads, so reading it
+		// here costs nothing and reboots nothing.
+		//
+		// The host and port come from the platform env (ORCHD_TINBASE_ENV),
+		// which is applied after this, so a deployment can still override any
+		// of it.
+		if key := projEnv["RAPIDNATIVE_GLOBAL_SERVICES_KEY"]; key != "" && m.cfg.TinbaseSMTPHost != "" {
+			env["TINBASE_SMTP_HOST"] = m.cfg.TinbaseSMTPHost
+			env["TINBASE_SMTP_PORT"] = strconv.Itoa(m.cfg.TinbaseSMTPPort)
+			env["TINBASE_SMTP_USER"] = "project"
+			env["TINBASE_SMTP_PASS"] = key
+			if m.cfg.TinbaseSMTPAdminEmail != "" {
+				env["TINBASE_SMTP_ADMIN_EMAIL"] = m.cfg.TinbaseSMTPAdminEmail
+			}
+			if m.cfg.TinbaseSMTPSenderName != "" {
+				env["TINBASE_SMTP_SENDER_NAME"] = m.cfg.TinbaseSMTPSenderName
+			}
 		}
 		for k, v := range m.cfg.TinbaseEnv {
 			env[k] = v
