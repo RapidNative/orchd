@@ -88,6 +88,13 @@ type Config struct {
 	// that delivers its auth emails, TINBASE_RESEND_API_KEY/TINBASE_MAIL_FROM)
 	// must not travel through WorkloadEnv.
 	TinbaseEnv map[string]string
+	// Where tinbase workloads send mail. The password is per project (its own
+	// service key), so only the destination lives here. Empty host disables the
+	// injection entirely, leaving whatever TinbaseEnv sets.
+	TinbaseSMTPHost       string
+	TinbaseSMTPPort       int
+	TinbaseSMTPAdminEmail string
+	TinbaseSMTPSenderName string
 	// BuildEnv is passed to image builds as docker build args, visible to RUN
 	// steps (installs) but absent from the built image — runtime behaviour
 	// stays governed by WorkloadEnv alone.
@@ -193,6 +200,10 @@ func Load() Config {
 		IdleTimeout:            envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
 		WorkloadEnv:            envMap("ORCHD_WORKLOAD_ENV"),
 		TinbaseEnv:             envMap("ORCHD_TINBASE_ENV"),
+		TinbaseSMTPHost:        env("ORCHD_TINBASE_SMTP_HOST", ""),
+		TinbaseSMTPPort:        envInt("ORCHD_TINBASE_SMTP_PORT", 587),
+		TinbaseSMTPAdminEmail:  env("ORCHD_TINBASE_SMTP_ADMIN_EMAIL", ""),
+		TinbaseSMTPSenderName:  env("ORCHD_TINBASE_SMTP_SENDER_NAME", ""),
 		BuildEnv:               envMap("ORCHD_BUILD_ENV"),
 		HostAliases:            envMap("ORCHD_HOST_ALIASES"),
 		Region:                 env("ORCHD_REGION", "local"),

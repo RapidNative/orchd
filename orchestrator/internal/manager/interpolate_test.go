@@ -429,6 +429,55 @@ func TestSpecForTinbaseRedirectAllowList(t *testing.T) {
 	}
 }
 
+// A tinbase workload is pointed at the platform's mail relay with the
+// project's own service key as the password — derived here rather than pushed
+// in with the app workloads' env, which deliberately skips the database.
+func TestSpecForTinbaseSMTP(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{
+		DataRoot:              t.TempDir(),
+		TinbaseSMTPHost:       "smtp.relay.test",
+		TinbaseSMTPPort:       587,
+		TinbaseSMTPAdminEmail: "noreply@relay.test",
+		TinbaseSMTPSenderName: "Platform",
+	}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"RAPIDNATIVE_GLOBAL_SERVICES_KEY": "rn_svc_abc"}})
+	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
+	api := &store.Workload{ID: "api", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "api"}
+	_ = st.PutWorkload(db)
+	_ = st.PutWorkload(api)
+
+	e := m.specFor(db).Env
+	if e["TINBASE_SMTP_HOST"] != "smtp.relay.test" || e["TINBASE_SMTP_PORT"] != "587" {
+		t.Fatalf("relay not configured: %v", e)
+	}
+	// the password is the project's own key, so the relay can attribute and cap
+	// this project alone
+	if e["TINBASE_SMTP_PASS"] != "rn_svc_abc" {
+		t.Fatalf("service key not used as the password: %q", e["TINBASE_SMTP_PASS"])
+	}
+	if e["TINBASE_SMTP_ADMIN_EMAIL"] != "noreply@relay.test" || e["TINBASE_SMTP_SENDER_NAME"] != "Platform" {
+		t.Fatalf("sender not configured: %v", e)
+	}
+	// a workload that runs tenant code must not receive it
+	if _, leaked := m.specFor(api).Env["TINBASE_SMTP_PASS"]; leaked {
+		t.Fatal("the service key must not reach a tenant's app container via SMTP vars")
+	}
+}
+
+// Without a project key there is nothing to authenticate with, so nothing is
+// injected — rather than half a configuration that fails on the first send.
+func TestSpecForTinbaseSMTPSkippedWithoutKey(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), TinbaseSMTPHost: "smtp.relay.test"}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db"}
+	_ = st.PutWorkload(db)
+	if _, ok := m.specFor(db).Env["TINBASE_SMTP_HOST"]; ok {
+		t.Fatal("SMTP configured with no key to authenticate with")
+	}
+}
+
 // ORCHD_HOST_ALIASES must reach every instance spec — it's how a well-known
 // hostname (a CDN, a registry) is steered to an on-box cache for guests only.
 func TestSpecForCarriesHostAliases(t *testing.T) {
