@@ -78,6 +78,22 @@ func (m *Manager) projectRedirectOrigins(projectID string) string {
 	return strings.Join(out, ",")
 }
 
+// projectAppEndpoint is where this project's application is served, as a user
+// would open it - the workload the scaffold calls "mobile", which is the Expo
+// dev server and answers on every route with the app's HTML shell.
+//
+// Used as tinbase's site_url, so a link that cannot be honoured sends someone
+// to the app rather than to the database's own origin. Empty when the project
+// has no such workload, and the caller then leaves site_url alone.
+func (m *Manager) projectAppEndpoint(projectID string) string {
+	for _, s := range m.store.ListWorkloads(projectID) {
+		if s.Workspace == "mobile" || s.Name == "mobile" {
+			return m.PublicEndpoint(s)
+		}
+	}
+	return ""
+}
+
 // EndpointForHost builds the public URL for a routed hostname.
 func (m *Manager) EndpointForHost(host string) string {
 	if m.cfg.PublicScheme == "https" {
