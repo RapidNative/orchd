@@ -9,7 +9,7 @@ WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
-Environment=ORCHD_IMAGE=tinbase:0.17.0
+Environment=ORCHD_IMAGE=tinbase:0.18.0
 Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
