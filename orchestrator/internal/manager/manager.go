@@ -1962,12 +1962,25 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		env[k] = v
 	}
 	if w.Type == runtime.WorkloadTinbaseProject {
-		// The URL tinbase builds emailed links (magic link, password reset)
-		// on. Left to itself it uses its bind address, which inside the
-		// container is 0.0.0.0:<port> — unreachable from a user's mail
-		// client. Platform tinbase env and project/workload env still win.
+		// Where tinbase itself answers. Emailed links are built on it, and it
+		// has to be reachable from a mail client - left to itself tinbase uses
+		// its bind address, which inside the container is 0.0.0.0:<port> and
+		// means nothing to anyone. Platform tinbase env and project/workload
+		// env still win.
 		if ep := m.PublicEndpoint(w); ep != "" {
+			env["TINBASE_API_EXTERNAL_URL"] = ep
+			// Fallback for tinbase < 0.17, which has no api_external_url and
+			// builds links on site_url. Overwritten just below when this
+			// project has an app to point at.
 			env["TINBASE_SITE_URL"] = ep
+		}
+		// Where the *app* lives: the default redirect when a link carries no
+		// redirect_to, or one the allowlist refuses. Distinct from the above,
+		// and it is the whole reason the two exist separately - pointed at the
+		// database, every fallback lands a user on the API's own root, which
+		// answers with a JSON health body rather than anything they can use.
+		if app := m.projectAppEndpoint(w.ProjectID); app != "" {
+			env["TINBASE_SITE_URL"] = app
 		}
 		if allow := m.projectRedirectOrigins(w.ProjectID); allow != "" {
 			env["TINBASE_URI_ALLOW_LIST"] = allow
@@ -2015,6 +2028,22 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	// talk to its own database.
 	m.repairProjectKeys(w.ProjectID)
 	env = m.interpolateEnv(w, env)
+	// Expo inlines only EXPO_PUBLIC_-prefixed variables into the client bundle,
+	// so EXPO_DEV_SERVER_ORIGIN - which the templates set to ${route.mobile} -
+	// is present in the container and `undefined` in the app. Code that reads it
+	// to build an absolute URL silently gets "", and a password-reset link then
+	// goes out with no redirect_to at all, landing the user on the database's
+	// own origin.
+	//
+	// Mirrored under the public name rather than renamed: the unprefixed one is
+	// Expo's own (expo-modules-core declares it), and a template or a project
+	// may already read it server-side. Set after interpolation, since before it
+	// the value is still the literal token.
+	if origin := env["EXPO_DEV_SERVER_ORIGIN"]; origin != "" {
+		if _, ok := env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"]; !ok {
+			env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"] = origin
+		}
+	}
 	// Boot-from-image: the docker driver runs the frozen, versioned image tag
 	// built for this workspace. The local/process driver ignores Image and boots
 	// from the tarball-materialized DataDir instead.

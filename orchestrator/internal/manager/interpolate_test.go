@@ -389,6 +389,87 @@ func TestSpecForTinbaseOnlyEnv(t *testing.T) {
 	}
 }
 
+// site_url is the app, api_external_url is tinbase. Collapsed into one, a link
+// that cannot be honoured sends the user to whichever of the two it was set to:
+// the database, where they get a JSON health body instead of a page.
+func TestSpecForTinbaseSiteUrlIsTheApp(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	db := &store.Workload{ID: "db", ProjectID: "p", Name: "db", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
+	mobile := &store.Workload{ID: "mob", ProjectID: "p", Name: "mobile", Type: runtime.WorkloadRapidNativeDev, Workspace: "mobile"}
+	_ = st.PutWorkload(db)
+	_ = st.PutWorkload(mobile)
+
+	env := m.specFor(db).Env
+	if got, want := env["TINBASE_API_EXTERNAL_URL"], m.PublicEndpoint(db); got != want {
+		t.Fatalf("emailed links must be built on tinbase's own endpoint: got %q want %q", got, want)
+	}
+	if got, want := env["TINBASE_SITE_URL"], m.PublicEndpoint(mobile); got != want {
+		t.Fatalf("the default redirect must be the app: got %q want %q", got, want)
+	}
+	if env["TINBASE_SITE_URL"] == env["TINBASE_API_EXTERNAL_URL"] {
+		t.Fatal("the two must differ once the project has an app workload")
+	}
+}
+
+// With no app workload there is nowhere better to point, so site_url keeps the
+// pre-split value rather than being left empty.
+func TestSpecForTinbaseSiteUrlFallsBackWithoutAnApp(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
+	_ = st.PutWorkload(db)
+
+	env := m.specFor(db).Env
+	if got, want := env["TINBASE_SITE_URL"], m.PublicEndpoint(db); got != want {
+		t.Fatalf("site_url should fall back to tinbase's endpoint, got %q", got)
+	}
+}
+
+// Expo inlines only EXPO_PUBLIC_-prefixed variables into the client bundle, so
+// the unprefixed origin reads as undefined in the app - and code building an
+// absolute URL from it sends a password-reset link with no redirect_to at all.
+func TestSpecForMirrorsExpoOriginUnderThePublicName(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	mobile := &store.Workload{
+		ID: "mob", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "mobile",
+		Env: map[string]string{"EXPO_DEV_SERVER_ORIGIN": "${route.mobile}"},
+	}
+	_ = st.PutWorkload(mobile)
+
+	env := m.specFor(mobile).Env
+	want := m.PublicEndpoint(mobile)
+	if env["EXPO_DEV_SERVER_ORIGIN"] != want {
+		t.Fatalf("the token should have resolved, got %q", env["EXPO_DEV_SERVER_ORIGIN"])
+	}
+	if got := env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"]; got != want {
+		t.Fatalf("the app can only read the prefixed name: got %q want %q", got, want)
+	}
+}
+
+// An explicit value wins: the mirror fills a gap, it does not overrule anyone.
+func TestSpecForKeepsAnExplicitPublicExpoOrigin(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p"})
+	mobile := &store.Workload{
+		ID: "mob", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "mobile",
+		Env: map[string]string{
+			"EXPO_DEV_SERVER_ORIGIN":        "${route.mobile}",
+			"EXPO_PUBLIC_DEV_SERVER_ORIGIN": "https://app.example.com",
+		},
+	}
+	_ = st.PutWorkload(mobile)
+
+	if got := m.specFor(mobile).Env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"]; got != "https://app.example.com" {
+		t.Fatalf("an explicit value must survive, got %q", got)
+	}
+}
+
 // A tinbase workload must be told every origin its project is served on, or
 // tinbase's redirect allowlist (enforced on any non-loopback bind) sends a
 // password-reset link back to the database host instead of the app's page.
