@@ -30,8 +30,10 @@ Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
 # Where tinbase workloads send auth email. The password is each project's own
 # service key, read from its env, so only the destination is set here. Leave
 # ORCHD_TINBASE_SMTP_HOST empty to keep sending via the provider directly.
+# The relay listens on 2525, not the usual 587 - nothing answers on 587, and a
+# tenant pointed there fails to send with no error until someone reads a log.
 Environment=ORCHD_TINBASE_SMTP_HOST=services.rapidnative.app
-Environment=ORCHD_TINBASE_SMTP_PORT=587
+Environment=ORCHD_TINBASE_SMTP_PORT=2525
 Environment=ORCHD_TINBASE_SMTP_ADMIN_EMAIL=noreply@rnproject.dev
 Environment=ORCHD_TINBASE_SMTP_SENDER_NAME=RapidNative
 EnvironmentFile=-/opt/orchd/secrets/tinbase.env
