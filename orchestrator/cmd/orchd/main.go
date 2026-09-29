@@ -29,6 +29,9 @@ import (
 func main() {
 	log.SetFlags(log.Ltime)
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("config: %v", err)
+	}
 
 	var st store.Store
 	var err error

@@ -60,3 +60,27 @@ func TestEnvMapParsing(t *testing.T) {
 		t.Fatalf("empty ORCHD_BUILD_ENV must yield nil, got %v", cfg.BuildEnv)
 	}
 }
+
+// A provider key in ORCHD_TINBASE_ENV alongside a configured relay would ride
+// unused into every tinbase container. That is refused at boot, where the
+// operator is looking, rather than discovered in a container inspect later.
+func TestValidateRefusesResendKeyWithRelay(t *testing.T) {
+	t.Setenv("ORCHD_TINBASE_SMTP_HOST", "services.example.com")
+	t.Setenv("ORCHD_TINBASE_ENV", "TINBASE_RESEND_API_KEY=re_x,TINBASE_MAIL_FROM=App <a@example.com>")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected Validate to refuse a Resend key next to a relay")
+	}
+
+	// Without the relay, a deployment sending directly is legitimate.
+	t.Setenv("ORCHD_TINBASE_SMTP_HOST", "")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("no relay: direct sending must be allowed, got %v", err)
+	}
+
+	// The relay alone, with nothing extra for tinbase, is the intended shape.
+	t.Setenv("ORCHD_TINBASE_SMTP_HOST", "services.example.com")
+	t.Setenv("ORCHD_TINBASE_ENV", "")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("relay without a key must be allowed, got %v", err)
+	}
+}
