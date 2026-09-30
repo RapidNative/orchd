@@ -21,21 +21,21 @@ Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFI
 # via DNS-01 — we own the domain; see tools/orchd-box/esm-cache in the website
 # repo). Guests only: public DNS untouched.
 Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
-# Env for tinbase workloads only (never the tenant api container): the Resend
-# credentials tinbase delivers auth email with. Lives in a root-only file so the
-# key is not in this unit:
-#   ORCHD_TINBASE_ENV=TINBASE_RESEND_API_KEY=re_...,TINBASE_MAIL_FROM=RapidNative <noreply@rnproject.dev>
-# Without it, every tenant's reset/magic-link email lands in tinbase's dev
-# inbox and is never sent. Optional (leading -): orchd still boots without it.
-# Where tinbase workloads send auth email. The password is each project's own
-# service key, read from its env, so only the destination is set here. Leave
-# ORCHD_TINBASE_SMTP_HOST empty to keep sending via the provider directly.
+# Where tinbase workloads send auth email: the platform relay in
+# global-services. The password is each project's own service key, read from
+# its env, so only the destination is set here. The relay holds the one
+# provider key, meters every project against its ceilings, and is the only
+# path to the provider a tenant has.
 # The relay listens on 2525, not the usual 587 - nothing answers on 587, and a
 # tenant pointed there fails to send with no error until someone reads a log.
 Environment=ORCHD_TINBASE_SMTP_HOST=services.rapidnative.app
 Environment=ORCHD_TINBASE_SMTP_PORT=2525
 Environment=ORCHD_TINBASE_SMTP_ADMIN_EMAIL=noreply@rnproject.dev
 Environment=ORCHD_TINBASE_SMTP_SENDER_NAME=RapidNative
+# Extra env for tinbase workloads only (never the tenant api container), from
+# a root-only file, as ORCHD_TINBASE_ENV=K=V,K2=V2. Nothing is needed there
+# today. It must NOT carry TINBASE_RESEND_API_KEY: with the relay above set,
+# orchd refuses to boot rather than put a provider key into every container.
 EnvironmentFile=-/opt/orchd/secrets/tinbase.env
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m

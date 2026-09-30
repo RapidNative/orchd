@@ -3,6 +3,7 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -84,9 +85,15 @@ type Config struct {
 	// TinbaseEnv is injected only into tinbase workloads, at the same
 	// precedence as WorkloadEnv. It exists because WorkloadEnv reaches every
 	// container in a project — including the tenant's api workload, which
-	// runs their code — so a platform secret tinbase needs (the Resend key
-	// that delivers its auth emails, TINBASE_RESEND_API_KEY/TINBASE_MAIL_FROM)
-	// must not travel through WorkloadEnv.
+	// runs their code — so a secret only tinbase should see must not travel
+	// through WorkloadEnv.
+	//
+	// It must not carry a mail-provider key when the relay is configured
+	// (TinbaseSMTPHost). Tinbase prefers SMTP, so the key would sit unused in
+	// every tenant container - a live provider credential inside an
+	// open-source server, billed to nobody in particular - and the one case
+	// it would be used (a project with no service key) is precisely the case
+	// that must not send on the platform's account. Validate refuses it.
 	TinbaseEnv map[string]string
 	// Where tinbase workloads send mail. The password is per project (its own
 	// service key), so only the destination lives here. Empty host disables the
@@ -239,6 +246,19 @@ func Load() Config {
 // envMap parses "K=V,K2=V2" into a map. Pairs without '=' are skipped, so a
 // typo degrades to a missing key rather than a broken boot. Values cannot
 // contain commas; the intended payload (URLs, flags) never needs them.
+// Validate rejects combinations that would boot fine and then do the wrong
+// thing quietly. Called once, right after Load.
+func (c Config) Validate() error {
+	if c.TinbaseSMTPHost != "" {
+		if _, has := c.TinbaseEnv["TINBASE_RESEND_API_KEY"]; has {
+			return fmt.Errorf("ORCHD_TINBASE_ENV carries TINBASE_RESEND_API_KEY while ORCHD_TINBASE_SMTP_HOST is set: " +
+				"tenants send through the relay, so the key would only put a provider credential into every tinbase container; " +
+				"remove it (it is usually in /opt/orchd/secrets/tinbase.env)")
+		}
+	}
+	return nil
+}
+
 func envMap(name string) map[string]string {
 	pairs := splitCSV(os.Getenv(name))
 	if len(pairs) == 0 {
