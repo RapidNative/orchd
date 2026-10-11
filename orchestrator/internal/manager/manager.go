@@ -86,8 +86,9 @@ type Manager struct {
 }
 
 type liveInstance struct {
-	addr     string
-	lastSeen time.Time
+	addr      string
+	lastSeen  time.Time
+	startedAt time.Time // when this instance (re)started; the gateway's startup window
 }
 
 // WorkloadSpec describes a workload to create within a project.
@@ -1377,6 +1378,17 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 
 func (m *Manager) Touch(workloadID string) { m.touch(workloadID) }
 
+// StartedAt is when a live workload's instance last started; zero when it
+// isn't live.
+func (m *Manager) StartedAt(workloadID string) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if li, ok := m.live[workloadID]; ok {
+		return li.startedAt
+	}
+	return time.Time{}
+}
+
 // Stats returns a live resource snapshot for a workload's instance.
 func (m *Manager) Stats(ctx context.Context, workloadID string) (runtime.Stats, error) {
 	if _, err := m.store.GetWorkload(workloadID); err != nil {
@@ -2223,7 +2235,8 @@ func (m *Manager) reclaimPath(dir string) {
 
 func (m *Manager) markLive(id, addr string) {
 	m.mu.Lock()
-	m.live[id] = &liveInstance{addr: addr, lastSeen: time.Now()}
+	now := time.Now()
+	m.live[id] = &liveInstance{addr: addr, lastSeen: now, startedAt: now}
 	delete(m.unowned, id)
 	m.mu.Unlock()
 }

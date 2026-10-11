@@ -76,6 +76,12 @@ type Config struct {
 	// orchestrator scales it to zero (suspends it).
 	IdleTimeout time.Duration
 
+	// StartupWait is how long after an instance starts the gateway keeps
+	// retrying a GET or HEAD the server refuses or resets, instead of
+	// answering 502: a dev server takes seconds to listen, and the first
+	// request after every start used to fail. 0 disables.
+	StartupWait time.Duration
+
 	// WorkloadEnv is injected into every workload's environment at the lowest
 	// precedence (project env, then per-workload env, override it). The place
 	// for platform-wide plumbing like a registry mirror
@@ -205,6 +211,7 @@ func Load() Config {
 		DockerRuntime:          env("ORCHD_DOCKER_RUNTIME", "runsc"),
 		DockerHost:             env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:            envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
+		StartupWait:            envDuration("ORCHD_GATEWAY_STARTUP_WAIT", 60*time.Second),
 		WorkloadEnv:            envMap("ORCHD_WORKLOAD_ENV"),
 		TinbaseEnv:             envMap("ORCHD_TINBASE_ENV"),
 		TinbaseSMTPHost:        env("ORCHD_TINBASE_SMTP_HOST", ""),
