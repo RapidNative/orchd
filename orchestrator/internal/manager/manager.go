@@ -1567,6 +1567,40 @@ func (m *Manager) WakeKeepWarm(ctx context.Context) {
 	}
 }
 
+// ErrNotRunning is returned by RunningAddr for a workload that is suspended,
+// stopped, or in the middle of waking or suspending.
+var ErrNotRunning = errors.New("workload is not running")
+
+// RunningAddr returns a running workload's address without the lookup counting
+// as use: it never wakes the workload, and leaves both its idle timer and its
+// project's LRU clock alone. EnsureRunning is the path for requests that are
+// use; this one is for monitoring, which would otherwise keep every workload it
+// polls awake and resident. A wake or suspend in progress reports ErrNotRunning
+// rather than waiting for it.
+func (m *Manager) RunningAddr(ctx context.Context, workloadID string) (string, error) {
+	if _, err := m.store.GetWorkload(workloadID); err != nil {
+		return "", err
+	}
+	rl := m.refLock(workloadID)
+	if !rl.TryLock() {
+		return "", ErrNotRunning
+	}
+	defer rl.Unlock()
+
+	m.mu.Lock()
+	li, ok := m.live[workloadID]
+	m.mu.Unlock()
+	if !ok {
+		return "", ErrNotRunning
+	}
+	// The live map goes stale when something outside the reaper stops an
+	// instance; the runtime has the final say.
+	if st, _ := m.rt.Status(ctx, workloadID); st != runtime.StateRunning {
+		return "", ErrNotRunning
+	}
+	return li.addr, nil
+}
+
 // ReapIdle suspends workloads idle longer than the configured timeout.
 func (m *Manager) ReapIdle(ctx context.Context) {
 	// IdleTimeout <= 0 disables scale-to-zero (everything stays warm). Required
