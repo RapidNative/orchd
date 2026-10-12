@@ -572,6 +572,7 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 			"types":          a.cfg.BackupTypes,
 			"retain_deleted": a.cfg.BackupRetainDeleted,
 			"before_reset":   a.cfg.BackupBeforeReset,
+			"before_evict":   a.cfg.BackupBeforeEvict,
 		},
 		"images_supported": a.mgr.ImagesSupported(),
 		"port_addressing":  a.cfg.PortBase > 0,

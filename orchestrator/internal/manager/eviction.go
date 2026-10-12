@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"time"
@@ -90,12 +91,37 @@ func (m *Manager) ReapLRU(ctx context.Context) {
 		if p, err := m.store.GetProject(id); err == nil {
 			la = m.projectLastActive(p)
 		}
+		if err := m.backupBeforeEvict(ctx, id); err != nil {
+			log.Printf("lru: evict %s skipped, its backup failed: %v", id, err)
+			continue
+		}
 		if err := m.DeleteProject(ctx, id); err != nil {
 			log.Printf("lru: evict %s failed: %v", id, err)
 			continue
 		}
 		log.Printf("lru: evicted %s (last active %s)", id, la.Format(time.RFC3339))
 	}
+}
+
+// backupBeforeEvict snapshots a project's backed-up workloads (config.BackupTypes)
+// before eviction deletes them. The scheduled backup usually already holds an
+// idle project's data, but not when it ran before the last writes: an orchd
+// restart resets its timer. A workload unchanged since its newest backup is
+// skipped. No-op unless BackupBeforeEvict is set and backups are enabled.
+func (m *Manager) backupBeforeEvict(ctx context.Context, projectID string) error {
+	if !m.cfg.BackupBeforeEvict || !m.BackupsEnabled() {
+		return nil
+	}
+	bk := m.backupStore()
+	for _, w := range m.store.ListWorkloads(projectID) {
+		if !m.backsUp(w.Type) || (bk != nil && unchangedSinceBackup(bk, w)) {
+			continue
+		}
+		if _, err := m.BackupWorkload(ctx, w.ID); err != nil {
+			return fmt.Errorf("%s: %w", w.ID, err)
+		}
+	}
+	return nil
 }
 
 // projectLastActive is the LRU key: LastActiveAt when set, else CreatedAt (so

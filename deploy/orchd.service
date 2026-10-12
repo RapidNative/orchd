@@ -55,6 +55,7 @@ Environment=ORCHD_BACKUP_RETAIN=7
 Environment=ORCHD_BACKUP_TYPES=tinbase-project
 Environment=ORCHD_BACKUP_RETAIN_DELETED=1
 Environment=ORCHD_BACKUP_BEFORE_RESET=true
+Environment=ORCHD_BACKUP_BEFORE_EVICT=true
 Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
 ExecStart=/opt/orchd/orchd

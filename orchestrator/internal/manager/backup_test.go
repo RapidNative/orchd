@@ -205,3 +205,84 @@ func TestResetRefusedWhenItsBackupFails(t *testing.T) {
 		t.Fatalf("reset with a failed backup returned %v, want a refusal", err)
 	}
 }
+
+// evictable adds a newer project and keeps one, so the reaper's only candidate is
+// newBackupMgr's "p" (idle since creation).
+func evictable(t *testing.T, m *Manager) {
+	t.Helper()
+	_ = m.store.PutProject(&store.Project{ID: "newer", LastActiveAt: time.Now()})
+	if err := m.SetLRUKeepMax(1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func projectExists(m *Manager, id string) bool {
+	_, err := m.store.GetProject(id)
+	return err == nil
+}
+
+func TestEvictionBacksUpFirst(t *testing.T) {
+	// The box's settings: databases only, a deleted one keeps its newest backup.
+	m := newBackupMgr(t, config.Config{
+		BackupTypes: []string{"tinbase-project"}, BackupRetainDeleted: 1, BackupBeforeEvict: true,
+		LRUBatch: 25, LRUMinAge: time.Hour,
+	})
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if projectExists(m, "p") {
+		t.Fatal("p should have been evicted")
+	}
+	if got := backupCount(t, m, "db"); got != 1 {
+		t.Fatalf("db backups after eviction = %d, want the 1 taken before the delete", got)
+	}
+	if got := backupCount(t, m, "app"); got != 0 {
+		t.Fatalf("a runner, not a backed-up type, got %d backups on eviction", got)
+	}
+}
+
+func TestEvictionSkipsABackupThatWouldHoldTheSameBytes(t *testing.T) {
+	m := newBackupMgr(t, config.Config{
+		BackupTypes: []string{"tinbase-project"}, BackupRetainDeleted: 1, BackupBeforeEvict: true,
+		LRUBatch: 25, LRUMinAge: time.Hour,
+	})
+	if _, err := m.BackupWorkload(context.Background(), "db"); err != nil {
+		t.Fatal(err)
+	}
+	backdate(t, m, "db") // the data predates its backup
+	// The stub runtime reports every workload running, so the backup above brought
+	// it back up; an idle project's workloads are suspended.
+	_ = m.store.SetWorkloadState("db", runtime.StateSuspended)
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if projectExists(m, "p") {
+		t.Fatal("p should have been evicted")
+	}
+	if got := backupCount(t, m, "db"); got != 1 {
+		t.Fatalf("db backups = %d, want the 1 that already held this data", got)
+	}
+}
+
+func TestEvictionWaitsWhenItsBackupFails(t *testing.T) {
+	m := newBackupMgr(t, config.Config{BackupBeforeEvict: true, LRUBatch: 25, LRUMinAge: time.Hour})
+	// A data dir the archive can't read makes the backup fail.
+	w, _ := m.store.GetWorkload("db")
+	w.DataDir = filepath.Join(m.cfg.DataRoot, "projects", "p", "missing")
+	_ = m.store.PutWorkload(w)
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if !projectExists(m, "p") {
+		t.Fatal("a project whose backup failed was deleted anyway")
+	}
+}
+
+func TestEvictionDoesNotBackUpByDefault(t *testing.T) {
+	m := newBackupMgr(t, config.Config{BackupRetainDeleted: -1, LRUBatch: 25, LRUMinAge: time.Hour})
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if projectExists(m, "p") {
+		t.Fatal("p should have been evicted")
+	}
+	if got := backupCount(t, m, "db"); got != 0 {
+		t.Fatalf("db backups = %d with BackupBeforeEvict off, want 0", got)
+	}
+}

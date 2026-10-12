@@ -154,6 +154,10 @@ type Config struct {
 	// BackupBeforeReset snapshots a backed-up workload before a reset wipes it,
 	// and refuses the reset when that snapshot fails.
 	BackupBeforeReset bool
+	// BackupBeforeEvict snapshots a project's backed-up workloads before the LRU
+	// reaper deletes it, so the newest backup holds its last writes even when the
+	// scheduled one ran before them; a project whose snapshot fails isn't evicted.
+	BackupBeforeEvict bool
 
 	// MetricsInterval is how often the platform metrics snapshot is published.
 	MetricsInterval time.Duration
@@ -240,6 +244,7 @@ func Load() Config {
 		BackupTypes:            splitCSV(os.Getenv("ORCHD_BACKUP_TYPES")),
 		BackupRetainDeleted:    envInt("ORCHD_BACKUP_RETAIN_DELETED", -1),
 		BackupBeforeReset:      envBool("ORCHD_BACKUP_BEFORE_RESET"),
+		BackupBeforeEvict:      envBool("ORCHD_BACKUP_BEFORE_EVICT"),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
 		LRUInterval:            envDuration("ORCHD_LRU_INTERVAL", 5*time.Minute),
