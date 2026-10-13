@@ -142,6 +142,18 @@ type Config struct {
 	BackupInterval time.Duration
 	// BackupRetain is how many backups to keep per workload.
 	BackupRetain int
+	// BackupTypes limits backups to these workload types (e.g. "tinbase-project",
+	// the only type whose data exists nowhere else when a template's files come
+	// from an outside source). Empty backs up every workload.
+	BackupTypes []string
+	// BackupRetainDeleted is how many backups a deleted workload keeps (its newest,
+	// as an archive). Negative leaves them alone, as before, when nothing pruned a
+	// deleted workload's backups and they piled up. A type outside BackupTypes
+	// keeps none.
+	BackupRetainDeleted int
+	// BackupBeforeReset snapshots a backed-up workload before a reset wipes it,
+	// and refuses the reset when that snapshot fails.
+	BackupBeforeReset bool
 
 	// MetricsInterval is how often the platform metrics snapshot is published.
 	MetricsInterval time.Duration
@@ -225,6 +237,9 @@ func Load() Config {
 		BackupDir:              env("ORCHD_BACKUP_DIR", filepath.Join(env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")), "backups")),
 		BackupInterval:         envDuration("ORCHD_BACKUP_INTERVAL", 0),
 		BackupRetain:           envInt("ORCHD_BACKUP_RETAIN", 5),
+		BackupTypes:            splitCSV(os.Getenv("ORCHD_BACKUP_TYPES")),
+		BackupRetainDeleted:    envInt("ORCHD_BACKUP_RETAIN_DELETED", -1),
+		BackupBeforeReset:      envBool("ORCHD_BACKUP_BEFORE_RESET"),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
 		LRUInterval:            envDuration("ORCHD_LRU_INTERVAL", 5*time.Minute),
