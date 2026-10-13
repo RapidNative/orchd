@@ -28,6 +28,7 @@ export interface Project {
   region: string
   env?: Record<string, string>
   created_at: string
+  last_active_at?: string
   workloads: Workload[]
 }
 

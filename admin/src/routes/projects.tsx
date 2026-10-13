@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useNavigate } from '@tanstack/react-router'
+import { useNavigate, useSearch } from '@tanstack/react-router'
 import { api } from '@/lib/api'
 import { PageHeader } from '@/components/bits'
 import { Button } from '@/components/ui/button'
@@ -9,14 +9,39 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Table, TBody, TD, TH, THead, TR } from '@/components/ui/table'
 import { IconPlus, IconRefresh, IconTrash } from '@/components/icons'
-import { Pager, SearchBox, usePaged } from '@/components/paged'
+import { Pager, SearchBox } from '@/components/paged'
 import { Select } from '@/components/ui/select'
 import { relativeTime } from '@/lib/utils'
+
+const PAGE_SIZE = 20
 
 export function Projects() {
   const qc = useQueryClient()
   const navigate = useNavigate()
-  const projects = useQuery({ queryKey: ['projects'], queryFn: api.projects, refetchInterval: 5000 })
+  // Pagination + search live in the URL (?page=&q=), so pages are shareable and
+  // the browser back button works. The server does the paging/sorting.
+  const { page, q } = useSearch({ from: '/projects' })
+  const setSearch = (next: Partial<{ page: number; q: string }>) =>
+    navigate({ to: '/projects', search: (prev) => ({ ...prev, ...next }), replace: true })
+
+  // Debounce the search input into the URL so typing doesn't refetch per keystroke.
+  const [qInput, setQInput] = useState(q)
+  useEffect(() => setQInput(q), [q])
+  useEffect(() => {
+    if (qInput === q) return
+    const t = setTimeout(() => setSearch({ q: qInput, page: 0 }), 300)
+    return () => clearTimeout(t)
+  }, [qInput]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const projects = useQuery({
+    queryKey: ['projects', 'page', page, q],
+    queryFn: () => api.projectsPage({ page, pageSize: PAGE_SIZE, q, sort: 'recent' }),
+    refetchInterval: 5000,
+  })
+  const items = projects.data?.items ?? []
+  const total = projects.data?.total ?? 0
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))
+
   const regions = useQuery({ queryKey: ['regions'], queryFn: api.regions })
   const templates = useQuery({ queryKey: ['templates'], queryFn: api.templates })
   const builtImages = useQuery({ queryKey: ['built-images'], queryFn: api.builtImages })
@@ -35,15 +60,6 @@ export function Projects() {
     },
   })
 
-  const paged = usePaged(
-    projects.data ?? [],
-    (p, q) =>
-      p.id.toLowerCase().includes(q) ||
-      (p.name ?? '').toLowerCase().includes(q) ||
-      (p.region ?? '').toLowerCase().includes(q),
-    10,
-  )
-
   return (
     <div>
       <PageHeader
@@ -51,7 +67,7 @@ export function Projects() {
         subtitle="Each project is one or more scale-to-zero workloads"
         actions={
           <>
-            <SearchBox value={paged.q} onChange={paged.setQ} placeholder="Search projects…" />
+            <SearchBox value={qInput} onChange={setQInput} placeholder="Search projects…" />
             <Select
               value={region}
               onChange={(e) => setRegion(e.target.value)}
@@ -160,7 +176,7 @@ export function Projects() {
             </TR>
           </THead>
           <TBody>
-            {paged.pageItems.map((p) => {
+            {items.map((p) => {
               const run = p.workloads.filter((w) => w.state === 'running').length
               return (
                 <TR
@@ -187,13 +203,13 @@ export function Projects() {
             })}
           </TBody>
         </Table>
-        {projects.data && projects.data.length === 0 && (
+        {!projects.isLoading && total === 0 && (
           <p className="p-6 text-sm text-muted-foreground">
-            No projects yet. Create one above.
+            {q ? `No projects match “${q}”.` : 'No projects yet. Create one above.'}
           </p>
         )}
       </Card>
-      <Pager page={paged.page} pageCount={paged.pageCount} total={paged.total} onPage={paged.setPage} />
+      <Pager page={page} pageCount={pageCount} total={total} onPage={(p) => setSearch({ page: p })} />
     </div>
   )
 }
