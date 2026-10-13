@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httputil"
 	"sort"
 	"strconv"
 	"strings"
@@ -63,6 +64,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/projects/{id}/env", a.setProjectEnv)
 	mux.HandleFunc("GET /v1/workloads/{id}/stats", a.workloadStats)
 	mux.HandleFunc("GET /v1/workloads/{id}/logs", a.workloadLogs)
+	mux.HandleFunc("/v1/workloads/{id}/proxy/{path...}", a.proxyWorkload)
 	mux.HandleFunc("GET /v1/backups", a.listBackups)
 	mux.HandleFunc("GET /v1/workloads/{id}/backups", a.listWorkloadBackups)
 	mux.HandleFunc("POST /v1/workloads/{id}/backups", a.createBackup)
@@ -548,6 +550,59 @@ func (a *API) workloadLogs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"logs": logs})
 }
 
+// forwardAuthHeader carries a proxied request's own Authorization header for
+// the workload, since Authorization itself carries the API key.
+const forwardAuthHeader = "X-Orchd-Forward-Authorization"
+
+// proxyWorkload forwards an operator's request to a running workload, for
+// monitoring: unlike the gateway, it doesn't count as use. A suspended workload
+// isn't woken (409), and a running one keeps its idle timer and its project's
+// LRU clock, so polling a workload doesn't keep it awake or resident. The API
+// key is never forwarded; a request that needs an Authorization header of its
+// own for the workload sends it as X-Orchd-Forward-Authorization.
+func (a *API) proxyWorkload(w http.ResponseWriter, r *http.Request) {
+	addr, err := a.mgr.RunningAddr(r.Context(), r.PathValue("id"))
+	if errors.Is(err, manager.ErrNotRunning) {
+		writeErr(w, http.StatusConflict, err)
+		return
+	}
+	if err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	path := "/" + r.PathValue("path")
+	forwardAuth := r.Header.Get(forwardAuthHeader)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.Out.URL.Scheme = "http"
+			pr.Out.URL.Host = addr
+			pr.Out.URL.Path = path
+			pr.Out.URL.RawPath = ""
+			pr.Out.Host = addr
+			pr.Out.Header.Del("Authorization")
+			pr.Out.Header.Del("X-API-Key")
+			pr.Out.Header.Del(forwardAuthHeader)
+			if forwardAuth != "" {
+				pr.Out.Header.Set("Authorization", forwardAuth)
+			}
+		},
+		// The API set its own CORS headers; the workload's would duplicate them,
+		// and browsers reject a response with two Allow-Origin values.
+		ModifyResponse: func(res *http.Response) error {
+			for k := range res.Header {
+				if strings.HasPrefix(k, "Access-Control-") {
+					res.Header.Del(k)
+				}
+			}
+			return nil
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			writeErr(w, http.StatusBadGateway, err)
+		},
+	}
+	proxy.ServeHTTP(w, r)
+}
+
 func (a *API) info(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"instance_name":      a.mgr.GetInstanceName(),
@@ -577,6 +632,9 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 		"images_supported": a.mgr.ImagesSupported(),
 		"port_addressing":  a.cfg.PortBase > 0,
 		"presets":          presetNames(),
+		// /v1/workloads/{id}/proxy/...: requests to a workload that never wake
+		// it or count as its use.
+		"workload_proxy": true,
 	})
 }
 

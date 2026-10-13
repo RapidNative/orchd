@@ -87,6 +87,15 @@ timeout is `ORCHD_IDLE_TIMEOUT`; `keep_warm` exempts a workload.
 loop (a dev-server websocket, a background browser tab) keeps a workload awake
 indefinitely — see ROADMAP.
 
+**Monitoring goes through the API, not the gateway.** A poller that reads a
+workload through its public hostname is use like any other request, so it keeps
+everything it polls awake and resident. `/v1/workloads/{id}/proxy/<path>` (any
+method, API key required) reaches the workload without counting as use: it
+never wakes a suspended workload (409), and leaves its idle timer and its
+project's LRU clock alone. The API key is not forwarded; put an Authorization
+header meant for the workload in `X-Orchd-Forward-Authorization`. `/v1/info`
+reports `workload_proxy: true` where this exists.
+
 ## Writing files into a running workload
 
 `PUT /v1/workloads/{id}/fs/file` (and `/fs/batch`) write into the workload.
