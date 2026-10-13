@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net"
 	"os"
@@ -86,8 +87,9 @@ type Manager struct {
 }
 
 type liveInstance struct {
-	addr     string
-	lastSeen time.Time
+	addr      string
+	lastSeen  time.Time
+	startedAt time.Time // when this instance (re)started; the gateway's startup window
 }
 
 // WorkloadSpec describes a workload to create within a project.
@@ -1377,6 +1379,17 @@ func (m *Manager) EnsureRunning(ctx context.Context, workloadID string) (string,
 
 func (m *Manager) Touch(workloadID string) { m.touch(workloadID) }
 
+// StartedAt is when a live workload's instance last started; zero when it
+// isn't live.
+func (m *Manager) StartedAt(workloadID string) time.Time {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if li, ok := m.live[workloadID]; ok {
+		return li.startedAt
+	}
+	return time.Time{}
+}
+
 // Stats returns a live resource snapshot for a workload's instance.
 func (m *Manager) Stats(ctx context.Context, workloadID string) (runtime.Stats, error) {
 	if _, err := m.store.GetWorkload(workloadID); err != nil {
@@ -1483,7 +1496,8 @@ func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
 	if _, err := m.store.GetProject(projectID); err != nil {
 		return err
 	}
-	for _, w := range m.store.ListWorkloads(projectID) {
+	workloads := m.store.ListWorkloads(projectID)
+	for _, w := range workloads {
 		_ = m.rt.Stop(ctx, w.ID)
 		m.forget(w.ID)
 		// Release driver-side state per workload, exactly like DeleteWorkload:
@@ -1502,6 +1516,9 @@ func (m *Manager) DeleteProject(ctx context.Context, projectID string) error {
 		return err
 	}
 	m.reclaimPath(filepath.Join(m.cfg.DataRoot, "projects", projectID))
+	for _, w := range workloads {
+		m.pruneDeletedBackups(w)
+	}
 	m.emit("project.deleted", projectID, "", "")
 	return nil
 }
@@ -1527,6 +1544,7 @@ func (m *Manager) DeleteWorkload(ctx context.Context, workloadID string) error {
 		return err
 	}
 	m.reclaimPath(w.DataDir)
+	m.pruneDeletedBackups(w)
 	m.emit("workload.deleted", w.ProjectID, workloadID, w.Name)
 	return nil
 }
@@ -1565,6 +1583,40 @@ func (m *Manager) WakeKeepWarm(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// ErrNotRunning is returned by RunningAddr for a workload that is suspended,
+// stopped, or in the middle of waking or suspending.
+var ErrNotRunning = errors.New("workload is not running")
+
+// RunningAddr returns a running workload's address without the lookup counting
+// as use: it never wakes the workload, and leaves both its idle timer and its
+// project's LRU clock alone. EnsureRunning is the path for requests that are
+// use; this one is for monitoring, which would otherwise keep every workload it
+// polls awake and resident. A wake or suspend in progress reports ErrNotRunning
+// rather than waiting for it.
+func (m *Manager) RunningAddr(ctx context.Context, workloadID string) (string, error) {
+	if _, err := m.store.GetWorkload(workloadID); err != nil {
+		return "", err
+	}
+	rl := m.refLock(workloadID)
+	if !rl.TryLock() {
+		return "", ErrNotRunning
+	}
+	defer rl.Unlock()
+
+	m.mu.Lock()
+	li, ok := m.live[workloadID]
+	m.mu.Unlock()
+	if !ok {
+		return "", ErrNotRunning
+	}
+	// The live map goes stale when something outside the reaper stops an
+	// instance; the runtime has the final say.
+	if st, _ := m.rt.Status(ctx, workloadID); st != runtime.StateRunning {
+		return "", ErrNotRunning
+	}
+	return li.addr, nil
 }
 
 // ReapIdle suspends workloads idle longer than the configured timeout.
@@ -1783,6 +1835,12 @@ func (m *Manager) ResetWorkload(ctx context.Context, workloadID string, delta ma
 	if err != nil {
 		return err
 	}
+	// Before the lock: BackupWorkload takes the same one.
+	if m.cfg.BackupBeforeReset && m.backsUp(w.Type) && m.BackupsEnabled() {
+		if _, err := m.BackupWorkload(ctx, workloadID); err != nil {
+			return fmt.Errorf("backup before reset failed, nothing was wiped: %w", err)
+		}
+	}
 	rl := m.refLock(workloadID)
 	rl.Lock()
 	defer rl.Unlock()
@@ -1881,6 +1939,75 @@ func (m *Manager) RestoreWorkloadWith(ctx context.Context, workloadID, backupID 
 	return nil
 }
 
+// backsUp reports whether workloads of this type are backed up (see
+// config.BackupTypes; none configured means every type).
+func (m *Manager) backsUp(t runtime.WorkloadType) bool {
+	if len(m.cfg.BackupTypes) == 0 {
+		return true
+	}
+	for _, x := range m.cfg.BackupTypes {
+		if x == string(t) {
+			return true
+		}
+	}
+	return false
+}
+
+// unchangedSinceBackup reports whether nothing in the workload's data dir
+// (outside the directories backups leave out) was written after its newest
+// backup, so another backup would hold the same bytes. No backup yet, or any
+// error walking the dir, answers false: back it up.
+func unchangedSinceBackup(bk backup.Store, w *store.Workload) bool {
+	list, err := bk.List(w.ID)
+	if err != nil || len(list) == 0 || w.DataDir == "" {
+		return false
+	}
+	since := list[0].CreatedAt // newest first
+	skip := map[string]bool{}
+	for _, e := range deltaBackupExclude {
+		skip[e] = true
+	}
+	changed := false
+	err = filepath.WalkDir(w.DataDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() && p != w.DataDir && skip[d.Name()] {
+			return filepath.SkipDir
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.ModTime().After(since) {
+			changed = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	return err == nil && !changed
+}
+
+// pruneDeletedBackups trims a deleted workload's backups, which nothing pruned
+// before: retention only ran when a new backup was made, so a deleted
+// workload's backups stayed forever. A backed-up type keeps its newest
+// BackupRetainDeleted as an archive; any other type keeps none.
+func (m *Manager) pruneDeletedBackups(w *store.Workload) {
+	bk := m.backupStore()
+	if bk == nil {
+		return
+	}
+	keep := m.cfg.BackupRetainDeleted
+	if !m.backsUp(w.Type) {
+		keep = 0
+	} else if keep < 0 {
+		return
+	}
+	if err := bk.Retain(w.ID, keep); err != nil {
+		log.Printf("prune backups of deleted workload %s: %v", w.ID, err)
+	}
+}
+
 // DeleteBackup removes a single backup.
 func (m *Manager) DeleteBackup(id string) error {
 	bk := m.backupStore()
@@ -1909,8 +2036,18 @@ func (m *Manager) RunBackupScheduler(ctx context.Context) {
 
 func (m *Manager) backupAll(ctx context.Context) {
 	// Generic: back up every workload of every project (a project's runners and
-	// its tinbase backend alike), not just tinbase.
+	// its tinbase backend alike), unless ORCHD_BACKUP_TYPES narrows it. A
+	// workload whose data hasn't changed since its newest backup is skipped: an
+	// idle one would otherwise be suspended, archived and rebooted every
+	// interval for the same bytes.
+	bk := m.backupStore()
 	for _, w := range m.store.ListWorkloads("") {
+		if !m.backsUp(w.Type) {
+			continue
+		}
+		if bk != nil && unchangedSinceBackup(bk, w) {
+			continue
+		}
 		if b, err := m.BackupWorkload(ctx, w.ID); err != nil {
 			log.Printf("backup %s: %v", w.ID, err)
 		} else {
@@ -2246,7 +2383,8 @@ func (m *Manager) reclaimPath(dir string) {
 
 func (m *Manager) markLive(id, addr string) {
 	m.mu.Lock()
-	m.live[id] = &liveInstance{addr: addr, lastSeen: time.Now()}
+	now := time.Now()
+	m.live[id] = &liveInstance{addr: addr, lastSeen: now, startedAt: now}
 	delete(m.unowned, id)
 	m.mu.Unlock()
 }

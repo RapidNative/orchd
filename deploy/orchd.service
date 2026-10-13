@@ -51,6 +51,11 @@ Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
 Environment=ORCHD_BACKUP_DIR=/opt/orchd/backups
 Environment=ORCHD_BACKUP_INTERVAL=24h
 Environment=ORCHD_BACKUP_RETAIN=7
+# Only databases: a runner's files come back from the website on every provision.
+Environment=ORCHD_BACKUP_TYPES=tinbase-project
+Environment=ORCHD_BACKUP_RETAIN_DELETED=1
+Environment=ORCHD_BACKUP_BEFORE_RESET=true
+Environment=ORCHD_BACKUP_BEFORE_EVICT=true
 Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
 ExecStart=/opt/orchd/orchd

@@ -76,6 +76,12 @@ type Config struct {
 	// orchestrator scales it to zero (suspends it).
 	IdleTimeout time.Duration
 
+	// StartupWait is how long after an instance starts the gateway keeps
+	// retrying a GET or HEAD the server refuses or resets, instead of
+	// answering 502: a dev server takes seconds to listen, and the first
+	// request after every start used to fail. 0 disables.
+	StartupWait time.Duration
+
 	// WorkloadEnv is injected into every workload's environment at the lowest
 	// precedence (project env, then per-workload env, override it). The place
 	// for platform-wide plumbing like a registry mirror
@@ -142,6 +148,22 @@ type Config struct {
 	BackupInterval time.Duration
 	// BackupRetain is how many backups to keep per workload.
 	BackupRetain int
+	// BackupTypes limits backups to these workload types (e.g. "tinbase-project",
+	// the only type whose data exists nowhere else when a template's files come
+	// from an outside source). Empty backs up every workload.
+	BackupTypes []string
+	// BackupRetainDeleted is how many backups a deleted workload keeps (its newest,
+	// as an archive). Negative leaves them alone, as before, when nothing pruned a
+	// deleted workload's backups and they piled up. A type outside BackupTypes
+	// keeps none.
+	BackupRetainDeleted int
+	// BackupBeforeReset snapshots a backed-up workload before a reset wipes it,
+	// and refuses the reset when that snapshot fails.
+	BackupBeforeReset bool
+	// BackupBeforeEvict snapshots a project's backed-up workloads before the LRU
+	// reaper deletes it, so the newest backup holds its last writes even when the
+	// scheduled one ran before them; a project whose snapshot fails isn't evicted.
+	BackupBeforeEvict bool
 
 	// MetricsInterval is how often the platform metrics snapshot is published.
 	MetricsInterval time.Duration
@@ -205,6 +227,7 @@ func Load() Config {
 		DockerRuntime:          env("ORCHD_DOCKER_RUNTIME", "runsc"),
 		DockerHost:             env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:            envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
+		StartupWait:            envDuration("ORCHD_GATEWAY_STARTUP_WAIT", 60*time.Second),
 		WorkloadEnv:            envMap("ORCHD_WORKLOAD_ENV"),
 		TinbaseEnv:             envMap("ORCHD_TINBASE_ENV"),
 		TinbaseSMTPHost:        env("ORCHD_TINBASE_SMTP_HOST", ""),
@@ -225,6 +248,10 @@ func Load() Config {
 		BackupDir:              env("ORCHD_BACKUP_DIR", filepath.Join(env("ORCHD_DATA_ROOT", filepath.Join(home, ".tinbase-cloud")), "backups")),
 		BackupInterval:         envDuration("ORCHD_BACKUP_INTERVAL", 0),
 		BackupRetain:           envInt("ORCHD_BACKUP_RETAIN", 5),
+		BackupTypes:            splitCSV(os.Getenv("ORCHD_BACKUP_TYPES")),
+		BackupRetainDeleted:    envInt("ORCHD_BACKUP_RETAIN_DELETED", -1),
+		BackupBeforeReset:      envBool("ORCHD_BACKUP_BEFORE_RESET"),
+		BackupBeforeEvict:      envBool("ORCHD_BACKUP_BEFORE_EVICT"),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
 		LRUInterval:            envDuration("ORCHD_LRU_INTERVAL", 5*time.Minute),
