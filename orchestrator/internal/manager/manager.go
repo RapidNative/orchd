@@ -1881,6 +1881,26 @@ func (m *Manager) ResetProject(ctx context.Context, projectID string, delta map[
 }
 
 func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID string) error {
+	return m.RestoreWorkloadWith(ctx, workloadID, backupID, RestoreOptions{})
+}
+
+// RestoreOptions refreshes a restored workload's files in the same step.
+type RestoreOptions struct {
+	// RefreshFiles re-materializes the workload's template/image tree, with
+	// Delta overlaid and Deleted removed, over the restored data before boot.
+	// The backup supplies the data (anything the tree doesn't contain); the
+	// tree supplies current code and config. This is how a caller restores
+	// another workload's backup into a re-created one: the backup's copies of
+	// files the caller has since changed would otherwise win.
+	RefreshFiles bool
+	Delta        map[string][]byte
+	Deleted      []string
+}
+
+// RestoreWorkloadWith restores a backup into a workload, optionally refreshing
+// its files before boot, all under the workload's lock: nothing (file sync,
+// another restore, the reaper) can land between the extract and the boot.
+func (m *Manager) RestoreWorkloadWith(ctx context.Context, workloadID, backupID string, opts RestoreOptions) error {
 	ctx = context.WithoutCancel(ctx) // restore survives caller cancellation
 	bk := m.backupStore()
 	if bk == nil {
@@ -1904,6 +1924,9 @@ func (m *Manager) RestoreWorkload(ctx context.Context, workloadID, backupID stri
 	if err := bk.Restore(backupID, w.DataDir); err != nil {
 		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
 		return fmt.Errorf("restore: %w", err)
+	}
+	if opts.RefreshFiles || len(opts.Delta) > 0 || len(opts.Deleted) > 0 {
+		m.materializeWorkload(w, opts.Delta, opts.Deleted)
 	}
 	inst, err := m.rt.Start(ctx, m.specFor(w))
 	if err != nil {

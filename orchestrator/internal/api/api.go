@@ -632,6 +632,8 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 		"images_supported": a.mgr.ImagesSupported(),
 		"port_addressing":  a.cfg.PortBase > 0,
 		"presets":          presetNames(),
+		// POST /v1/workloads/{id}/restore takes refresh_files/delta/deleted.
+		"restore_with_files": true,
 		// /v1/workloads/{id}/proxy/...: requests to a workload that never wake
 		// it or count as its use.
 		"workload_proxy": true,
@@ -681,13 +683,23 @@ func (a *API) backupProject(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) restoreWorkload(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		BackupID string `json:"backup_id"`
+		BackupID     string            `json:"backup_id"`
+		RefreshFiles bool              `json:"refresh_files,omitempty"`
+		Delta        map[string]string `json:"delta,omitempty"`
+		DeltaB64     map[string]string `json:"delta_b64,omitempty"`
+		Deleted      []string          `json:"deleted,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.BackupID == "" {
 		writeErr(w, http.StatusBadRequest, errors.New("backup_id required"))
 		return
 	}
-	if err := a.mgr.RestoreWorkload(r.Context(), r.PathValue("id"), body.BackupID); err != nil {
+	delta, err := mergeDelta(body.Delta, body.DeltaB64)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	opts := manager.RestoreOptions{RefreshFiles: body.RefreshFiles, Delta: delta, Deleted: body.Deleted}
+	if err := a.mgr.RestoreWorkloadWith(r.Context(), r.PathValue("id"), body.BackupID, opts); err != nil {
 		a.writeBackupErr(w, err)
 		return
 	}
