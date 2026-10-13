@@ -8,11 +8,15 @@ package gateway
 import (
 	"context"
 	"errors"
+	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
@@ -26,12 +30,15 @@ type Gateway struct {
 	// in this list so routes registered under an old base domain still
 	// resolve after a domain rename.
 	allDomains []string
+	// startupWait: see config.StartupWait.
+	startupWait time.Duration
 }
 
 func New(mgr *manager.Manager, cfg ...config.Config) *Gateway {
 	g := &Gateway{mgr: mgr}
 	if len(cfg) > 0 {
 		c := cfg[0]
+		g.startupWait = c.StartupWait
 		seen := map[string]bool{}
 		for _, d := range append([]string{c.BaseDomain}, c.AltDomains...) {
 			d = strings.ToLower(d)
@@ -94,6 +101,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	target := &url.URL{Scheme: "http", Host: addr}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	if g.startupWait > 0 {
+		if until := g.mgr.StartedAt(workload.ID).Add(g.startupWait); time.Now().Before(until) {
+			proxy.Transport = &startupTransport{base: http.DefaultTransport, until: until}
+		}
+	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("X-Frame-Options")
 		resp.Header.Set("Content-Security-Policy", "frame-ancestors *")
@@ -104,6 +116,48 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		corsError(w, "upstream error", http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// startupTransport retries a GET or HEAD that a just-started server refuses or
+// resets, until it answers or the startup window ends. A dev server takes
+// seconds to listen after its container starts, and Docker's port proxy
+// accepts the connection and then resets it meanwhile. Without this the first
+// request after every start (an editor open, a QR scan) got a 502, and Expo Go
+// reported a timeout. Requests with a body are never retried.
+type startupTransport struct {
+	base  http.RoundTripper
+	until time.Time
+}
+
+const startupRetryEvery = 500 * time.Millisecond
+
+func (t *startupTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for {
+		resp, err := t.base.RoundTrip(req)
+		if err == nil || !retryableStartup(req, err) || time.Now().Add(startupRetryEvery).After(t.until) {
+			return resp, err
+		}
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-time.After(startupRetryEvery):
+		}
+	}
+}
+
+// retryableStartup: a body-less GET or HEAD that failed because nothing was
+// listening yet (refused, or accepted then reset or closed before a response).
+func retryableStartup(req *http.Request, err error) bool {
+	if req.Method != http.MethodGet && req.Method != http.MethodHead {
+		return false
+	}
+	if req.Body != nil && req.Body != http.NoBody {
+		return false
+	}
+	var op *net.OpError
+	return errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
+		(errors.As(err, &op) && op.Op == "dial")
 }
 
 // resolve finds the workload for a request, first by Host (subdomain routing),
