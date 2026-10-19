@@ -106,9 +106,11 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			proxy.Transport = &startupTransport{base: http.DefaultTransport, until: until}
 		}
 	}
+	origin := r.Header.Get("Origin")
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("X-Frame-Options")
 		resp.Header.Set("Content-Security-Policy", "frame-ancestors *")
+		allowOwnOrigin(resp.Header, origin, workload.ProjectID, g.lookupHost)
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
@@ -184,6 +186,43 @@ func (g *Gateway) resolve(r *http.Request) (*store.Workload, error) {
 		return wl, nil
 	}
 	return nil, store.ErrNotFound
+}
+
+// lookupHost finds the workload a hostname routes to, by exact host or a
+// domain alias. Unlike resolve it never looks at a path or asks for a
+// reprovision.
+func (g *Gateway) lookupHost(host string) (*store.Workload, bool) {
+	if wl, err := g.mgr.ResolveHost(host); err == nil {
+		return wl, true
+	}
+	return g.resolveAlias(host)
+}
+
+// allowOwnOrigin lets a project's own pages read its responses. An app's
+// screens and its API are separate routes (<ref>.<domain> and
+// <ref>-api.<domain>, or custom domains), so every call between them is
+// cross-origin, and the app's server rarely sets CORS itself. The preflight is
+// answered above, so the request runs, and then the browser drops the
+// response ("Load failed" in Safari, "Failed to fetch" in Chrome). An Origin
+// that routes to a workload of the same project gets it echoed back in
+// Access-Control-Allow-Origin; any other site still can't read the response,
+// and no credentials are allowed. An upstream that sets its own CORS header is
+// left alone.
+func allowOwnOrigin(h http.Header, origin, projectID string, lookup func(host string) (*store.Workload, bool)) {
+	if h.Get("Access-Control-Allow-Origin") != "" {
+		return
+	}
+	h.Add("Vary", "Origin")
+	if origin == "" || projectID == "" {
+		return
+	}
+	u, err := url.Parse(origin)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+		return
+	}
+	if wl, ok := lookup(hostOnly(u.Host)); ok && wl.ProjectID == projectID {
+		h.Set("Access-Control-Allow-Origin", origin)
+	}
 }
 
 // resolveAlias tries replacing the domain suffix in host with each known
