@@ -6,12 +6,20 @@
 # gateway, and on-box services through the bridge gateway address, which is
 # host traffic, not forwarded), so drop it.
 #
+# Firecracker guests (ORCHD_FC_WORKLOADS) are not on docker0: each sits behind
+# a host veth named vh<idx> on 10.201.0.0/16, and fc_host.go appends FORWARD
+# ACCEPTs for that subnet so the guests get egress. Without the vh+ rules
+# below a guest could still reach any docker0 container or any other guest.
+# Guests' legitimate traffic is host-bound (10.201.255.1, 172.17.0.1) or
+# internet-bound and never matches "-o docker0" / "-o vh+". The rules are
+# inert on a box that runs no microVMs.
+#
 # br_netfilter is required: without it, traffic between two ports of the same
-# bridge is switched at layer 2 and never reaches iptables, so the rule below
-# matches nothing. DOCKER-USER is the chain Docker reserves for operator rules
-# and leaves alone across daemon restarts. Idempotent: -C before -I.
+# bridge is switched at layer 2 and never reaches iptables, so the docker0
+# rule matches nothing. DOCKER-USER is the chain Docker reserves for operator
+# rules and leaves alone across daemon restarts. Idempotent: -C before -I.
 [Unit]
-Description=orchd tenant isolation (no container-to-container traffic on docker0)
+Description=orchd tenant isolation (no container-to-container traffic on docker0 or Firecracker veths)
 After=docker.service
 Requires=docker.service
 PartOf=docker.service
@@ -21,7 +29,7 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=/usr/sbin/modprobe br_netfilter
 ExecStart=/usr/sbin/sysctl -q -w net.bridge.bridge-nf-call-iptables=1
-ExecStart=/bin/sh -c 'R="DOCKER-USER -i docker0 -o docker0 -m comment --comment orchd-tenant-isolation -j DROP"; iptables -C $R 2>/dev/null || iptables -I $R'
+ExecStart=/bin/sh -c 'for p in "-i docker0 -o docker0" "-i vh+ -o docker0" "-i docker0 -o vh+" "-i vh+ -o vh+"; do R="DOCKER-USER $p -m comment --comment orchd-tenant-isolation -j DROP"; iptables -C $R 2>/dev/null || iptables -I $R; done'
 
 [Install]
 WantedBy=multi-user.target docker.service
