@@ -48,8 +48,11 @@ scp -q deploy/Caddyfile     "$HOST:/etc/caddy/Caddyfile"
 scp -q deploy/orchd.service "$HOST:/etc/systemd/system/orchd.service"
 scp -q deploy/caddy.service "$HOST:/etc/systemd/system/caddy.service"
 scp -q deploy/orchd-isolation.service "$HOST:/etc/systemd/system/orchd-isolation.service"
+scp -q deploy/orchd-local-routes.service "$HOST:/etc/systemd/system/orchd-local-routes.service"
+scp -q deploy/orchd-local-routes.timer   "$HOST:/etc/systemd/system/orchd-local-routes.timer"
+ssh "$HOST" 'systemctl daemon-reload && systemctl enable -q --now orchd-local-routes.timer && systemctl start orchd-local-routes'
 # before bootstrap.sh has installed Docker this fails; bootstrap enables it then
-ssh "$HOST" 'systemctl daemon-reload && systemctl enable -q orchd-isolation && systemctl restart orchd-isolation' \
+ssh "$HOST" 'systemctl enable -q orchd-isolation && systemctl restart orchd-isolation' \
   || echo "orchd-isolation not started (no Docker yet?); bootstrap.sh enables it"
 
 say "deploy orchd binary (stop -> copy -> start; tenant containers keep running)"
