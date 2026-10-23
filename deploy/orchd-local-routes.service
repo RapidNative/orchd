@@ -1,0 +1,26 @@
+# /etc/systemd/system/orchd-local-routes.service
+# Keep replies to local containers and microVMs on the box.
+#
+# A workload talks to its siblings by public URL (<ref>-db.<domain>), which
+# resolves to this box's own public IP. The SYN arrives from docker0 (or a
+# Firecracker veth); the reply is sent from the public IP. On a box with
+# policy routing per NIC (staging: "from <public /27> lookup 1", default via
+# the uplink) that reply leaves through the uplink and never reaches the
+# container, so every server-side call to a sibling times out after 10s
+# (tasker item-mvf3gt1z-coup9, 2026-10-19).
+#
+# These two rules run ahead of any per-NIC rule and send traffic to the
+# container subnets through the main table, where docker0 and the vh veths
+# live. On a single-NIC box they change nothing.
+#
+# `netplan apply` flushes routing-policy rules it does not own (it did on
+# staging on 2026-10-21), so this is a plain oneshot re-run every minute by
+# orchd-local-routes.timer; each run is a no-op when the rules exist.
+[Unit]
+Description=orchd: route replies to local container subnets via the main table
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'for n in 172.17.0.0/16 10.201.0.0/16; do ip rule show | grep -q "to $n lookup main" || ip rule add to $n lookup main priority 900; done'

@@ -1,0 +1,12 @@
+# /etc/systemd/system/orchd-local-routes.timer
+# Re-applies orchd-local-routes.service every minute (see its header).
+[Unit]
+Description=orchd: re-apply local container return routes every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1min
+AccuracySec=10s
+
+[Install]
+WantedBy=timers.target
