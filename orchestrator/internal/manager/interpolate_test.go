@@ -546,6 +546,43 @@ func TestSpecForTinbaseSMTP(t *testing.T) {
 	}
 }
 
+// A tinbase workload's Twilio provider is pointed at the platform's SMS
+// gateway, with the project id as the account sid and its own service key as
+// the auth token - the same derivation as SMTP, for the same reasons.
+func TestSpecForTinbaseSMS(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{
+		DataRoot:         t.TempDir(),
+		TinbaseSMSAPIURL: "https://services.test/twilio",
+	}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"RAPIDNATIVE_GLOBAL_SERVICES_KEY": "rn_svc_abc"}})
+	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
+	api := &store.Workload{ID: "api", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "api"}
+	_ = st.PutWorkload(db)
+	_ = st.PutWorkload(api)
+
+	e := m.specFor(db).Env
+	if e["TINBASE_SMS_TWILIO_API_URL"] != "https://services.test/twilio" {
+		t.Fatalf("gateway not configured: %v", e)
+	}
+	if e["TINBASE_SMS_TWILIO_ACCOUNT_SID"] != "p" {
+		t.Fatalf("project id not used as the account sid: %q", e["TINBASE_SMS_TWILIO_ACCOUNT_SID"])
+	}
+	if e["TINBASE_SMS_TWILIO_AUTH_TOKEN"] != "rn_svc_abc" {
+		t.Fatalf("service key not used as the auth token: %q", e["TINBASE_SMS_TWILIO_AUTH_TOKEN"])
+	}
+	if _, leaked := m.specFor(api).Env["TINBASE_SMS_TWILIO_AUTH_TOKEN"]; leaked {
+		t.Fatal("the service key must not reach a tenant's app container via SMS vars")
+	}
+
+	// No gateway configured: nothing is injected, so a project's own
+	// [auth.sms.twilio] (or nothing) is what tinbase sees.
+	off := New(config.Config{DataRoot: t.TempDir()}, st, nil)
+	if _, ok := off.specFor(db).Env["TINBASE_SMS_TWILIO_API_URL"]; ok {
+		t.Fatal("SMS gateway injected with ORCHD_TINBASE_SMS_API_URL unset")
+	}
+}
+
 // Without a project key there is nothing to authenticate with, so nothing is
 // injected — rather than half a configuration that fails on the first send.
 func TestSpecForTinbaseSMTPSkippedWithoutKey(t *testing.T) {
@@ -556,6 +593,10 @@ func TestSpecForTinbaseSMTPSkippedWithoutKey(t *testing.T) {
 	_ = st.PutWorkload(db)
 	if _, ok := m.specFor(db).Env["TINBASE_SMTP_HOST"]; ok {
 		t.Fatal("SMTP configured with no key to authenticate with")
+	}
+	sms := New(config.Config{DataRoot: t.TempDir(), TinbaseSMSAPIURL: "https://services.test/twilio"}, st, nil)
+	if _, ok := sms.specFor(db).Env["TINBASE_SMS_TWILIO_API_URL"]; ok {
+		t.Fatal("SMS gateway configured with no key to authenticate with")
 	}
 }
 

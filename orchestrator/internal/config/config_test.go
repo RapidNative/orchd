@@ -84,3 +84,32 @@ func TestValidateRefusesResendKeyWithRelay(t *testing.T) {
 		t.Fatalf("relay without a key must be allowed, got %v", err)
 	}
 }
+
+// The same refusal for SMS: a Twilio credential in ORCHD_TINBASE_ENV next to a
+// configured gateway would override the per-project auth token in every
+// container with one shared provider secret.
+func TestValidateRefusesTwilioTokenWithGateway(t *testing.T) {
+	t.Setenv("ORCHD_TINBASE_SMS_API_URL", "https://services.example.com/twilio")
+	t.Setenv("ORCHD_TINBASE_ENV", "TINBASE_SMS_TWILIO_AUTH_TOKEN=tok")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected Validate to refuse a Twilio token next to the gateway")
+	}
+	t.Setenv("ORCHD_TINBASE_ENV", "TINBASE_SMS_TWILIO_ACCOUNT_SID=ACx")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected Validate to refuse a Twilio account sid next to the gateway")
+	}
+
+	// Without the gateway, a deployment pointing every tenant at one Twilio
+	// account directly is its own decision.
+	t.Setenv("ORCHD_TINBASE_SMS_API_URL", "")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("no gateway: direct Twilio must be allowed, got %v", err)
+	}
+
+	// The gateway alone is the intended shape.
+	t.Setenv("ORCHD_TINBASE_SMS_API_URL", "https://services.example.com/twilio")
+	t.Setenv("ORCHD_TINBASE_ENV", "")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("gateway without a token must be allowed, got %v", err)
+	}
+}
