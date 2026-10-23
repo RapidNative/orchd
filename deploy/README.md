@@ -10,6 +10,7 @@ the source of truth; nothing on the server should diverge from what is here.
 | `/etc/caddy/Caddyfile` | `Caddyfile` | front door: TLS, routing (see below) |
 | `/etc/systemd/system/orchd.service` | `orchd.service` | orchestrator service unit |
 | `/etc/systemd/system/caddy.service` | `caddy.service` | Caddy service unit |
+| `/etc/systemd/system/orchd-isolation.service` | `orchd-isolation.service` | blocks container-to-container traffic between tenants (see the unit's header) |
 | `/opt/orchd/images/*/Dockerfile` | `../orchestrator/images/*` | workload images |
 | `/opt/orchd/admin/` | `../admin` (Vite app; `dist/` deployed) | admin UI SPA |
 | `/opt/orchd/site/` | `../site` (Next.js; `out/` deployed) | public site + docs |
