@@ -46,5 +46,5 @@ docker build -t rn-expo:dev    /opt/orchd/images/rn-expo
 
 # 6. enable + start services (needs unit files + orchd binary synced first)
 systemctl daemon-reload
-systemctl enable --now caddy orchd
+systemctl enable --now orchd-isolation caddy orchd
 echo "bootstrap complete: orchd=$(systemctl is-active orchd) caddy=$(systemctl is-active caddy)"

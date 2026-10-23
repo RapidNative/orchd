@@ -47,6 +47,10 @@ say "sync system configs"
 scp -q deploy/Caddyfile     "$HOST:/etc/caddy/Caddyfile"
 scp -q deploy/orchd.service "$HOST:/etc/systemd/system/orchd.service"
 scp -q deploy/caddy.service "$HOST:/etc/systemd/system/caddy.service"
+scp -q deploy/orchd-isolation.service "$HOST:/etc/systemd/system/orchd-isolation.service"
+# before bootstrap.sh has installed Docker this fails; bootstrap enables it then
+ssh "$HOST" 'systemctl daemon-reload && systemctl enable -q orchd-isolation && systemctl restart orchd-isolation' \
+  || echo "orchd-isolation not started (no Docker yet?); bootstrap.sh enables it"
 
 say "deploy orchd binary (stop -> copy -> start; tenant containers keep running)"
 ssh "$HOST" 'systemctl stop orchd'

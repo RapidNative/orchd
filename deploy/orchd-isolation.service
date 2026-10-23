@@ -1,0 +1,27 @@
+# /etc/systemd/system/orchd-isolation.service
+# Tenant workloads share the docker0 bridge, which Docker creates with
+# inter-container traffic allowed: any container could open any port on any
+# other tenant's container directly, including ports the gateway never routes.
+# Nothing legitimate needs that path (workloads reach each other through the
+# gateway, and on-box services through the bridge gateway address, which is
+# host traffic, not forwarded), so drop it.
+#
+# br_netfilter is required: without it, traffic between two ports of the same
+# bridge is switched at layer 2 and never reaches iptables, so the rule below
+# matches nothing. DOCKER-USER is the chain Docker reserves for operator rules
+# and leaves alone across daemon restarts. Idempotent: -C before -I.
+[Unit]
+Description=orchd tenant isolation (no container-to-container traffic on docker0)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/modprobe br_netfilter
+ExecStart=/usr/sbin/sysctl -q -w net.bridge.bridge-nf-call-iptables=1
+ExecStart=/bin/sh -c 'R="DOCKER-USER -i docker0 -o docker0 -m comment --comment orchd-tenant-isolation -j DROP"; iptables -C $R 2>/dev/null || iptables -I $R'
+
+[Install]
+WantedBy=multi-user.target docker.service
