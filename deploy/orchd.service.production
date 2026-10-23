@@ -9,7 +9,7 @@ WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
-Environment=ORCHD_IMAGE=tinbase:0.20.0
+Environment=ORCHD_IMAGE=tinbase:0.21.0
 Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
@@ -24,10 +24,17 @@ Environment=ORCHD_TINBASE_SMTP_HOST=services.rapidnative.app
 Environment=ORCHD_TINBASE_SMTP_PORT=2525
 Environment=ORCHD_TINBASE_SMTP_ADMIN_EMAIL=noreply@rnproject.dev
 Environment=ORCHD_TINBASE_SMTP_SENDER_NAME=RapidNative
+# Phone-OTP texts: tinbase's Twilio provider is pointed at the services host's
+# Twilio-shaped gateway, with the project id as the account sid and the
+# project's own service key as the auth token. The real Twilio credential
+# lives only on the services box. Like SMTP, it is set when the db workload
+# is created, so only projects created after this reach the gateway.
+Environment=ORCHD_TINBASE_SMS_API_URL=https://services.rapidnative.app/twilio
 # Extra env for tinbase workloads only (never the tenant api container), from
 # a root-only file, as ORCHD_TINBASE_ENV=K=V,K2=V2. Nothing is needed there
-# today. It must NOT carry TINBASE_RESEND_API_KEY: with the relay above set,
-# orchd refuses to boot rather than put a provider key into every container.
+# today. It must NOT carry TINBASE_RESEND_API_KEY or TINBASE_SMS_TWILIO_*
+# credentials: with the relay and gateway above set, orchd refuses to boot
+# rather than put a provider key into every container.
 EnvironmentFile=-/opt/orchd/secrets/tinbase.env
 Environment=ORCHD_DOCKER_RUNTIME=runsc
 Environment=ORCHD_IDLE_TIMEOUT=15m

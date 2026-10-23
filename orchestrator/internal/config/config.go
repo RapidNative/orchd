@@ -108,6 +108,13 @@ type Config struct {
 	TinbaseSMTPPort       int
 	TinbaseSMTPAdminEmail string
 	TinbaseSMTPSenderName string
+	// Where tinbase workloads send phone-OTP texts: the base URL of a
+	// Twilio-compatible API (the services host's /twilio route), which
+	// tinbase's [auth.sms.twilio] provider posts to as if it were Twilio. The
+	// "account sid" is the project id and the "auth token" its own service
+	// key, so the gateway attributes and caps each project; the real Twilio
+	// credential never leaves the gateway. Empty disables the injection.
+	TinbaseSMSAPIURL string
 	// BuildEnv is passed to image builds as docker build args, visible to RUN
 	// steps (installs) but absent from the built image — runtime behaviour
 	// stays governed by WorkloadEnv alone.
@@ -223,7 +230,7 @@ func Load() Config {
 		Driver:                 env("ORCHD_DRIVER", "local"),
 		TinbaseBin:             env("ORCHD_TINBASE_BIN", "tinbase"),
 		Engine:                 env("ORCHD_ENGINE", ""),
-		Image:                  env("ORCHD_IMAGE", "tinbase:0.20.0"),
+		Image:                  env("ORCHD_IMAGE", "tinbase:0.21.0"),
 		DockerRuntime:          env("ORCHD_DOCKER_RUNTIME", "runsc"),
 		DockerHost:             env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:            envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
@@ -234,6 +241,7 @@ func Load() Config {
 		TinbaseSMTPPort:        envInt("ORCHD_TINBASE_SMTP_PORT", 587),
 		TinbaseSMTPAdminEmail:  env("ORCHD_TINBASE_SMTP_ADMIN_EMAIL", ""),
 		TinbaseSMTPSenderName:  env("ORCHD_TINBASE_SMTP_SENDER_NAME", ""),
+		TinbaseSMSAPIURL:       env("ORCHD_TINBASE_SMS_API_URL", ""),
 		BuildEnv:               envMap("ORCHD_BUILD_ENV"),
 		HostAliases:            envMap("ORCHD_HOST_ALIASES"),
 		Region:                 env("ORCHD_REGION", "local"),
@@ -281,6 +289,19 @@ func (c Config) Validate() error {
 			return fmt.Errorf("ORCHD_TINBASE_ENV carries TINBASE_RESEND_API_KEY while ORCHD_TINBASE_SMTP_HOST is set: " +
 				"tenants send through the relay, so the key would only put a provider credential into every tinbase container; " +
 				"remove it (it is usually in /opt/orchd/secrets/tinbase.env)")
+		}
+	}
+	// Same rule for SMS: with the gateway set, every tenant's "Twilio" is the
+	// gateway, authenticated by the project's own key. A real Twilio token in
+	// the tinbase env would override that per project into a shared
+	// provider credential sitting in every container, billed to nobody.
+	if c.TinbaseSMSAPIURL != "" {
+		for _, k := range []string{"TINBASE_SMS_TWILIO_AUTH_TOKEN", "TINBASE_SMS_TWILIO_ACCOUNT_SID"} {
+			if _, has := c.TinbaseEnv[k]; has {
+				return fmt.Errorf("ORCHD_TINBASE_ENV carries %s while ORCHD_TINBASE_SMS_API_URL is set: "+
+					"tenants send through the gateway with their own service key, so a Twilio credential would only sit in every tinbase container; "+
+					"remove it (it is usually in /opt/orchd/secrets/tinbase.env)", k)
+			}
 		}
 	}
 	return nil

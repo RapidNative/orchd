@@ -2170,6 +2170,17 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 				env["TINBASE_SMTP_SENDER_NAME"] = m.cfg.TinbaseSMTPSenderName
 			}
 		}
+		// Point tinbase's Twilio provider at the platform's SMS gateway the
+		// same way: the project id is the "account sid", its service key the
+		// "auth token". tinbase fills whatever a project's [auth.sms.twilio]
+		// block leaves empty from these, so a project that turns phone auth
+		// on in config.toml sends through the gateway with nothing else to
+		// configure, and one with its own Twilio account overrides all three.
+		if key := projEnv["RAPIDNATIVE_GLOBAL_SERVICES_KEY"]; key != "" && m.cfg.TinbaseSMSAPIURL != "" {
+			env["TINBASE_SMS_TWILIO_ACCOUNT_SID"] = w.ProjectID
+			env["TINBASE_SMS_TWILIO_AUTH_TOKEN"] = key
+			env["TINBASE_SMS_TWILIO_API_URL"] = m.cfg.TinbaseSMSAPIURL
+		}
 		for k, v := range m.cfg.TinbaseEnv {
 			env[k] = v
 		}
