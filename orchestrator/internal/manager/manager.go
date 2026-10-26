@@ -927,6 +927,63 @@ func (m *Manager) SetWorkloadEnv(ctx context.Context, workloadID string, env map
 	return nil
 }
 
+// ErrImageMismatch: the requested image cannot run this workload (no such
+// version of its template, or the version has no image for its workspace).
+var ErrImageMismatch = errors.New("image does not fit this workload")
+
+// SetWorkloadImage moves a workload to another frozen image version of its
+// template. Nothing else changes: /data (the workspace tree and, for a dev
+// workload, everything the app wrote) is remounted as is, and sibling
+// workloads (its database) are untouched.
+//
+// A running workload is recreated on the new image now. A suspended one is
+// left asleep: the docker driver recreates a container whose image differs
+// from its spec on the next wake (DockerDriver.Start), so moving a fleet does
+// not boot it. Returns "unchanged", "restarted" or "next_wake".
+func (m *Manager) SetWorkloadImage(ctx context.Context, workloadID, version string) (string, error) {
+	w, err := m.store.GetWorkload(workloadID)
+	if err != nil {
+		return "", err
+	}
+	if w.Template == "" || w.ImageVer == "" {
+		return "", fmt.Errorf("%w: workload %s is not booted from a frozen image", ErrImageMismatch, workloadID)
+	}
+	if w.ImageVer == version {
+		return "unchanged", nil
+	}
+	im, err := m.store.GetImage(w.Template, version)
+	if err != nil {
+		return "", fmt.Errorf("%w: %s: %v", ErrImageMismatch, store.ImageID(w.Template, version), err)
+	}
+	fits := false
+	for _, iw := range im.Workloads {
+		if iw.Workspace == w.Workspace {
+			fits = true
+			break
+		}
+	}
+	if !fits {
+		return "", fmt.Errorf("%w: %s has no %q workspace", ErrImageMismatch, store.ImageID(w.Template, version), w.Workspace)
+	}
+	running := false
+	if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
+		running = true
+	}
+	from := w.ImageVer
+	w.ImageVer = version
+	if err := m.store.PutWorkload(w); err != nil {
+		return "", err
+	}
+	m.emit("workload.image_updated", w.ProjectID, workloadID, from+" -> "+version)
+	if !running {
+		return "next_wake", nil
+	}
+	if err := m.rebootWorkload(ctx, w); err != nil {
+		return "", err
+	}
+	return "restarted", nil
+}
+
 // SetProjectEnv replaces a project's env (injected into every workload) and
 // restarts its workloads to apply.
 func (m *Manager) SetProjectEnv(ctx context.Context, projectID string, env map[string]string) error {

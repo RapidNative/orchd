@@ -53,6 +53,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("DELETE /v1/routes", a.removeRoute)
 	mux.HandleFunc("POST /v1/workloads/{id}/keepwarm", a.setKeepWarm)
 	mux.HandleFunc("PUT /v1/workloads/{id}/env", a.setWorkloadEnv)
+	mux.HandleFunc("PUT /v1/workloads/{id}/image", a.setWorkloadImage)
 	mux.HandleFunc("POST /v1/workloads/{id}/start", a.workloadStart)
 	mux.HandleFunc("POST /v1/workloads/{id}/stop", a.workloadStop)
 	mux.HandleFunc("POST /v1/workloads/{id}/restart", a.workloadRestart)
@@ -504,6 +505,28 @@ func (a *API) setWorkloadEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"env": body.Env})
+}
+
+// setWorkloadImage moves a workload to another image version of its template
+// ({"version": "v56"}). Running: recreated now. Suspended: on its next wake.
+func (a *API) setWorkloadImage(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Version == "" {
+		writeErr(w, http.StatusBadRequest, errors.New(`body must be {"version": "<image version>"}`))
+		return
+	}
+	applied, err := a.mgr.SetWorkloadImage(r.Context(), r.PathValue("id"), body.Version)
+	if errors.Is(err, manager.ErrImageMismatch) {
+		writeErr(w, http.StatusBadRequest, err)
+		return
+	}
+	if err != nil {
+		a.writeLookupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"image_version": body.Version, "applied": applied})
 }
 
 func (a *API) setKeepWarm(w http.ResponseWriter, r *http.Request) {
