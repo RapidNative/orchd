@@ -158,6 +158,11 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify({ env }),
     }),
+  setWorkloadImage: (id: string, version: string) =>
+    req<{ image_version: string; applied: 'restarted' | 'next_wake' | 'unchanged' }>('/v1/workloads/' + id + '/image', {
+      method: 'PUT',
+      body: JSON.stringify({ version }),
+    }),
   startWorkload: (id: string) => req('/v1/workloads/' + id + '/start', { method: 'POST' }),
   stopWorkload: (id: string) => req('/v1/workloads/' + id + '/stop', { method: 'POST' }),
   restartWorkload: (id: string) => req('/v1/workloads/' + id + '/restart', { method: 'POST' }),

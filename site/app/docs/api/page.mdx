@@ -102,6 +102,17 @@ Boot, halt or reboot one workload. A stopped workload is not woken by traffic.
 ### `PUT /v1/workloads/{id}/env` — *admin*
 Replace the workload's environment variables. Reboots it to apply.
 
+### `PUT /v1/workloads/{id}/image` — *admin*
+Move a workload booted from a frozen image to another version of its template's image. Its data
+volume and sibling workloads are untouched. A running workload is recreated on the new image now; a
+suspended one stays asleep and is recreated on the new image at its next wake, so moving many
+workloads boots none of them. `400` when that version doesn't exist or has no image for the
+workload's workspace.
+
+```jsonc
+{ "version": "v56" }   // -> { "image_version": "v56", "applied": "next_wake" }  // or "restarted", "unchanged"
+```
+
 ### `POST /v1/workloads/{id}/keepwarm` — *admin*
 Toggle always-on. Enabling boots it now and exempts it from scale-to-zero.
 
