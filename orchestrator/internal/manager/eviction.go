@@ -105,21 +105,29 @@ func (m *Manager) ReapLRU(ctx context.Context) {
 
 // backupBeforeEvict snapshots a project's backed-up workloads (config.BackupTypes)
 // before eviction deletes them. The scheduled backup usually already holds an
-// idle project's data, but not when it ran before the last writes: an orchd
-// restart resets its timer. A workload unchanged since its newest backup is
-// skipped. No-op unless BackupBeforeEvict is set and backups are enabled.
+// idle project's data, but not when it ran before the last writes. A database
+// is covered by its sealed dump, else exported offline; any other workload
+// unchanged since its newest backup is skipped. No-op unless BackupBeforeEvict
+// is set and backups are enabled.
 func (m *Manager) backupBeforeEvict(ctx context.Context, projectID string) error {
 	if !m.cfg.BackupBeforeEvict || !m.BackupsEnabled() {
 		return nil
 	}
 	bk := m.backupStore()
 	for _, w := range m.store.ListWorkloads(projectID) {
-		if !m.backsUp(w.Type) || (bk != nil && unchangedSinceBackup(bk, w)) {
+		if !m.backsUp(w.Type) {
 			continue
 		}
 		// The dump taken when it went idle is still its exact contents: stored,
-		// or nothing to store because it held only its seed.
-		if m.dumps(w.Type) && dumpCurrent(w) {
+		// or nothing to store because it held only its seed. Without one, an
+		// export that fails keeps the project on the box.
+		if m.dumps(w.Type) {
+			if err := m.dailyDump(ctx, w); err != nil {
+				return fmt.Errorf("%s: %w", w.ID, err)
+			}
+			continue
+		}
+		if bk != nil && unchangedSinceBackup(bk, w) {
 			continue
 		}
 		if _, err := m.BackupWorkload(ctx, w.ID); err != nil {

@@ -157,8 +157,8 @@ type Config struct {
 
 	// BackupDir is the local backup store root.
 	BackupDir string
-	// BackupInterval is how often to auto-backup tinbase workloads. 0 disables
-	// scheduled backups (on-demand still works).
+	// BackupInterval is how old a workload's newest backup may get before the
+	// scheduler takes another. 0 disables scheduled backups (on-demand still works).
 	BackupInterval time.Duration
 	// BackupRetain is how many backups to keep per workload.
 	BackupRetain int
@@ -184,6 +184,27 @@ type Config struct {
 	// a database still holding only its migrations and seed. Taken daily while
 	// running and when the workload goes idle; restored by tinbase on boot.
 	BackupDumpTypes []string
+	// BackupDumpImage is the tinbase image that exports a stopped database in a
+	// one-off container (no network, the workload not booted): a database
+	// suspended without a current dump, or on an image older than 0.22.0 that
+	// cannot export itself. Empty uses Image.
+	BackupDumpImage string
+	// BackupSweep is how often the scheduler looks for databases due a backup:
+	// one whose last dump is BackupInterval old, or one that stopped without a
+	// current dump. Ages come from each data dir, so a restart doesn't reset them.
+	BackupSweep time.Duration
+	// BackupSweepBatch caps the backups one sweep takes, so the disk never gets
+	// them all at once (after a deploy that left many databases due).
+	BackupSweepBatch int
+	// BackupS3 is the backup target when its bucket is set (ORCHD_BACKUP_S3_*,
+	// from the secrets file): a fresh box writes to and restores from the bucket
+	// from its first minute, and the target can't be changed through the API.
+	BackupS3Endpoint  string
+	BackupS3Bucket    string
+	BackupS3Region    string
+	BackupS3Prefix    string
+	BackupS3AccessKey string
+	BackupS3SecretKey string
 
 	// MetricsInterval is how often the platform metrics snapshot is published.
 	MetricsInterval time.Duration
@@ -281,6 +302,15 @@ func Load() Config {
 		BackupBeforeReset:      envBool("ORCHD_BACKUP_BEFORE_RESET"),
 		BackupBeforeEvict:      envBool("ORCHD_BACKUP_BEFORE_EVICT"),
 		BackupDumpTypes:        splitCSV(os.Getenv("ORCHD_BACKUP_DUMP_TYPES")),
+		BackupDumpImage:        env("ORCHD_BACKUP_DUMP_IMAGE", ""),
+		BackupSweep:            envDuration("ORCHD_BACKUP_SWEEP", 10*time.Minute),
+		BackupSweepBatch:       envInt("ORCHD_BACKUP_SWEEP_BATCH", 20),
+		BackupS3Endpoint:       env("ORCHD_BACKUP_S3_ENDPOINT", ""),
+		BackupS3Bucket:         env("ORCHD_BACKUP_S3_BUCKET", ""),
+		BackupS3Region:         env("ORCHD_BACKUP_S3_REGION", ""),
+		BackupS3Prefix:         env("ORCHD_BACKUP_S3_PREFIX", ""),
+		BackupS3AccessKey:      env("ORCHD_BACKUP_S3_ACCESS_KEY_ID", ""),
+		BackupS3SecretKey:      env("ORCHD_BACKUP_S3_SECRET_ACCESS_KEY", ""),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
 		WakeHookTimeout:        envDuration("ORCHD_WAKE_HOOK_TIMEOUT", 20*time.Second),

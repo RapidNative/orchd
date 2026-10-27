@@ -109,8 +109,17 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_DEV_MEM_MB` / `ORCHD_DEV_CPUS` | `512` / `1.0` | default memory/CPU cap for rapidnative-dev workloads |
 | `ORCHD_PIDS_LIMIT` | `512` | max processes per container (fork-bomb backstop) |
 | `ORCHD_BACKUP_DIR` | `<DataRoot>/backups` | local backup store root |
-| `ORCHD_BACKUP_INTERVAL` | `0` (off) | auto-backup interval for tinbase workloads (e.g. `24h`) |
+| `ORCHD_BACKUP_INTERVAL` | `0` (off) | how old a workload's newest backup may get before the scheduler takes another (e.g. `24h`) |
+| `ORCHD_BACKUP_SWEEP` / `ORCHD_BACKUP_SWEEP_BATCH` | `10m` / `20` | how often the scheduler looks for backups due, and how many one sweep takes |
 | `ORCHD_BACKUP_RETAIN` | `5` | backups kept per workload |
+| `ORCHD_BACKUP_DUMP_TYPES` | (none) | workload types backed up as tinbase exports instead of tars (`tinbase-project`) |
+| `ORCHD_BACKUP_DUMP_IMAGE` | `ORCHD_IMAGE` | image that exports a stopped database offline (tinbase 0.22.0 or later) |
+| `ORCHD_BACKUP_S3_*` | (unset) | `ENDPOINT`, `BUCKET`, `REGION`, `PREFIX`, `ACCESS_KEY_ID`, `SECRET_ACCESS_KEY`: the backup target from config; the API can't change it then |
+
+`GET /v1/backups/coverage` lists every backed-up workload as `current`, `recent`,
+`stale` or `failed`, with `safe_to_wipe` when nothing is stale or failed.
+`POST /v1/backups/drain` backs up everything not yet covered, then reports the
+same; run it right before turning a box off.
 
 ## Model: Project → Workload → Route
 
