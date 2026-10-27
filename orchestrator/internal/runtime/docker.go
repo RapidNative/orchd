@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -292,6 +293,7 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 	for h, ip := range spec.HostAliases {
 		args = append(args, "--add-host", h+":"+ip)
 	}
+	args = append(args, readOnlyMountArgs(spec.ReadOnlyMounts)...)
 	args = append(args, image)
 
 	if out, err := d.docker(ctx, host, args...).CombinedOutput(); err != nil {
@@ -303,6 +305,26 @@ func (d *DockerDriver) Create(ctx context.Context, spec Spec) (*Instance, error)
 		return nil, fmt.Errorf("wait ready: %w", err)
 	}
 	return &Instance{Ref: spec.Ref, State: StateRunning, Addr: addr, StartedAt: time.Now()}, nil
+}
+
+// readOnlyMountArgs bind-mounts each host dir read-only at its container path,
+// skipping host dirs that don't exist (yet): `docker run -v` would otherwise
+// create an empty root-owned dir in their place, or fail the boot outright.
+// Sorted, so the same config always yields the same command line.
+func readOnlyMountArgs(mounts map[string]string) []string {
+	hosts := make([]string, 0, len(mounts))
+	for h := range mounts {
+		hosts = append(hosts, h)
+	}
+	sort.Strings(hosts)
+	var args []string
+	for _, h := range hosts {
+		if fi, err := os.Stat(h); err != nil || !fi.IsDir() || mounts[h] == "" {
+			continue
+		}
+		args = append(args, "-v", h+":"+mounts[h]+":ro")
+	}
+	return args
 }
 
 // readyTimeout is the boot readiness cap: the spec's own value, else 90s.
