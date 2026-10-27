@@ -41,6 +41,32 @@ so anything written since is gone. The workload is rebooted afterwards.
 Scheduled backups run on `ORCHD_BACKUP_INTERVAL` (0 disables the schedule; on-demand still
 works), keeping `ORCHD_BACKUP_RETAIN` per workload.
 
+## Database dumps
+
+`ORCHD_BACKUP_DUMP_TYPES=tinbase-project` backs databases up as a **tinbase export**
+(`tinbase db export`, tinbase 0.22+) instead of a tar of the data directory. orchd runs the
+export inside the workload's own container. It is a `pg_dump` plus roles and stored files,
+usually KBs where the data directory is tens of MB, and it is taken without pausing the
+database.
+
+- **When:** as the workload goes idle (while it still runs), daily while it runs, and on
+  demand. A suspended database is not woken for the daily backup: its idle-time dump already
+  holds it.
+- **What is kept:**
+  - Nothing, when the database still holds only what its migrations and seed put there
+    (tinbase's seed snapshot). Re-creating it from the project's files gives the same database.
+  - Nothing new, when the dump's `contentHash` matches the last stored one.
+- **Eviction:** once the idle-time dump is taken and the database stops, orchd records a
+  fingerprint of its `pg_control`. Postgres rewrites that file at every startup and shutdown,
+  so while it matches, the database has not run since and eviction relies on the dump as is.
+  If not (the dump failed, or the database ran again), eviction falls back to a tar of the
+  data directory.
+- **Restore:** `POST …/restore` places the archive at `.tinbase/restore.tar.gz` in the emptied
+  data directory and boots the workload. tinbase loads it before it opens the database, and
+  refuses to start if it does not load.
+
+Backups list with `"kind": "dump"`; a data-directory tar has no `kind`.
+
 ## Where they go
 
 The target is an adaptor, switchable at runtime from **Settings** (no redeploy):
@@ -58,6 +84,10 @@ curl -X PUT .../v1/settings/backup -H "Authorization: Bearer $ORCHD_KEY" -d '{
   "access_key": "…", "secret_key": "…"
 }'
 ```
+
+Switching to S3 does not strand what is already on local disk. While `ORCHD_BACKUP_DIR` holds
+archives, they stay listed, restorable and pruned beside the new ones until retention drops
+them, and new backups go to S3.
 
 The secret is stored server-side and never returned — `GET /v1/settings` reports
 `backup_secret_set` instead. Leave `secret_key` blank on an update to keep the existing one.
@@ -78,9 +108,9 @@ control plane.
 
 ## Limits worth knowing
 
-- **The brief suspend.** A consistent snapshot currently means pausing the workload for the
-  duration of the tar. Hot / WAL-based backups that remove the pause are on the
-  [roadmap](/docs/roadmap).
+- **The brief suspend.** A data-directory tar means pausing the workload for the duration of
+  the tar. Database dumps (above) do not pause. Hot / WAL-based backups for other types are on
+  the [roadmap](/docs/roadmap).
 - **No point-in-time recovery.** You restore to a snapshot, not to a timestamp.
 - **Backups do not survive a project delete.** Deleting a project reclaims its data;
   keeping snapshots around as an undo buffer is future work.

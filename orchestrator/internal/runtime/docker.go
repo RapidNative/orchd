@@ -124,6 +124,21 @@ func (d *DockerDriver) DeleteFileInContainer(ctx context.Context, ref, container
 	return nil
 }
 
+// ExecInContainer runs argv inside a running container as user (empty: the
+// image's default) and returns its combined output.
+func (d *DockerDriver) ExecInContainer(ctx context.Context, ref, user string, argv ...string) ([]byte, error) {
+	args := []string{"exec"}
+	if user != "" {
+		args = append(args, "-u", user)
+	}
+	args = append(append(args, containerName(ref)), argv...)
+	out, err := d.docker(ctx, d.hostFor(ref), args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("exec %s: %v: %s", argv[0], err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
 // removeAndWait force-removes a container and blocks until its name is
 // actually free. Removal of a running container (especially under gVisor, or
 // a loaded daemon) completes asynchronously — a docker run issued right after

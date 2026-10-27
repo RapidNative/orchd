@@ -19,7 +19,7 @@ import (
 // pulls in no SDK and keeps the orchestrator dependency-free. Path-style
 // addressing (endpoint/bucket/key) is used for the widest compatibility.
 //
-// Objects are keyed <prefix>/<workloadID>/<timestamp>.tar.gz, mirroring LocalStore.
+// Objects are keyed <prefix>/<workloadID>/<timestamp>[.<kind>].tar.gz, mirroring LocalStore.
 type S3Store struct {
 	endpoint  string // e.g. https://<acct>.r2.cloudflarestorage.com or http://127.0.0.1:9000
 	bucket    string
@@ -51,8 +51,8 @@ func NewS3Store(endpoint, bucket, region, prefix, accessKey, secretKey string) (
 	}, nil
 }
 
-func (s *S3Store) key(workloadID, ts string) string {
-	return s.prefix + "/" + workloadID + "/" + ts + ".tar.gz"
+func (s *S3Store) key(workloadID string, ts time.Time, kind string) string {
+	return s.prefix + "/" + workloadID + "/" + fileName(ts, kind)
 }
 
 func (s *S3Store) objURL(key string) string {
@@ -60,9 +60,6 @@ func (s *S3Store) objURL(key string) string {
 }
 
 func (s *S3Store) Create(workloadID, dataDir string, exclude []string) (Backup, error) {
-	now := time.Now().UTC()
-	ts := now.Format(tsLayout)
-
 	// Tar to a temp file so we can hash it (SigV4 needs the payload sha256) and
 	// upload it with a known length.
 	tmp, err := os.CreateTemp("", "tbbackup-*.tar.gz")
@@ -70,31 +67,36 @@ func (s *S3Store) Create(workloadID, dataDir string, exclude []string) (Backup, 
 		return Backup{}, err
 	}
 	defer os.Remove(tmp.Name())
-	if err := writeTarGz(tmp, dataDir, exclude); err != nil {
-		tmp.Close()
-		return Backup{}, err
+	err = writeTarGz(tmp, dataDir, exclude)
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
 	}
-	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-		tmp.Close()
-		return Backup{}, err
-	}
-	sum := sha256.New()
-	size, err := io.Copy(sum, tmp)
 	if err != nil {
-		tmp.Close()
 		return Backup{}, err
 	}
-	payloadHash := hex.EncodeToString(sum.Sum(nil))
-	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-		tmp.Close()
+	return s.Put(workloadID, tmp.Name(), KindDir)
+}
+
+func (s *S3Store) Put(workloadID, file, kind string) (Backup, error) {
+	now := time.Now().UTC()
+	f, err := os.Open(file)
+	if err != nil {
+		return Backup{}, err
+	}
+	defer f.Close()
+	sum := sha256.New()
+	size, err := io.Copy(sum, f)
+	if err != nil {
+		return Backup{}, err
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
 		return Backup{}, err
 	}
 
-	req, _ := http.NewRequest(http.MethodPut, s.objURL(s.key(workloadID, ts)), tmp)
+	req, _ := http.NewRequest(http.MethodPut, s.objURL(s.key(workloadID, now, kind)), f)
 	req.ContentLength = size
-	s.sign(req, payloadHash, now)
+	s.sign(req, hex.EncodeToString(sum.Sum(nil)), now)
 	resp, err := s.client.Do(req)
-	tmp.Close()
 	if err != nil {
 		return Backup{}, err
 	}
@@ -102,7 +104,7 @@ func (s *S3Store) Create(workloadID, dataDir string, exclude []string) (Backup, 
 	if resp.StatusCode/100 != 2 {
 		return Backup{}, s3err("put", resp)
 	}
-	return Backup{ID: backupID(workloadID, now), WorkloadID: workloadID, CreatedAt: now, SizeBytes: size}, nil
+	return Backup{ID: backupID(workloadID, now, kind), WorkloadID: workloadID, CreatedAt: now, SizeBytes: size, Kind: kind}, nil
 }
 
 type listResult struct {
@@ -145,15 +147,16 @@ func (s *S3Store) List(workloadID string) ([]Backup, error) {
 			return nil, err
 		}
 		for _, c := range lr.Contents {
-			name := strings.TrimSuffix(c.Key[strings.LastIndex(c.Key, "/")+1:], ".tar.gz")
-			ts, err := time.Parse(tsLayout, name)
-			if err != nil {
+			parts := strings.Split(c.Key, "/")
+			if len(parts) < 2 {
 				continue
 			}
-			// workloadID = second-to-last path segment
-			parts := strings.Split(strings.TrimSuffix(c.Key, "/"+name+".tar.gz"), "/")
-			wid := parts[len(parts)-1]
-			out = append(out, Backup{ID: backupID(wid, ts), WorkloadID: wid, CreatedAt: ts, SizeBytes: c.Size})
+			ts, kind, ok := parseFileName(parts[len(parts)-1])
+			if !ok {
+				continue
+			}
+			wid := parts[len(parts)-2] // workloadID = second-to-last path segment
+			out = append(out, Backup{ID: backupID(wid, ts, kind), WorkloadID: wid, CreatedAt: ts, SizeBytes: c.Size, Kind: kind})
 		}
 		if !lr.IsTruncated || lr.NextToken == "" {
 			break
@@ -164,30 +167,60 @@ func (s *S3Store) List(workloadID string) ([]Backup, error) {
 	return out, nil
 }
 
-func (s *S3Store) Restore(id, destDir string) error {
-	wid, ts, err := parseID(id)
+// get opens a backup's object for reading; the caller closes the body.
+func (s *S3Store) get(id string) (io.ReadCloser, error) {
+	wid, ts, kind, err := parseID(id)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	req, _ := http.NewRequest(http.MethodGet, s.objURL(s.key(wid, ts.UTC().Format(tsLayout))), nil)
+	req, _ := http.NewRequest(http.MethodGet, s.objURL(s.key(wid, ts, kind)), nil)
 	s.sign(req, emptyHash, time.Now().UTC())
 	resp, err := s.client.Do(req)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
-		return s3err("get", resp)
+		defer resp.Body.Close()
+		return nil, s3err("get", resp)
 	}
-	return extractTarGz(resp.Body, destDir)
+	return resp.Body, nil
 }
 
-func (s *S3Store) Delete(id string) error {
-	wid, ts, err := parseID(id)
+func (s *S3Store) Restore(id, destDir string) error {
+	if _, _, kind, err := parseID(id); err == nil && kind != KindDir {
+		return ErrNotExtractable
+	}
+	body, err := s.get(id)
 	if err != nil {
 		return err
 	}
-	req, _ := http.NewRequest(http.MethodDelete, s.objURL(s.key(wid, ts.UTC().Format(tsLayout))), nil)
+	defer body.Close()
+	return extractTarGz(body, destDir)
+}
+
+func (s *S3Store) Fetch(id, destFile string) error {
+	body, err := s.get(id)
+	if err != nil {
+		return err
+	}
+	defer body.Close()
+	out, err := os.Create(destFile)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, body); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
+}
+
+func (s *S3Store) Delete(id string) error {
+	wid, ts, kind, err := parseID(id)
+	if err != nil {
+		return err
+	}
+	req, _ := http.NewRequest(http.MethodDelete, s.objURL(s.key(wid, ts, kind)), nil)
 	s.sign(req, emptyHash, time.Now().UTC())
 	resp, err := s.client.Do(req)
 	if err != nil {

@@ -526,7 +526,20 @@ func (m *Manager) backupStore() backup.Store {
 func (m *Manager) buildBackupStore(t store.BackupTarget) (backup.Store, error) {
 	switch t.Type {
 	case "s3":
-		return backup.NewS3Store(t.Endpoint, t.Bucket, t.Region, t.Prefix, t.AccessKey, t.SecretKey)
+		s3, err := backup.NewS3Store(t.Endpoint, t.Bucket, t.Region, t.Prefix, t.AccessKey, t.SecretKey)
+		if err != nil {
+			return nil, err
+		}
+		// Archives already on local disk stay listed, restorable and pruned
+		// until retention drops them; new ones go to S3.
+		if m.cfg.BackupDir != "" {
+			if fi, err := os.Stat(m.cfg.BackupDir); err == nil && fi.IsDir() {
+				if local, err := backup.NewLocalStore(m.cfg.BackupDir); err == nil {
+					return backup.NewMultiStore(s3, local), nil
+				}
+			}
+		}
+		return s3, nil
 	default: // "local" or unset
 		if m.cfg.BackupDir == "" {
 			return nil, nil // backups disabled
@@ -1743,9 +1756,17 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 			rl := m.refLock(id)
 			rl.Lock()
 			defer rl.Unlock()
+			// A dump-backed database is dumped while it still runs; once stopped,
+			// the dump is sealed as its exact contents (see dump.go).
+			dumped := m.dumpBeforeSuspend(ctx, id)
 			if err := m.rt.Suspend(ctx, id); err != nil {
 				log.Printf("reap %s: %v", id, err)
 				return
+			}
+			if dumped != nil {
+				if err := sealDump(dumped); err != nil {
+					log.Printf("dump %s: seal: %v", id, err)
+				}
 			}
 			_ = m.store.SetWorkloadState(id, runtime.StateSuspended)
 			m.forget(id)
@@ -1792,6 +1813,17 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 	rl := m.refLock(workloadID)
 	rl.Lock()
 	defer rl.Unlock()
+
+	// A running dump-backed database is dumped in place, without pausing it.
+	if m.dumps(w.Type) {
+		if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
+			b, _, err := m.backupDump(ctx, w, true)
+			if err != nil {
+				return backup.Backup{}, err
+			}
+			return *b, nil
+		}
+	}
 
 	wasRunning := false
 	if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
@@ -1980,7 +2012,18 @@ func (m *Manager) RestoreWorkloadWith(ctx context.Context, workloadID, backupID 
 	if err := os.MkdirAll(w.DataDir, 0o700); err != nil {
 		return err
 	}
-	if err := bk.Restore(backupID, w.DataDir); err != nil {
+	if backup.KindOf(backupID) == backup.KindDump {
+		// tinbase loads it on the boot below, before it opens the database.
+		dst := filepath.Join(w.DataDir, dumpRestoreFile)
+		err := os.MkdirAll(filepath.Dir(dst), 0o755)
+		if err == nil {
+			err = bk.Fetch(backupID, dst)
+		}
+		if err != nil {
+			_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
+			return fmt.Errorf("restore: %w", err)
+		}
+	} else if err := bk.Restore(backupID, w.DataDir); err != nil {
 		_ = m.store.SetWorkloadState(workloadID, runtime.StateFailed)
 		return fmt.Errorf("restore: %w", err)
 	}
@@ -2102,6 +2145,9 @@ func (m *Manager) backupAll(ctx context.Context) {
 	bk := m.backupStore()
 	for _, w := range m.store.ListWorkloads("") {
 		if !m.backsUp(w.Type) {
+			continue
+		}
+		if m.dumps(w.Type) && m.dailyDump(ctx, w) {
 			continue
 		}
 		if bk != nil && unchangedSinceBackup(bk, w) {
