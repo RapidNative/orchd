@@ -220,6 +220,30 @@ own idempotent provisioning.
   {url, api_key}`; the key is masked (`webhook_key_set`), blank-on-write keeps the
   stored one. The same URL+key also carry the async event feed (with `X-Webhook-Key`).
 
+### Wake check (`workload.image_behind`)
+
+The same webhook gets a second synchronous event. Before the gateway wakes a
+sleeping workload whose `ImageVer` is older than the newest built image of its
+template, `Manager.CheckImageBeforeWake` (`internal/manager/wake_check.go`) POSTs
+`{type:"workload.image_behind", project_id, workload_id, template, image_version,
+latest_version}` and waits up to `ORCHD_WAKE_HOOK_TIMEOUT` (default 20s, `0` turns
+it off). The receiver can bring the workload along while it is still asleep:
+write files to its disk (`PUT /v1/workloads/{id}/fs/...`, which doesn't wake a
+docker workload) and move it (`PUT /v1/workloads/{id}/image`). The wake then
+boots whatever the workload says.
+
+- **Local and cheap**: a live workload, one not booted from a built image, or one
+  on its template's newest image is never asked about, and the check makes no
+  runtime call (it runs on every proxied request).
+- **Never blocks the wake**: a failed, slow or non-2xx answer starts the workload as
+  it is.
+- **Once per project per newest version**: a 2xx answer that leaves the workload
+  behind (the receiver declined) is remembered until a newer image ships. A failed
+  or timed-out call is retried after 10 minutes. Concurrent wakes of one project
+  share one call.
+- **Called from the gateway, before `EnsureRunning` takes the wake lock**, so a
+  receiver whose writes wake a microVM (wake-on-write) can't deadlock against it.
+
 Operating rules, each learned the hard way:
 
 - **Set the webhook URL LAST.** Point it at the receiver only after the receiver is

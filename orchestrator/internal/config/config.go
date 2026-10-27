@@ -179,6 +179,12 @@ type Config struct {
 	// the reprovision webhook re-creates a missing workload's route.
 	ReprovisionHookTimeout time.Duration
 
+	// WakeHookTimeout bounds how long the gateway holds a request to a sleeping
+	// workload whose image is behind its template's newest, while the webhook
+	// brings it along (event workload.image_behind, manager/wake_check.go).
+	// 0 turns the check off.
+	WakeHookTimeout time.Duration
+
 	// LRU eviction reaper (gated on Settings.LRUKeepMax > 0). LRUInterval is how
 	// often it runs; LRUMinAge is a floor — a project active within this window is
 	// never evicted regardless of rank; LRUBatch caps evictions per tick so a
@@ -262,6 +268,7 @@ func Load() Config {
 		BackupBeforeEvict:      envBool("ORCHD_BACKUP_BEFORE_EVICT"),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
+		WakeHookTimeout:        envDuration("ORCHD_WAKE_HOOK_TIMEOUT", 20*time.Second),
 		LRUInterval:            envDuration("ORCHD_LRU_INTERVAL", 5*time.Minute),
 		LRUMinAge:              envDuration("ORCHD_LRU_MIN_AGE", 24*time.Hour),
 		LRUBatch:               envInt("ORCHD_LRU_BATCH", 25),
