@@ -73,6 +73,10 @@ type Manager struct {
 	// the grace period's start rather than a real lastSeen.
 	unowned map[string]time.Time
 
+	// backupRuns is the scheduler's memory (schedule.go): the last failed dump
+	// of each database, and the newest backup of each tar-backed workload.
+	backupRuns *backupRuns
+
 	portMu sync.Mutex // serializes host-port allocation (port-addressing mode)
 
 	// keyRepairTried remembers workloads whose key minting we already attempted
@@ -140,6 +144,7 @@ func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 		wakeChecks:      make(map[string]*wakeCheck),
 		activityPersist: make(map[string]time.Time),
 		unowned:         make(map[string]time.Time),
+		backupRuns:      newBackupRuns(),
 	}
 	m.applyBackupSettings() // build the backup store from persisted settings (or default)
 	m.applyWebhookSettings()
@@ -548,8 +553,21 @@ func (m *Manager) buildBackupStore(t store.BackupTarget) (backup.Store, error) {
 	}
 }
 
+// ErrBackupTargetFromConfig refuses an API change to a target set in config.
+var ErrBackupTargetFromConfig = errors.New("the backup target is set by ORCHD_BACKUP_S3_* in orchd's config; change it there")
+
+// configBackupTarget is the target ORCHD_BACKUP_S3_* sets, if its bucket is.
+func (m *Manager) configBackupTarget() (store.BackupTarget, bool) {
+	c := m.cfg
+	if c.BackupS3Bucket == "" {
+		return store.BackupTarget{}, false
+	}
+	return store.BackupTarget{Type: "s3", Endpoint: c.BackupS3Endpoint, Bucket: c.BackupS3Bucket, Region: c.BackupS3Region,
+		Prefix: c.BackupS3Prefix, AccessKey: c.BackupS3AccessKey, SecretKey: c.BackupS3SecretKey}, true
+}
+
 func (m *Manager) applyBackupSettings() {
-	t := m.store.GetSettings().Backup
+	t := m.GetBackupTarget()
 	bs, err := m.buildBackupStore(t)
 	if err != nil {
 		log.Printf("backup store (%s) invalid: %v; falling back to local", t.Type, err)
@@ -560,12 +578,20 @@ func (m *Manager) applyBackupSettings() {
 	m.mu.Unlock()
 }
 
-// GetBackupTarget returns the configured backup target.
-func (m *Manager) GetBackupTarget() store.BackupTarget { return m.store.GetSettings().Backup }
+// GetBackupTarget returns the backup target: config's, else the persisted one.
+func (m *Manager) GetBackupTarget() store.BackupTarget {
+	if t, ok := m.configBackupTarget(); ok {
+		return t
+	}
+	return m.store.GetSettings().Backup
+}
 
 // SetBackupTarget validates and persists a new backup target, then swaps the
-// live backup store to it.
+// live backup store to it. Refused while config sets the target.
 func (m *Manager) SetBackupTarget(t store.BackupTarget) error {
+	if _, ok := m.configBackupTarget(); ok {
+		return ErrBackupTargetFromConfig
+	}
 	bs, err := m.buildBackupStore(t) // validates the config by constructing it
 	if err != nil {
 		return err
@@ -1814,15 +1840,14 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 	rl.Lock()
 	defer rl.Unlock()
 
-	// A running dump-backed database is dumped in place, without pausing it.
+	// A dump-backed database is dumped: in place, without pausing it, when
+	// running; offline when stopped. Never as a tar of its data dir.
 	if m.dumps(w.Type) {
-		if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
-			b, _, err := m.backupDump(ctx, w, true)
-			if err != nil {
-				return backup.Backup{}, err
-			}
-			return *b, nil
+		b, _, err := m.backupDump(ctx, w, true)
+		if err != nil {
+			return backup.Backup{}, err
 		}
+		return *b, nil
 	}
 
 	wasRunning := false
@@ -2117,54 +2142,6 @@ func (m *Manager) DeleteBackup(id string) error {
 		return ErrBackupsDisabled
 	}
 	return bk.Delete(id)
-}
-
-// RunBackupScheduler auto-backs up tinbase workloads on the configured interval.
-func (m *Manager) RunBackupScheduler(ctx context.Context) {
-	if m.backupStore() == nil || m.cfg.BackupInterval <= 0 {
-		return
-	}
-	t := time.NewTicker(m.cfg.BackupInterval)
-	defer t.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-t.C:
-			m.backupAll(ctx)
-		}
-	}
-}
-
-func (m *Manager) backupAll(ctx context.Context) {
-	// Generic: back up every workload of every project (a project's runners and
-	// its tinbase backend alike), unless ORCHD_BACKUP_TYPES narrows it. A
-	// workload whose data hasn't changed since its newest backup is skipped: an
-	// idle one would otherwise be suspended, archived and rebooted every
-	// interval for the same bytes.
-	bk := m.backupStore()
-	for _, w := range m.store.ListWorkloads("") {
-		if !m.backsUp(w.Type) {
-			continue
-		}
-		if m.dumps(w.Type) && m.dailyDump(ctx, w) {
-			continue
-		}
-		if bk != nil && unchangedSinceBackup(bk, w) {
-			continue
-		}
-		if b, err := m.BackupWorkload(ctx, w.ID); err != nil {
-			log.Printf("backup %s: %v", w.ID, err)
-		} else {
-			log.Printf("backup %s -> %s (%d bytes)", w.ID, b.ID, b.SizeBytes)
-		}
-	}
-	// Also snapshot the control-plane index itself, off-box, on the same schedule.
-	if b, err := m.BackupState(ctx); err != nil {
-		log.Printf("backup state: %v", err)
-	} else {
-		log.Printf("backup state -> %s (%d bytes)", b.ID, b.SizeBytes)
-	}
 }
 
 // keyFor builds the route key for a workload: <ref> for the primary, else

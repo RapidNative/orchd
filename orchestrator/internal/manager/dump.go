@@ -36,7 +36,13 @@ import (
 // pg_control is recorded beside the dump's state. Postgres rewrites pg_control
 // at every checkpoint, startup and shutdown included, so while the fingerprint
 // still matches the database has not run since: eviction can rely on that dump
-// without starting it again. Anything else falls back to a tar of the data dir.
+// without starting it again.
+//
+// A stopped database without such a dump (suspended before dumps existed, its
+// idle-time dump failed, or its image is older than tinbase 0.22.0) is exported
+// offline: a one-off container of BackupDumpImage, no network, with the data
+// dir mounted, while the workload stays down. Its dump is sealed the same way.
+// A database is never backed up as a tar of its data dir.
 //
 // A dump is restored by tinbase itself: the archive goes to
 // .tinbase/restore.tar.gz in the emptied data dir and the next boot loads it.
@@ -57,6 +63,12 @@ const (
 // execer runs a command inside a workload's running container.
 type execer interface {
 	ExecInContainer(ctx context.Context, ref, user string, argv ...string) ([]byte, error)
+}
+
+// offliner runs a command in a one-off container over a stopped workload's
+// data dir (runtime.DockerDriver.RunOffline).
+type offliner interface {
+	RunOffline(ctx context.Context, ref, image, dataDir string, argv ...string) ([]byte, error)
 }
 
 // dumpManifest is the part of a tinbase export's manifest.json orchd reads.
@@ -181,20 +193,33 @@ func readDumpManifest(file string) (dumpManifest, error) {
 	}
 }
 
-// exportDump runs `tinbase db export` in the workload's running container and
-// returns the archive's host path and manifest. The caller removes the file.
-func (m *Manager) exportDump(ctx context.Context, w *store.Workload) (string, dumpManifest, error) {
-	ex, ok := m.rt.(execer)
-	if !ok {
-		return "", dumpManifest{}, fmt.Errorf("runtime %s cannot run commands in a workload", m.rt.Name())
-	}
+// exportDump runs `tinbase db export` over the workload's database and returns
+// the archive's host path and manifest: inside its container when running, else
+// offline (see offliner). The caller removes the file and holds the refLock.
+func (m *Manager) exportDump(ctx context.Context, w *store.Workload, running bool) (string, dumpManifest, error) {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	host := filepath.Join(w.DataDir, dumpExportFile)
 	_ = os.Remove(host)
-	if _, err := ex.ExecInContainer(ctx, w.ID, dumpUser, "tinbase", "db", "export",
+	argv := []string{"tinbase", "db", "export",
 		"-o", path.Join(dumpProjectDir, dumpExportFile),
-		"--dir", dumpProjectDir, "--data-dir", dumpDataDir, "--engine", "native"); err != nil {
+		"--dir", dumpProjectDir, "--data-dir", dumpDataDir, "--engine", "native"}
+	var err error
+	switch {
+	case running:
+		ex, ok := m.rt.(execer)
+		if !ok {
+			return "", dumpManifest{}, fmt.Errorf("runtime %s cannot run commands in a workload", m.rt.Name())
+		}
+		_, err = ex.ExecInContainer(ctx, w.ID, dumpUser, argv...)
+	default:
+		off, ok := m.rt.(offliner)
+		if !ok {
+			return "", dumpManifest{}, fmt.Errorf("runtime %s cannot export a stopped database", m.rt.Name())
+		}
+		_, err = off.RunOffline(ctx, w.ID, m.cfg.BackupDumpImage, w.DataDir, argv...)
+	}
+	if err != nil {
 		return "", dumpManifest{}, err
 	}
 	man, err := readDumpManifest(host)
@@ -219,21 +244,44 @@ func hasBackup(bk backup.Store, workloadID, id string) bool {
 	return false
 }
 
-// backupDump exports a running workload's database and stores the archive,
-// unless it is pristine or identical to the last stored one (force stores it
-// anyway). Returns the stored backup, or nil with the reason nothing was stored.
-// The caller holds the workload's refLock.
+// backupDump exports a workload's database and stores the archive, unless it is
+// pristine or identical to the last stored one (force stores it anyway). A
+// stopped database is exported offline and its dump sealed. Returns the stored
+// backup, or nil with the reason nothing was stored. The outcome is recorded for
+// the coverage report. The caller holds the workload's refLock.
 func (m *Manager) backupDump(ctx context.Context, w *store.Workload, force bool) (*backup.Backup, string, error) {
+	b, note, err := m.backupDumpOnce(ctx, w, force)
+	m.backupRuns.dumped(w.ID, err)
+	return b, note, err
+}
+
+func (m *Manager) backupDumpOnce(ctx context.Context, w *store.Workload, force bool) (*backup.Backup, string, error) {
 	bk := m.backupStore()
 	if bk == nil {
 		return nil, "", ErrBackupsDisabled
 	}
-	file, man, err := m.exportDump(ctx, w)
+	st, _ := m.rt.Status(ctx, w.ID)
+	running := st == runtime.StateRunning
+	file, man, err := m.exportDump(ctx, w, running)
 	if err != nil {
 		return nil, "", err
 	}
 	defer os.Remove(file)
+	stored, note, err := m.storeDump(w, bk, file, man, force)
+	if err != nil || running {
+		return stored, note, err
+	}
+	// The export started Postgres on the stopped data dir and shut it down,
+	// so this dump is its exact contents until it next runs.
+	if err := sealDump(w); err != nil {
+		return stored, note, err
+	}
+	return stored, note, nil
+}
 
+// storeDump keeps an export unless it is pristine or unchanged (see backupDump)
+// and records it as the workload's dump state.
+func (m *Manager) storeDump(w *store.Workload, bk backup.Store, file string, man dumpManifest, force bool) (*backup.Backup, string, error) {
 	st := &dumpState{At: time.Now().UTC(), ContentHash: man.ContentHash, Pristine: man.Pristine.Pristine}
 	var stored *backup.Backup
 	note := ""
@@ -262,7 +310,7 @@ func (m *Manager) backupDump(ctx context.Context, w *store.Workload, force bool)
 
 // dumpBeforeSuspend dumps a dump-backed workload that is about to be suspended
 // and returns it, or nil when it is not one or the dump failed (the suspend goes
-// ahead either way; eviction then falls back to a tar). Caller holds refLock.
+// ahead either way; the next sweep exports it offline). Caller holds refLock.
 func (m *Manager) dumpBeforeSuspend(ctx context.Context, id string) *store.Workload {
 	w, err := m.store.GetWorkload(id)
 	if err != nil || !m.dumps(w.Type) || !m.BackupsEnabled() {
@@ -281,26 +329,25 @@ func (m *Manager) dumpBeforeSuspend(ctx context.Context, id string) *store.Workl
 	return w
 }
 
-// dailyDump is the scheduled backup of a dump-backed workload. It reports
-// whether that covered it: a running database is dumped in place, a suspended
-// one is covered by its sealed idle-time dump. Otherwise the caller falls back
-// to a tar of the data dir.
-func (m *Manager) dailyDump(ctx context.Context, w *store.Workload) bool {
+// dailyDump is the scheduled backup of a dump-backed workload: a running
+// database is dumped in place, a stopped one is covered by its sealed dump or
+// exported offline. An error means it is not covered.
+func (m *Manager) dailyDump(ctx context.Context, w *store.Workload) error {
 	rl := m.refLock(w.ID)
 	rl.Lock()
 	defer rl.Unlock()
-	if st, _ := m.rt.Status(ctx, w.ID); st != runtime.StateRunning {
-		return dumpCurrent(w)
+	if st, _ := m.rt.Status(ctx, w.ID); st != runtime.StateRunning && dumpCurrent(w) {
+		return nil
 	}
 	b, note, err := m.backupDump(ctx, w, false)
 	switch {
 	case err != nil:
 		log.Printf("dump %s: %v", w.ID, err)
-		return false
+		return err
 	case b != nil:
 		log.Printf("dump %s -> %s (%d bytes)", w.ID, b.ID, b.SizeBytes)
 	default:
 		log.Printf("dump %s: %s", w.ID, note)
 	}
-	return true
+	return nil
 }

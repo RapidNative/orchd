@@ -140,6 +140,30 @@ func (d *DockerDriver) ExecInContainer(ctx context.Context, ref, user string, ar
 	return out, nil
 }
 
+// RunOffline runs argv in a one-off container of image with the workload's
+// data dir mounted at /data, while the workload itself is stopped: no network,
+// the driver's runtime (gVisor), removed when it exits. It is how a stopped
+// database is read without booting the workload, so the caller must hold the
+// workload's lock: two Postgres servers on one data dir corrupt it.
+func (d *DockerDriver) RunOffline(ctx context.Context, ref, image, dataDir string, argv ...string) ([]byte, error) {
+	host := d.hostFor(ref)
+	name := containerName(ref) + "-offline"
+	d.removeAndWait(ctx, host, name)
+	args := []string{"run", "--rm", "--name", name, "--network", "none", "--memory", "512m", "-v", dataDir + ":/data"}
+	if d.Runtime != "" {
+		args = append(args, "--runtime", d.Runtime)
+	}
+	if image == "" {
+		image = d.Image
+	}
+	args = append(append(args, image), argv...)
+	out, err := d.docker(ctx, host, args...).CombinedOutput()
+	if err != nil {
+		return out, fmt.Errorf("offline %s: %v: %s", argv[0], err, strings.TrimSpace(string(out)))
+	}
+	return out, nil
+}
+
 // removeAndWait force-removes a container and blocks until its name is
 // actually free. Removal of a running container (especially under gVisor, or
 // a loaded daemon) completes asynchronously — a docker run issued right after

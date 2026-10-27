@@ -60,18 +60,27 @@ Environment=ORCHD_ALT_DOMAINS=rnproject.dev,tinbase.dev,rapidnative.app
 Environment=ORCHD_PUBLIC_SCHEME=https
 Environment=ORCHD_PUBLIC_URL=https://cloud.rapidnative.com
 Environment=ORCHD_BACKUP_DIR=/opt/orchd/backups
+# The newest backup of each database may be at most this old; the scheduler
+# sweeps every 10 min (ORCHD_BACKUP_SWEEP) for the ones due, by their own ages,
+# so a restart doesn't push a backup back.
 Environment=ORCHD_BACKUP_INTERVAL=24h
 Environment=ORCHD_BACKUP_RETAIN=7
 # Only databases: a runner's files come back from the website on every provision.
 Environment=ORCHD_BACKUP_TYPES=tinbase-project
-Environment=ORCHD_BACKUP_RETAIN_DELETED=1
+# An evicted database keeps its three newest dumps.
+Environment=ORCHD_BACKUP_RETAIN_DELETED=3
 Environment=ORCHD_BACKUP_BEFORE_RESET=true
 Environment=ORCHD_BACKUP_BEFORE_EVICT=true
 # Databases are backed up as tinbase exports (KBs, taken without pausing): when
-# one goes idle and daily while it runs. None is kept for a database holding
-# only its migrations and seed. Archives already on disk stay readable after
-# the backup target moves to S3 (PUT /v1/settings/backup).
+# one goes idle and daily while it runs; a stopped one without a current dump
+# is exported offline. Never as a tar. None is kept for a database holding only
+# its migrations and seed. Archives already on disk stay readable after the
+# backup target moves to S3.
 Environment=ORCHD_BACKUP_DUMP_TYPES=tinbase-project
+# The bucket: ORCHD_BACKUP_S3_ENDPOINT, _BUCKET, _REGION, _PREFIX,
+# _ACCESS_KEY_ID, _SECRET_ACCESS_KEY. Set here, a fresh box backs up to and
+# restores from it from boot, and PUT /v1/settings/backup is refused.
+EnvironmentFile=-/opt/orchd/secrets/backup.env
 Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
 ExecStart=/opt/orchd/orchd

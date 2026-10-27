@@ -72,6 +72,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("POST /v1/projects/{id}/backups", a.backupProject)
 	mux.HandleFunc("POST /v1/workloads/{id}/restore", a.restoreWorkload)
 	mux.HandleFunc("DELETE /v1/backups/{id}", a.deleteBackup)
+	mux.HandleFunc("GET /v1/backups/coverage", a.backupCoverage)
+	mux.HandleFunc("POST /v1/backups/drain", a.drainBackups)
 	mux.HandleFunc("GET /v1/presets", a.listPresets)
 	mux.HandleFunc("GET /v1/info", a.info)
 	mux.HandleFunc("GET /v1/keys", a.listKeys)
@@ -651,6 +653,9 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 			"retain_deleted": a.cfg.BackupRetainDeleted,
 			"before_reset":   a.cfg.BackupBeforeReset,
 			"before_evict":   a.cfg.BackupBeforeEvict,
+			"dump_types":     a.cfg.BackupDumpTypes,
+			"sweep":          a.cfg.BackupSweep.String(),
+			"from_config":    a.cfg.BackupS3Bucket != "",
 		},
 		"images_supported": a.mgr.ImagesSupported(),
 		"port_addressing":  a.cfg.PortBase > 0,
@@ -1181,6 +1186,28 @@ func (a *API) backupState(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, b)
 }
 
+// backupCoverage reports whether every backed-up workload's data is in the
+// backup store (safe_to_wipe), workload by workload.
+func (a *API) backupCoverage(w http.ResponseWriter, r *http.Request) {
+	c, err := a.mgr.Coverage(r.Context())
+	if err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+// drainBackups backs up everything not yet covered, then reports coverage. It
+// takes as long as the exports do (minutes on a box with many due).
+func (a *API) drainBackups(w http.ResponseWriter, r *http.Request) {
+	c, err := a.mgr.DrainBackups(r.Context())
+	if err != nil {
+		a.writeBackupErr(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
 func (a *API) setMetrics(w http.ResponseWriter, r *http.Request) {
 	var t store.MetricsTarget
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
@@ -1258,6 +1285,10 @@ func (a *API) setBackupTarget(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if err := a.mgr.SetBackupTarget(t); err != nil {
+		if errors.Is(err, manager.ErrBackupTargetFromConfig) {
+			writeErr(w, http.StatusConflict, err)
+			return
+		}
 		writeErr(w, http.StatusBadRequest, err)
 		return
 	}

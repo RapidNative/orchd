@@ -1,8 +1,11 @@
 package runtime
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -35,5 +38,31 @@ func TestReadOnlyMountArgs(t *testing.T) {
 	}
 	if got := readOnlyMountArgs(nil); len(got) != 0 {
 		t.Errorf("no mounts configured: got %q", got)
+	}
+}
+
+func TestRunOfflineIsolatesTheExport(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(bin, "calls")
+	script := "#!/bin/sh\necho \"$@\" >> " + log + "\n[ \"$1\" = inspect ] && exit 1\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	d := NewDockerDriver("tinbase:0.22.0", "runsc")
+	if _, err := d.RunOffline(context.Background(), "w1", "", "/data/p/w1", "tinbase", "db", "export"); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(log)
+	var run string
+	for _, l := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		if strings.HasPrefix(l, "run ") {
+			run = l
+		}
+	}
+	want := "run --rm --name tb-w1-offline --network none --memory 512m -v /data/p/w1:/data --runtime runsc tinbase:0.22.0 tinbase db export"
+	if run != want {
+		t.Fatalf("docker %s\nwant   %s", run, want)
 	}
 }
