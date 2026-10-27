@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
 
@@ -28,8 +27,10 @@ import (
 // behind.
 //
 // The answer never blocks the wake: a failed, slow or negative reply starts the
-// workload as it is. Each project is asked at most once per newest version per
-// wakeCheckCooldown, and concurrent wakes of one project (its app and its API)
+// workload as it is. Each project is asked once per newest version: a receiver
+// that answered and left the workload behind (it declined) is not asked again
+// until a newer image ships. A failed or timed-out call is retried after
+// wakeCheckCooldown. Concurrent wakes of one project (its app and its API)
 // share one call.
 
 const wakeCheckCooldown = 10 * time.Minute
@@ -44,18 +45,22 @@ type imageBehindEvent struct {
 }
 
 type wakeCheck struct {
-	done chan struct{}
-	at   time.Time
+	done     chan struct{}
+	at       time.Time
+	answered bool // guarded by m.mu
 }
 
 var wakeCheckClient = &http.Client{Timeout: 60 * time.Second}
 
 // CheckImageBeforeWake runs the wake check for a workload the gateway is about
 // to wake. It returns once the receiver has answered, the timeout passed, or
-// there was nothing to ask. A running workload, one not booted from a built
-// image, or one on its template's newest image returns at once.
+// there was nothing to ask. A live workload, one not booted from a built image,
+// or one on its template's newest image returns at once, without a runtime
+// call: the gateway runs this on every proxied request.
 func (m *Manager) CheckImageBeforeWake(ctx context.Context, workloadID string) {
-	if m.cfg.WakeHookTimeout <= 0 {
+	// A live entry whose instance died is EnsureRunning's to restart; asking the
+	// runtime here would add a status call to every request.
+	if m.cfg.WakeHookTimeout <= 0 || m.isLive(workloadID) {
 		return
 	}
 	w, err := m.store.GetWorkload(workloadID)
@@ -66,11 +71,6 @@ func (m *Manager) CheckImageBeforeWake(ctx context.Context, workloadID string) {
 	if !ok || atoiVer(latest) <= atoiVer(w.ImageVer) {
 		return
 	}
-	if m.isLive(workloadID) {
-		if st, _ := m.rt.Status(ctx, workloadID); st == runtime.StateRunning {
-			return
-		}
-	}
 	wh := m.GetWebhookConfig()
 	if wh.URL == "" {
 		return
@@ -79,7 +79,7 @@ func (m *Manager) CheckImageBeforeWake(ctx context.Context, workloadID string) {
 	key := w.ProjectID + "@" + latest
 	m.mu.Lock()
 	c, seen := m.wakeChecks[key]
-	if seen && time.Since(c.at) > wakeCheckCooldown {
+	if seen && !c.answered && time.Since(c.at) > wakeCheckCooldown {
 		seen = false
 	}
 	if !seen {
@@ -98,6 +98,9 @@ func (m *Manager) CheckImageBeforeWake(ctx context.Context, workloadID string) {
 				log.Printf("wake check: %s (%s %s -> %s): %v", w.ID, w.Template, w.ImageVer, latest, err)
 				return
 			}
+			m.mu.Lock()
+			c.answered = true
+			m.mu.Unlock()
 			log.Printf("wake check: %s (%s %s -> %s) answered in %v", w.ID, w.Template, w.ImageVer, latest, time.Since(start).Round(time.Millisecond))
 		}()
 	}

@@ -232,12 +232,15 @@ write files to its disk (`PUT /v1/workloads/{id}/fs/...`, which doesn't wake a
 docker workload) and move it (`PUT /v1/workloads/{id}/image`). The wake then
 boots whatever the workload says.
 
-- **Local and cheap**: a running workload, one not booted from a built image, or
-  one on its template's newest image is never asked about.
+- **Local and cheap**: a live workload, one not booted from a built image, or one
+  on its template's newest image is never asked about, and the check makes no
+  runtime call (it runs on every proxied request).
 - **Never blocks the wake**: a failed, slow or non-2xx answer starts the workload as
   it is.
-- **Once per project per newest version** within 10 minutes; concurrent wakes of
-  one project share one call.
+- **Once per project per newest version**: a 2xx answer that leaves the workload
+  behind (the receiver declined) is remembered until a newer image ships. A failed
+  or timed-out call is retried after 10 minutes. Concurrent wakes of one project
+  share one call.
 - **Called from the gateway, before `EnsureRunning` takes the wake lock**, so a
   receiver whose writes wake a microVM (wake-on-write) can't deadlock against it.
 

@@ -330,7 +330,9 @@ The same URL receives two synchronous events, sent with `X-Webhook-Key` when an 
 - `workload.image_behind` `{ "project_id", "workload_id", "template", "image_version", "latest_version" }`:
   a sleeping workload is about to wake on an image older than its template's newest. orchd waits up to
   `ORCHD_WAKE_HOOK_TIMEOUT` (default 20s, `0` disables) so the receiver can write files and call
-  `PUT /v1/workloads/{id}/image` first, then wakes it either way.
+  `PUT /v1/workloads/{id}/image` first, then wakes it either way. Each project is asked once per newest
+  version; a 2xx that leaves the workload behind is not asked again until a newer image ships, and a
+  failed call is retried after 10 minutes.
 
 ### `PUT /v1/settings/metrics` — *admin*
 Metrics sink. `{ "type": "http", "url": "https://collector/metrics" }` — `type` is `nop`,

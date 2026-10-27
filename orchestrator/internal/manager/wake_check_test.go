@@ -47,13 +47,16 @@ func wakeTestManager(t *testing.T, timeout time.Duration, handler http.HandlerFu
 }
 
 func TestWakeCheck_AsksForABehindWorkloadAndWakesOnWhatTheReceiverSet(t *testing.T) {
+	var mu sync.Mutex // the race detector doesn't see the ordering the HTTP round trip gives
 	var got imageBehindEvent
 	var m *Manager
 	m, st, _ := wakeTestManager(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-Webhook-Key") != "k" {
 			t.Errorf("missing webhook key")
 		}
+		mu.Lock()
 		_ = json.NewDecoder(r.Body).Decode(&got)
+		mu.Unlock()
 		// The receiver moves the workload while it sleeps, as the website does.
 		if _, err := m.SetWorkloadImage(context.Background(), "w", "v2"); err != nil {
 			t.Errorf("SetWorkloadImage: %v", err)
@@ -63,6 +66,8 @@ func TestWakeCheck_AsksForABehindWorkloadAndWakesOnWhatTheReceiverSet(t *testing
 
 	m.CheckImageBeforeWake(context.Background(), "w")
 	want := imageBehindEvent{Type: "workload.image_behind", ProjectID: "p", WorkloadID: "w", Template: "app", ImageVersion: "v1", LatestVersion: "v2"}
+	mu.Lock()
+	defer mu.Unlock()
 	if got != want {
 		t.Fatalf("event = %+v, want %+v", got, want)
 	}
@@ -143,5 +148,79 @@ func TestWakeCheck_OffWhenTimeoutIsZeroOrNoWebhook(t *testing.T) {
 	m2.CheckImageBeforeWake(context.Background(), "w")
 	if n := calls.Load(); n != 0 {
 		t.Fatalf("receiver called %d times, want 0", n)
+	}
+}
+
+// statusCounter counts runtime status calls, which the gateway's per-request
+// check must not make.
+type statusCounter struct {
+	runtime.Runtime
+	n atomic.Int32
+}
+
+func (s *statusCounter) Status(ctx context.Context, ref string) (runtime.State, error) {
+	s.n.Add(1)
+	return s.Runtime.Status(ctx, ref)
+}
+
+func TestWakeCheck_ALiveWorkloadCostsNoRuntimeCall(t *testing.T) {
+	var calls atomic.Int32
+	m, _, rt := wakeTestManager(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) { calls.Add(1) })
+	sc := &statusCounter{Runtime: rt}
+	m.rt = sc
+	// "api" is behind (v1) and running: a request to it must not ask the runtime or the receiver.
+	if _, err := m.EnsureRunning(context.Background(), "api"); err != nil {
+		t.Fatal(err)
+	}
+	before := sc.n.Load()
+	for i := 0; i < 50; i++ {
+		m.CheckImageBeforeWake(context.Background(), "api")
+	}
+	if n := sc.n.Load() - before; n != 0 {
+		t.Fatalf("%d runtime status calls for 50 requests, want 0", n)
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("receiver called %d times, want 0", n)
+	}
+}
+
+// ageWakeChecks moves every remembered check past the cooldown.
+func ageWakeChecks(m *Manager) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.wakeChecks {
+		c.at = time.Now().Add(-2 * wakeCheckCooldown)
+	}
+}
+
+func TestWakeCheck_ADeclineIsRememberedUntilANewerImage(t *testing.T) {
+	var calls atomic.Int32
+	m, st, _ := wakeTestManager(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) { calls.Add(1) })
+	m.CheckImageBeforeWake(context.Background(), "w") // answered, left on v1
+	ageWakeChecks(m)
+	m.CheckImageBeforeWake(context.Background(), "w")
+	if n := calls.Load(); n != 1 {
+		t.Fatalf("receiver called %d times after a decline and the cooldown, want 1", n)
+	}
+	// A newer image is a new question.
+	_ = st.PutImage(&store.Image{Template: "app", Version: "v3", Dockers: map[string]string{"mobile": "app-mobile:v3"}})
+	m.CheckImageBeforeWake(context.Background(), "w")
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("receiver called %d times after a newer image, want 2", n)
+	}
+}
+
+func TestWakeCheck_AFailedCallIsRetriedAfterTheCooldown(t *testing.T) {
+	var calls atomic.Int32
+	m, _, _ := wakeTestManager(t, 5*time.Second, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	m.CheckImageBeforeWake(context.Background(), "w")
+	m.CheckImageBeforeWake(context.Background(), "w") // within the cooldown
+	ageWakeChecks(m)
+	m.CheckImageBeforeWake(context.Background(), "w")
+	if n := calls.Load(); n != 2 {
+		t.Fatalf("receiver called %d times, want 2 (once, then once after the cooldown)", n)
 	}
 }
