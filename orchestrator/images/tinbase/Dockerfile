@@ -9,7 +9,7 @@ RUN apt-get update \
       libreadline8 libedit2 zlib1g libxml2 liblz4-1 libzstd1 \
  && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g tinbase@0.21.2
+RUN npm install -g tinbase@0.22.0
 
 # Warm the native Postgres 17 binaries into the image as the unprivileged `node`
 # user (Postgres initdb refuses to run as root), so the cache lands in
@@ -27,6 +27,11 @@ COPY <<'SH' /entrypoint.sh
 set -e
 mkdir -p /data
 chown node:node /data 2>/dev/null || true
+# A restore the control plane left for tinbase to load (written as root): tinbase
+# builds the new database beside it and removes the archive once loaded.
+if [ -e /data/.tinbase/restore.tar.gz ]; then
+  chown node:node /data/.tinbase /data/.tinbase/restore.tar.gz 2>/dev/null || true
+fi
 exec gosu node "$@"
 SH
 RUN chmod +x /entrypoint.sh

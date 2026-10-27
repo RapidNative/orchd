@@ -117,6 +117,11 @@ func (m *Manager) backupBeforeEvict(ctx context.Context, projectID string) error
 		if !m.backsUp(w.Type) || (bk != nil && unchangedSinceBackup(bk, w)) {
 			continue
 		}
+		// The dump taken when it went idle is still its exact contents: stored,
+		// or nothing to store because it held only its seed.
+		if m.dumps(w.Type) && dumpCurrent(w) {
+			continue
+		}
 		if _, err := m.BackupWorkload(ctx, w.ID); err != nil {
 			return fmt.Errorf("%s: %w", w.ID, err)
 		}

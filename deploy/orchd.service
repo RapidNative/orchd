@@ -9,7 +9,7 @@ WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
-Environment=ORCHD_IMAGE=tinbase:0.21.2
+Environment=ORCHD_IMAGE=tinbase:0.22.0
 # All installs (boot-time and image builds) go through the box's npm registry
 # cache (tools/orchd-box/verdaccio in the website repo). 172.17.0.1 = docker0,
 # reachable from containers, docker-build RUNs, AND Firecracker guests (via
@@ -63,6 +63,11 @@ Environment=ORCHD_BACKUP_TYPES=tinbase-project
 Environment=ORCHD_BACKUP_RETAIN_DELETED=1
 Environment=ORCHD_BACKUP_BEFORE_RESET=true
 Environment=ORCHD_BACKUP_BEFORE_EVICT=true
+# Databases are backed up as tinbase exports (KBs, taken without pausing): when
+# one goes idle and daily while it runs. None is kept for a database holding
+# only its migrations and seed. Archives already on disk stay readable after
+# the backup target moves to S3 (PUT /v1/settings/backup).
+Environment=ORCHD_BACKUP_DUMP_TYPES=tinbase-project
 Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
 ExecStart=/opt/orchd/orchd

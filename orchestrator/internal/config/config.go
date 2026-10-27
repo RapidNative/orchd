@@ -171,6 +171,12 @@ type Config struct {
 	// reaper deletes it, so the newest backup holds its last writes even when the
 	// scheduled one ran before them; a project whose snapshot fails isn't evicted.
 	BackupBeforeEvict bool
+	// BackupDumpTypes are workload types backed up as a tinbase export (`tinbase
+	// db export`, run inside the container) instead of a tar of the data dir: a
+	// logical dump of KBs, taken without pausing the database, and none at all for
+	// a database still holding only its migrations and seed. Taken daily while
+	// running and when the workload goes idle; restored by tinbase on boot.
+	BackupDumpTypes []string
 
 	// MetricsInterval is how often the platform metrics snapshot is published.
 	MetricsInterval time.Duration
@@ -236,7 +242,7 @@ func Load() Config {
 		Driver:                 env("ORCHD_DRIVER", "local"),
 		TinbaseBin:             env("ORCHD_TINBASE_BIN", "tinbase"),
 		Engine:                 env("ORCHD_ENGINE", ""),
-		Image:                  env("ORCHD_IMAGE", "tinbase:0.21.2"),
+		Image:                  env("ORCHD_IMAGE", "tinbase:0.22.0"),
 		DockerRuntime:          env("ORCHD_DOCKER_RUNTIME", "runsc"),
 		DockerHost:             env("ORCHD_DOCKER_HOST", ""),
 		IdleTimeout:            envDuration("ORCHD_IDLE_TIMEOUT", 5*time.Minute),
@@ -266,6 +272,7 @@ func Load() Config {
 		BackupRetainDeleted:    envInt("ORCHD_BACKUP_RETAIN_DELETED", -1),
 		BackupBeforeReset:      envBool("ORCHD_BACKUP_BEFORE_RESET"),
 		BackupBeforeEvict:      envBool("ORCHD_BACKUP_BEFORE_EVICT"),
+		BackupDumpTypes:        splitCSV(os.Getenv("ORCHD_BACKUP_DUMP_TYPES")),
 		MetricsInterval:        envDuration("ORCHD_METRICS_INTERVAL", 60*time.Second),
 		ReprovisionHookTimeout: envDuration("ORCHD_REPROVISION_HOOK_TIMEOUT", 30*time.Second),
 		WakeHookTimeout:        envDuration("ORCHD_WAKE_HOOK_TIMEOUT", 20*time.Second),

@@ -6,10 +6,16 @@
 // Archives capture the whole data dir (Postgres cluster + storage objects) taken
 // while the instance is stopped, so a restore is the exact bytes back. Callers
 // (the manager) coordinate stopping/starting the instance around Create/Restore.
+//
+// A store also keeps archives made elsewhere (Put/Fetch): a tinbase export
+// (`tinbase db export`), a logical dump that is KBs where the data dir is MBs and
+// that the workload itself loads on its next boot.
 package backup
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -23,7 +29,20 @@ type Backup struct {
 	WorkloadID string    `json:"workload_id"`
 	CreatedAt  time.Time `json:"created_at"`
 	SizeBytes  int64     `json:"size_bytes"`
+	// Kind is what the archive holds: KindDir or KindDump.
+	Kind string `json:"kind,omitempty"`
 }
+
+const (
+	// KindDir is a tar.gz of the workload's data directory (Create/Restore).
+	KindDir = ""
+	// KindDump is a tinbase export, stored with Put and read back with Fetch.
+	KindDump = "dump"
+)
+
+// ErrNotExtractable is returned by Restore for a backup that is not a data-dir
+// archive: a tinbase export is loaded by tinbase itself, not extracted.
+var ErrNotExtractable = errors.New("backup is a tinbase export: fetch it and let tinbase import it")
 
 // Store is the backup backend contract.
 type Store interface {
@@ -32,11 +51,15 @@ type Store interface {
 	Restore(id, destDir string) error         // extract into destDir (caller has cleared it)
 	Delete(id string) error
 	Retain(workloadID string, keep int) error // drop oldest beyond keep
+	// Put stores an archive made elsewhere (a tinbase export) as a backup of kind.
+	Put(workloadID, file, kind string) (Backup, error)
+	// Fetch writes a backup's archive, as stored, to destFile.
+	Fetch(id, destFile string) error
 }
 
 const tsLayout = "20060102T150405Z"
 
-// LocalStore stores archives at <root>/<workloadID>/<timestamp>.tar.gz.
+// LocalStore stores archives at <root>/<workloadID>/<timestamp>[.<kind>].tar.gz.
 type LocalStore struct{ root string }
 
 func NewLocalStore(root string) (*LocalStore, error) {
@@ -46,36 +69,80 @@ func NewLocalStore(root string) (*LocalStore, error) {
 	return &LocalStore{root: root}, nil
 }
 
-func backupID(workloadID string, t time.Time) string {
-	return workloadID + "__" + t.UTC().Format(tsLayout)
+// backupID is <workloadID>__<timestamp>, with .<kind> appended for anything but
+// a data-dir archive, so ids minted before kinds existed still parse.
+func backupID(workloadID string, t time.Time, kind string) string {
+	id := workloadID + "__" + t.UTC().Format(tsLayout)
+	if kind != KindDir {
+		id += "." + kind
+	}
+	return id
 }
 
-func parseID(id string) (workloadID string, ts time.Time, err error) {
+func parseID(id string) (workloadID string, ts time.Time, kind string, err error) {
 	i := strings.LastIndex(id, "__")
 	if i < 0 {
-		return "", time.Time{}, fmt.Errorf("bad backup id %q", id)
+		return "", time.Time{}, "", fmt.Errorf("bad backup id %q", id)
 	}
 	workloadID = id[:i]
-	ts, err = time.Parse(tsLayout, id[i+2:])
+	rest := id[i+2:]
+	if j := strings.IndexByte(rest, '.'); j >= 0 {
+		rest, kind = rest[:j], rest[j+1:]
+		if kind != KindDump {
+			return "", time.Time{}, "", fmt.Errorf("bad backup id %q", id)
+		}
+	}
+	ts, err = time.Parse(tsLayout, rest)
 	return
 }
 
+// KindOf is the kind of backup an id names; KindDir when it doesn't parse.
+func KindOf(id string) string {
+	_, _, kind, _ := parseID(id)
+	return kind
+}
+
+// fileName is the archive's name within its workload's directory or prefix.
+func fileName(ts time.Time, kind string) string {
+	n := ts.UTC().Format(tsLayout)
+	if kind != KindDir {
+		n += "." + kind
+	}
+	return n + ".tar.gz"
+}
+
+// parseFileName reads an archive name back; ok is false for anything else.
+func parseFileName(name string) (ts time.Time, kind string, ok bool) {
+	base := strings.TrimSuffix(name, ".tar.gz")
+	if base == name {
+		return time.Time{}, "", false
+	}
+	if j := strings.IndexByte(base, '.'); j >= 0 {
+		base, kind = base[:j], base[j+1:]
+		if kind != KindDump {
+			return time.Time{}, "", false
+		}
+	}
+	ts, err := time.Parse(tsLayout, base)
+	return ts, kind, err == nil
+}
+
 func (s *LocalStore) path(id string) (string, error) {
-	wid, ts, err := parseID(id)
+	wid, ts, kind, err := parseID(id)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(s.root, wid, ts.UTC().Format(tsLayout)+".tar.gz"), nil
+	return filepath.Join(s.root, wid, fileName(ts, kind)), nil
 }
 
 func (s *LocalStore) Create(workloadID, dataDir string, exclude []string) (Backup, error) {
 	now := time.Now().UTC()
-	id := backupID(workloadID, now)
+	id := backupID(workloadID, now, KindDir)
 	dir := filepath.Join(s.root, workloadID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return Backup{}, err
 	}
-	dst := filepath.Join(dir, now.Format(tsLayout)+".tar.gz")
+	dst := filepath.Join(dir, fileName(now, KindDir))
 
 	// Write to a temp file first, then rename, so a crash never leaves a partial
 	// archive that looks valid.
@@ -108,16 +175,15 @@ func (s *LocalStore) List(workloadID string) ([]Backup, error) {
 			return
 		}
 		for _, e := range entries {
-			name := strings.TrimSuffix(e.Name(), ".tar.gz")
-			if name == e.Name() || e.IsDir() {
+			if e.IsDir() {
 				continue
 			}
-			ts, err := time.Parse(tsLayout, name)
-			if err != nil {
+			ts, kind, ok := parseFileName(e.Name())
+			if !ok {
 				continue
 			}
 			fi, _ := e.Info()
-			out = append(out, Backup{ID: backupID(wid, ts), WorkloadID: wid, CreatedAt: ts, SizeBytes: sizeOf(fi)})
+			out = append(out, Backup{ID: backupID(wid, ts, kind), WorkloadID: wid, CreatedAt: ts, SizeBytes: sizeOf(fi), Kind: kind})
 		}
 	}
 	if workloadID != "" {
@@ -135,6 +201,9 @@ func (s *LocalStore) List(workloadID string) ([]Backup, error) {
 }
 
 func (s *LocalStore) Restore(id, destDir string) error {
+	if _, _, kind, err := parseID(id); err == nil && kind != KindDir {
+		return ErrNotExtractable
+	}
 	p, err := s.path(id)
 	if err != nil {
 		return err
@@ -168,6 +237,49 @@ func (s *LocalStore) Retain(workloadID string, keep int) error {
 		_ = s.Delete(list[i].ID)
 	}
 	return nil
+}
+
+func (s *LocalStore) Put(workloadID, file, kind string) (Backup, error) {
+	now := time.Now().UTC()
+	dir := filepath.Join(s.root, workloadID)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return Backup{}, err
+	}
+	dst := filepath.Join(dir, fileName(now, kind))
+	if err := copyFile(file, dst+".partial"); err != nil {
+		os.Remove(dst + ".partial")
+		return Backup{}, err
+	}
+	if err := os.Rename(dst+".partial", dst); err != nil {
+		return Backup{}, err
+	}
+	fi, _ := os.Stat(dst)
+	return Backup{ID: backupID(workloadID, now, kind), WorkloadID: workloadID, CreatedAt: now, SizeBytes: sizeOf(fi), Kind: kind}, nil
+}
+
+func (s *LocalStore) Fetch(id, destFile string) error {
+	p, err := s.path(id)
+	if err != nil {
+		return err
+	}
+	return copyFile(p, destFile)
+}
+
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		return err
+	}
+	return out.Close()
 }
 
 func sizeOf(fi os.FileInfo) int64 {
