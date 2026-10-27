@@ -323,6 +323,15 @@ The backup destination. Leave `secret_key` blank on an s3 target to keep the exi
 ### `PUT /v1/settings/webhook` — *admin*
 Event webhook URL; blank disables it. `{ "url": "https://example.com/hooks" }`
 
+The same URL receives two synchronous events, sent with `X-Webhook-Key` when an API key is set:
+
+- `domain.not_found` `{ "host" }`: a request arrived for a host with no route. orchd holds it while the
+  receiver re-creates the project (`ORCHD_REPROVISION_HOOK_TIMEOUT`, default 30s).
+- `workload.image_behind` `{ "project_id", "workload_id", "template", "image_version", "latest_version" }`:
+  a sleeping workload is about to wake on an image older than its template's newest. orchd waits up to
+  `ORCHD_WAKE_HOOK_TIMEOUT` (default 20s, `0` disables) so the receiver can write files and call
+  `PUT /v1/workloads/{id}/image` first, then wakes it either way.
+
 ### `PUT /v1/settings/metrics` — *admin*
 Metrics sink. `{ "type": "http", "url": "https://collector/metrics" }` — `type` is `nop`,
 `log` or `http`.

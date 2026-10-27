@@ -82,6 +82,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// A sleeping workload on an old image: let the webhook bring it along first
+	// (files, image) so it wakes current. Returns at once in the common case.
+	g.mgr.CheckImageBeforeWake(r.Context(), workload.ID)
+
 	addr, err := g.mgr.EnsureRunning(r.Context(), workload.ID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
