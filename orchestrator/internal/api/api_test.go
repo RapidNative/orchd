@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
@@ -603,5 +604,28 @@ func TestCreateProjectNameConflict(t *testing.T) {
 	// Unnamed projects stay unconstrained.
 	if code, body = do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{}); code != http.StatusCreated {
 		t.Fatalf("unnamed create: %d %s", code, body)
+	}
+}
+
+// A re-created project's database takes the secret it is given, and the
+// response carries it back (the website keeps it for the next re-create).
+func TestCreateProjectWithJWTSecret(t *testing.T) {
+	srv := newTestServer(t)
+	secret := strings.Repeat("cd", 32)
+	code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"jwt_secret": secret})
+	if code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, body)
+	}
+	var proj struct {
+		Workloads []struct {
+			JWTSecret string `json:"jwt_secret"`
+		} `json:"workloads"`
+	}
+	_ = json.Unmarshal(body, &proj)
+	if len(proj.Workloads) != 1 || proj.Workloads[0].JWTSecret != secret {
+		t.Fatalf("workloads: %+v", proj.Workloads)
+	}
+	if code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"jwt_secret": "short"}); code != http.StatusBadRequest {
+		t.Fatalf("short secret: %d %s, want 400", code, body)
 	}
 }
