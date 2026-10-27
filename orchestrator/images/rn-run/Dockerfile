@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.4.17 && npm cache clean --force
+RUN npm install -g rnrun@0.4.19 && npm cache clean --force
 
 # HOME holds rnrun's pkg-cache. It lives in the ephemeral writable layer (gVisor
 # resets it on stop/start) — fine, because a bundle-cache hit doesn't need it and
@@ -35,6 +35,13 @@ ENV RNRUN_TOOLS_DIR=/data/.rnrun/tools
 # 0.3.2+: the package cache is relocatable too. Co-locate it on /data so a
 # wake stops re-fetching packages into the ephemeral layer entirely.
 ENV RNRUN_PKG_CACHE_DIR=/data/.rnrun/pkg
+# 0.4.19+: a host-filled, read-only cache read before the per-project ones,
+# mounted here by ORCHD_READONLY_MOUNTS when the host has one. A brand-new
+# project then reads the dependency bundles and worklets plugin other projects
+# already used instead of fetching ~175MB onto its own /data (~7s per new
+# project on staging, 10-45s when the host disk stalls). Nothing mounted
+# means nothing changes.
+ENV RNRUN_SHARED_CACHE_DIR=/shared
 
 # Hosted preview over a public URL: serve an anonymous manifest so Expo Go on
 # physical iOS skips the SDK 57 sign-in gate (trades away Fast Refresh).
@@ -43,10 +50,13 @@ ENV RNRUN_EXPO_GO_ANONYMOUS=1
 WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
-# --prewarm ios: warms a genuinely-cold project during idle so its first-ever
-# scan isn't the one paying the ~38s build. Safe on a warm cache as of 0.3.2:
-# the Fast-Refresh graph rebuild that used to fire on every cache hit is now
-# lazy (built on first edit), so a hit is a true no-op serve (~270ms) rather
-# than a background full build. Bundle cache lives on /data (above) so it
-# survives the gVisor writable-layer wipe on stop/start.
-CMD ["rnrun", "start", "--port", "8080", "--prewarm", "ios"]
+# --prewarm ios,android: warms a genuinely-cold project during idle so its
+# first-ever scan isn't the one paying the build. Safe on a warm cache as of
+# 0.3.2: the Fast-Refresh graph rebuild that used to fire on every cache hit is
+# now lazy (built on first edit), so a hit is a true no-op serve (~270ms)
+# rather than a background full build. Bundle cache lives on /data (above) so
+# it survives the gVisor writable-layer wipe on stop/start. Android was left
+# out before because it cost the iOS scan time; as of 0.4.19 the builds run one
+# after the other and Android waits until the server is quiet, and peak memory
+# stayed under the 1GB limit with both on the staging test pad.
+CMD ["rnrun", "start", "--port", "8080", "--prewarm", "ios,android"]

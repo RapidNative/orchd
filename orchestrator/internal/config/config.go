@@ -124,6 +124,13 @@ type Config struct {
 	// well-known hostname to an on-box service (a cache, a mirror) for guests
 	// only — public DNS and guest trust stores stay untouched.
 	HostAliases map[string]string
+	// ReadOnlyMounts ("/host/dir=/container/dir,...") are bind-mounted
+	// read-only into every container. For a host-filled cache many workloads
+	// read and none may write, e.g. a package cache only the host fills (a
+	// tenant runs untrusted code, so a writable shared dir would let one
+	// poison it for all). A host dir that doesn't exist is skipped. Containers
+	// only: microVMs ignore it.
+	ReadOnlyMounts map[string]string
 	// Region is the single region this orchestrator serves for now.
 	Region string
 
@@ -250,6 +257,7 @@ func Load() Config {
 		TinbaseSMSAPIURL:       env("ORCHD_TINBASE_SMS_API_URL", ""),
 		BuildEnv:               envMap("ORCHD_BUILD_ENV"),
 		HostAliases:            envMap("ORCHD_HOST_ALIASES"),
+		ReadOnlyMounts:         envMap("ORCHD_READONLY_MOUNTS"),
 		Region:                 env("ORCHD_REGION", "local"),
 		APIKeyFile:             env("ORCHD_API_KEY_FILE", ""),
 		PublicURL:              env("ORCHD_PUBLIC_URL", publicURLDefault),

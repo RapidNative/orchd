@@ -95,6 +95,10 @@ type Spec struct {
 	// for guests only, without touching public DNS or guest trust stores.
 	HostAliases map[string]string
 
+	// ReadOnlyMounts maps host directories to container paths, bind-mounted
+	// read-only (containers only; a missing host dir is skipped).
+	ReadOnlyMounts map[string]string
+
 	// DepsHostDir, when set, is a host directory holding the image's extracted
 	// dependencies, bind-mounted read-only at DepsPath and shared by every
 	// workload of the image version. Empty falls back to a per-workload named

@@ -13,6 +13,10 @@ Environment=ORCHD_IMAGE=tinbase:0.21.2
 Environment=ORCHD_WORKLOAD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_BUILD_ENV=npm_config_registry=http://172.17.0.1:4873,NPM_CONFIG_REGISTRY=http://172.17.0.1:4873
 Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
+# The shared package cache esm-shared-fill.timer fills from this box's esm
+# traffic (website repo, tools/orchd-box/esm-cache); rn-run reads it at
+# /shared. Read-only: only the host writes it. Skipped until the dir exists.
+Environment=ORCHD_READONLY_MOUNTS=/opt/orchd/data/shared-cache=/shared
 # Where tinbase workloads send auth email: the platform relay in
 # global-services. The password is each project's own service key, read from
 # its env, so only the destination is set here. The relay holds the one
