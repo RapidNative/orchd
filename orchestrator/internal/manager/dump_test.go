@@ -414,7 +414,9 @@ func TestSweepWaitsAfterAFailedDump(t *testing.T) {
 	_ = rt.Suspend(context.Background(), "db")
 	rt.failOffline = true
 	now := time.Now()
-	m.sweepBackups(context.Background(), now)
+	if n := m.sweepBackups(context.Background(), now); n != 0 || rt.offline != 0 {
+		t.Fatalf("a failed dump counted as taken (%d)", n)
+	}
 	if n := m.sweepBackups(context.Background(), now.Add(time.Minute)); n != 0 {
 		t.Fatalf("a failed dump was retried a minute later (%d)", n)
 	}
@@ -497,5 +499,18 @@ func TestSweepWaitsWhileTheDiskIsBusy(t *testing.T) {
 	_ = os.WriteFile(psi, []byte("some avg10=3.00 avg60=2.00 avg300=1.00 total=1\nfull avg10=0.40 avg60=0.20 avg300=0.10 total=1\n"), 0o644)
 	if n := m.sweepBackups(context.Background(), time.Now()); n != 1 || rt.exports != 1 {
 		t.Fatalf("a sweep on a quiet disk took %d", n)
+	}
+}
+
+func TestFailuresDoNotFillTheBatch(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{BackupSweepBatch: 1})
+	rt.failExec = true // "db" runs an image that can't export
+	dir := filepath.Join(m.cfg.DataRoot, "projects", "p", "db2")
+	_ = os.MkdirAll(dir, 0o755)
+	rt.dataDirs["db2"] = dir
+	rt.state["db2"] = runtime.StateSuspended
+	_ = m.store.PutWorkload(&store.Workload{ID: "db2", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, State: runtime.StateSuspended, DataDir: dir})
+	if n := m.sweepBackups(context.Background(), time.Now()); n != 1 || rt.offline != 1 {
+		t.Fatalf("a failing database used the batch of 1: took %d, offline %d", n, rt.offline)
 	}
 }
