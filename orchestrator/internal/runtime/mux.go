@@ -79,6 +79,19 @@ func (m *Mux) Start(ctx context.Context, spec Spec) (*Instance, error) {
 
 func (m *Mux) Suspend(ctx context.Context, ref string) error { return m.forRef(ref).Suspend(ctx, ref) }
 func (m *Mux) Stop(ctx context.Context, ref string) error    { return m.forRef(ref).Stop(ctx, ref) }
+
+// RunningRefs lists the default driver's running workloads (see
+// DockerDriver.RunningRefs). The microVMs are not listed.
+func (m *Mux) RunningRefs(ctx context.Context) (map[string]bool, error) {
+	l, ok := m.def.(interface {
+		RunningRefs(context.Context) (map[string]bool, error)
+	})
+	if !ok {
+		return nil, fmt.Errorf("%s cannot list its running workloads", m.def.Name())
+	}
+	return l.RunningRefs(ctx)
+}
+
 func (m *Mux) Status(ctx context.Context, ref string) (State, error) {
 	return m.forRef(ref).Status(ctx, ref)
 }

@@ -416,6 +416,36 @@ func (d *DockerDriver) Stop(ctx context.Context, ref string) error {
 	return d.docker(ctx, d.hostFor(ref), "rm", "-f", containerName(ref)).Run()
 }
 
+// RunningRefs lists the workloads whose containers run, on every daemon a
+// workload was placed on: one `docker ps` each, where Status is two `docker
+// inspect`s per workload.
+func (d *DockerDriver) RunningRefs(ctx context.Context) (map[string]bool, error) {
+	d.mu.Lock()
+	hosts := map[string]bool{"": true}
+	for _, h := range d.hosts {
+		hosts[d.effHost(h)] = true
+	}
+	d.mu.Unlock()
+	if d.DockerHost != "" {
+		delete(hosts, "")
+		hosts[d.DockerHost] = true
+	}
+	refs := map[string]bool{}
+	for h := range hosts {
+		out, err := d.docker(ctx, h, "ps", "--format", "{{.Names}}").Output()
+		if err != nil {
+			return nil, fmt.Errorf("docker ps on %q: %w", h, err)
+		}
+		for _, name := range strings.Fields(string(out)) {
+			ref, ok := strings.CutPrefix(name, "tb-")
+			if ok && !strings.HasSuffix(ref, "-offline") {
+				refs[ref] = true
+			}
+		}
+	}
+	return refs, nil
+}
+
 func (d *DockerDriver) Status(ctx context.Context, ref string) (State, error) {
 	state, _ := d.inspect(ctx, d.hostFor(ref), ref)
 	return state, nil

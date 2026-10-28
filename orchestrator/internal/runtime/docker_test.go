@@ -66,3 +66,19 @@ func TestRunOfflineIsolatesTheExport(t *testing.T) {
 		t.Fatalf("docker %s\nwant   %s", run, want)
 	}
 }
+
+func TestRunningRefsListsWorkloadContainers(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\n[ \"$1\" = ps ] && printf 'tb-a1\\ntb-b2-offline\\nverdaccio\\ntb-c3\\n'\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	got, err := NewDockerDriver("img", "").RunningRefs(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || !got["a1"] || !got["c3"] {
+		t.Fatalf("running refs %v, want a1 and c3 (no offline exports, no other containers)", got)
+	}
+}

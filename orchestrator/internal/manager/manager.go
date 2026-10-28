@@ -901,6 +901,13 @@ func (m *Manager) rebootWorkload(ctx context.Context, w *store.Workload) error {
 	rl := m.refLock(w.ID)
 	rl.Lock()
 	defer rl.Unlock()
+	// Shut it down the way a suspend does before removing it. rt.Stop alone is
+	// `docker rm -f`: Postgres is killed mid-write and the new instance replays
+	// its WAL, which took one database 2.5 minutes (and the readiness wait gave
+	// up first).
+	if st, _ := m.rt.Status(ctx, w.ID); st == runtime.StateRunning {
+		_ = m.rt.Suspend(ctx, w.ID)
+	}
 	_ = m.rt.Stop(ctx, w.ID)
 	m.forget(w.ID)
 	inst, err := m.rt.Create(ctx, m.specFor(w))
@@ -1855,14 +1862,58 @@ func (m *Manager) ReapIdle(ctx context.Context) {
 func (m *Manager) RunReaper(ctx context.Context) {
 	t := time.NewTicker(30 * time.Second)
 	defer t.Stop()
-	for {
+	for tick := 0; ; tick++ {
 		select {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			if tick%20 == 0 { // every 10 minutes, starting with the first tick
+				m.reconcileStates(ctx)
+			}
 			m.ReapIdle(ctx)
 		}
 	}
+}
+
+// reconcileStates marks running the workloads the store calls suspended or
+// failed while their instance runs: a provision or restart whose readiness wait
+// gave up before the instance came up, or a suspend that never took. Nothing
+// reaps, backs up or counts toward the LRU what the store calls down, so such an
+// instance stayed up for days. Marked running, it gets ReapIdle's grace interval
+// for instances orchd does not own, and is then suspended (and dumped) normally.
+// Returns how many it fixed.
+func (m *Manager) reconcileStates(ctx context.Context) int {
+	l, ok := m.rt.(interface {
+		RunningRefs(context.Context) (map[string]bool, error)
+	})
+	if !ok {
+		return 0
+	}
+	running, err := l.RunningRefs(ctx)
+	if err != nil {
+		log.Printf("reconcile: %v", err)
+		return 0
+	}
+	n := 0
+	for _, w := range m.store.ListWorkloads("") {
+		if w.State == runtime.StateRunning || !running[w.ID] {
+			continue
+		}
+		rl := m.refLock(w.ID)
+		if !rl.TryLock() {
+			continue // a wake, suspend or restart is under way; it sets the state
+		}
+		cur, err := m.store.GetWorkload(w.ID)
+		if err == nil && cur.State != runtime.StateRunning {
+			if st, _ := m.rt.Status(ctx, w.ID); st == runtime.StateRunning {
+				_ = m.store.SetWorkloadState(w.ID, runtime.StateRunning)
+				log.Printf("reconcile: %s was %s in the store but runs; marked running", w.ID, cur.State)
+				n++
+			}
+		}
+		rl.Unlock()
+	}
+	return n
 }
 
 func (m *Manager) Store() store.Store { return m.store }
