@@ -27,6 +27,16 @@ type reprovisionRequest struct {
 	Host string `json:"host"`
 }
 
+// errUnknownHost: the receiver answered 404, it has no project for the host.
+var errUnknownHost = errors.New("reprovision hook returned 404")
+
+// unknownHostTTL is how long a host the receiver answered 404 for is not asked
+// about again. Misses come in bursts (one page load is many requests, median 2 s
+// apart on staging) and bots revisit dead hosts: 480 hook calls a day for 110
+// hosts, half of them within 10 minutes of a 404 for the same host. A project
+// created meanwhile is not held up: its route resolves before this is consulted.
+const unknownHostTTL = 30 * time.Minute
+
 // reprovisionClient is a dedicated synchronous client. Unlike events.WebhookSink
 // (fire-and-forget), this call waits for and acts on the response.
 var reprovisionClient = &http.Client{Timeout: 30 * time.Second}
@@ -55,6 +65,9 @@ func (m *Manager) RequestReprovision(ctx context.Context, host string) (*store.W
 	// A request that raced ahead may have already re-created the route.
 	if wl, err := m.ResolveHost(host); err == nil {
 		return wl, nil
+	}
+	if m.knownUnknown(host, time.Now()) {
+		return nil, store.ErrNotFound
 	}
 
 	// A canceled proxy request must not abort the reprovision it triggered.
@@ -90,6 +103,11 @@ func (m *Manager) RequestReprovision(ctx context.Context, host string) (*store.W
 			select {
 			case err := <-hookDone:
 				hookPending = false
+				if errors.Is(err, errUnknownHost) {
+					m.noteUnknownHost(host, time.Now())
+					log.Printf("reprovision: no project for %s (404); not asking again for %s", host, unknownHostTTL)
+					return nil, store.ErrNotFound
+				}
 				if err != nil {
 					log.Printf("reprovision: hook for %s failed: %v", host, err)
 					return nil, store.ErrNotFound
@@ -127,10 +145,37 @@ func (m *Manager) postReprovisionHook(ctx context.Context, wh store.Webhook, hos
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errUnknownHost
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("reprovision hook returned %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// knownUnknown reports whether the receiver answered 404 for host within
+// unknownHostTTL.
+func (m *Manager) knownUnknown(host string, now time.Time) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	at, ok := m.unknownHosts[host]
+	if ok && now.Sub(at) >= unknownHostTTL {
+		delete(m.unknownHosts, host)
+		ok = false
+	}
+	return ok
+}
+
+func (m *Manager) noteUnknownHost(host string, now time.Time) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for h, at := range m.unknownHosts { // bounded by the hosts seen in one TTL
+		if now.Sub(at) >= unknownHostTTL {
+			delete(m.unknownHosts, h)
+		}
+	}
+	m.unknownHosts[host] = now
 }
 
 func (m *Manager) hostLock(host string) *sync.Mutex {

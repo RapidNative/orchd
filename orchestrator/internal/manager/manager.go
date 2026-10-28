@@ -57,11 +57,13 @@ type Manager struct {
 	sink    events.Sink        // fan-out sink (mem + optional webhook)
 	metrics metrics.Sink       // metrics publish target
 
-	mu         sync.Mutex
-	live       map[string]*liveInstance // workloadID -> running instance
-	refLocks   map[string]*sync.Mutex   // per-workload wake serialization
-	hostLocks  map[string]*sync.Mutex   // per-host reprovision-on-miss serialization
-	wakeChecks map[string]*wakeCheck    // project@latest-image -> the wake check asked for it (wake_check.go)
+	mu        sync.Mutex
+	live      map[string]*liveInstance // workloadID -> running instance
+	refLocks  map[string]*sync.Mutex   // per-workload wake serialization
+	hostLocks map[string]*sync.Mutex   // per-host reprovision-on-miss serialization
+	// hosts the reprovision receiver answered 404 for, and when (reprovision.go)
+	unknownHosts map[string]time.Time
+	wakeChecks   map[string]*wakeCheck // project@latest-image -> the wake check asked for it (wake_check.go)
 
 	// activityPersist coalesces LastActiveAt writes: projectID -> when it was last
 	// persisted, so a warm project's LRU clock is flushed at most once per window.
@@ -183,6 +185,7 @@ func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
 		live:            make(map[string]*liveInstance),
 		refLocks:        make(map[string]*sync.Mutex),
 		hostLocks:       make(map[string]*sync.Mutex),
+		unknownHosts:    make(map[string]time.Time),
 		wakeChecks:      make(map[string]*wakeCheck),
 		activityPersist: make(map[string]time.Time),
 		unowned:         make(map[string]time.Time),
