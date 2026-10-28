@@ -296,10 +296,14 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 		DeltaB64  map[string]string `json:"delta_b64,omitempty"` // binary files to overlay (path -> base64 bytes)
 		Deleted   []string          `json:"deleted,omitempty"`   // base paths to remove
 		Workloads []workloadSpecReq `json:"workloads"`
+		// The database's JWT secret, when re-creating a project whose dump will
+		// be restored into it (see manager.CreateOptions). Empty mints one.
+		JWTSecret string `json:"jwt_secret,omitempty"`
 	}
 	if r.ContentLength > 0 {
 		_ = json.NewDecoder(r.Body).Decode(&body)
 	}
+	opts := manager.CreateOptions{JWTSecret: body.JWTSecret}
 	// Named projects are unique, enforced here because this is the only create
 	// entry point. Callers use the name as their own foreign key (one project
 	// per app), and clients running on several instances race their
@@ -332,15 +336,19 @@ func (a *API) createProject(w http.ResponseWriter, r *http.Request) {
 			writeErr(w, http.StatusBadRequest, fmt.Errorf("image must be \"template@version\""))
 			return
 		}
-		proj, _, err = a.mgr.CreateFromImage(r.Context(), tmpl, ver, body.Name, body.Region, delta, body.Deleted)
+		proj, _, err = a.mgr.CreateFromImage(r.Context(), tmpl, ver, body.Name, body.Region, delta, body.Deleted, opts)
 	} else if body.Template != "" {
-		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region, delta, body.Deleted)
+		proj, _, err = a.mgr.CreateFromTemplate(r.Context(), body.Template, body.Name, body.Region, delta, body.Deleted, opts)
 	} else {
 		specs := make([]manager.WorkloadSpec, 0, len(body.Workloads))
 		for _, ws := range body.Workloads {
 			specs = append(specs, ws.toSpec())
 		}
-		proj, _, err = a.mgr.CreateProject(r.Context(), body.Name, body.Region, specs)
+		proj, _, err = a.mgr.CreateProject(r.Context(), body.Name, body.Region, specs, opts)
+	}
+	if errors.Is(err, manager.ErrBadJWTSecret) {
+		writeErr(w, http.StatusBadRequest, err)
+		return
 	}
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, err)
@@ -665,6 +673,8 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 		// /v1/workloads/{id}/proxy/...: requests to a workload that never wake
 		// it or count as its use.
 		"workload_proxy": true,
+		// POST /v1/projects takes jwt_secret for its database.
+		"create_with_jwt_secret": true,
 	})
 }
 

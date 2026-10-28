@@ -53,9 +53,15 @@ generic template:
   "name": "<caller's stable id>",     // orchd names the project this; also its routing identity
   "delta":     { "path": "text content" },
   "delta_b64": { "path": "base64" },  // binary assets
-  "deleted":   ["template/paths/to/remove"]
+  "deleted":   ["template/paths/to/remove"],
+  "jwt_secret": "<64 hex>"            // optional: the database's secret (re-creating a project)
 }
 ```
+
+When a project is re-created and its old database's dump will be restored into
+the new one, pass the old database's `jwt_secret` (every workload view carries
+it; keep it server-side). The app's keys, its users' sessions and its vault
+stay valid. Without it the new database mints its own.
 
 The caller decides what a delta is. A useful convention: compare the tenant's
 files against the *compiled template* and send only what differs. Two rules

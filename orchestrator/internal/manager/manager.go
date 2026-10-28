@@ -112,6 +112,48 @@ type WorkloadSpec struct {
 	Env          map[string]string // user-injected environment variables
 	SeedDelta    map[string][]byte // files to overlay on the base at seed (path -> raw bytes)
 	SeedDeleted  []string          // base paths to remove at seed (tombstones)
+	JWTSecret    string            // tinbase types: use this secret instead of minting one
+}
+
+// CreateOptions are what a caller re-creating a project carries over from the
+// project it replaces.
+type CreateOptions struct {
+	// JWTSecret is given to the project's database (tinbase-project) workloads
+	// instead of a new one. A database re-created from its predecessor's dump
+	// then keeps that one's secret: tokens signed with it (the app's keys, its
+	// users' sessions) stay valid, and its vault, keyed by it, still decrypts.
+	JWTSecret string
+}
+
+// minJWTSecret is the shortest secret accepted from a caller (HS256 keys, as
+// Supabase requires).
+const minJWTSecret = 32
+
+// ErrBadJWTSecret refuses a caller's JWT secret shorter than minJWTSecret.
+var ErrBadJWTSecret = fmt.Errorf("jwt_secret must be at least %d characters", minJWTSecret)
+
+// withCreateOptions applies opts to specs.
+func withCreateOptions(specs []WorkloadSpec, opts []CreateOptions) ([]WorkloadSpec, error) {
+	for _, o := range opts {
+		if o.JWTSecret == "" {
+			continue
+		}
+		if len(o.JWTSecret) < minJWTSecret {
+			return nil, ErrBadJWTSecret
+		}
+		for i := range specs {
+			// The type as registerWorkload resolves it: explicit, else the
+			// preset's, else tinbase.
+			t := specs[i].Type
+			if p, ok := Catalog[specs[i].Preset]; ok && t == "" {
+				t = p.Type
+			}
+			if t == "" || t == runtime.WorkloadTinbaseProject {
+				specs[i].JWTSecret = o.JWTSecret
+			}
+		}
+	}
+	return specs, nil
 }
 
 // preset is a named workload template so the API/UI can ask for "expo"/"vite"/
@@ -1066,7 +1108,7 @@ func (m *Manager) SetTemplate(name, path string) error {
 // CreateFromTemplate provisions a project whose workloads come from a template's
 // orchd.json: one workload per manifest entry, each running its workspace on its
 // own port (local) or from its image (prod).
-func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string, delta map[string][]byte, deleted []string) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, regionID string, delta map[string][]byte, deleted []string, opts ...CreateOptions) (*store.Project, []*store.Workload, error) {
 	path := m.templatePath(tmplName)
 	if path == "" {
 		return nil, nil, fmt.Errorf("template %q is not configured (add it in Settings)", tmplName)
@@ -1105,14 +1147,14 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 	if projName == "" {
 		projName = man.Name
 	}
-	return m.CreateProject(ctx, projName, regionID, specs)
+	return m.CreateProject(ctx, projName, regionID, specs, opts...)
 }
 
 // CreateFromImage provisions a project from a frozen image (template@version):
 // same workload shape as the template, but each workload restores from the
 // image's tarball (local) or runs the versioned container tag (prod), rather than
 // the live template. A caller-supplied delta still overlays on top.
-func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projName, regionID string, delta map[string][]byte, deleted []string) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projName, regionID string, delta map[string][]byte, deleted []string, opts ...CreateOptions) (*store.Project, []*store.Workload, error) {
 	im, err := m.store.GetImage(tmplName, version)
 	if err != nil {
 		return nil, nil, fmt.Errorf("image %s: %w", store.ImageID(tmplName, version), err)
@@ -1159,13 +1201,20 @@ func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projNa
 	if projName == "" {
 		projName = tmplName
 	}
-	return m.CreateProject(ctx, projName, regionID, specs)
+	return m.CreateProject(ctx, projName, regionID, specs, opts...)
 }
 
 // CreateProject creates a project grouping and provisions its workloads. With no
 // specs it defaults to a single primary tinbase workload, preserving the simple
 // "one project, one backend" case.
-func (m *Manager) CreateProject(ctx context.Context, name, regionID string, specs []WorkloadSpec) (*store.Project, []*store.Workload, error) {
+func (m *Manager) CreateProject(ctx context.Context, name, regionID string, specs []WorkloadSpec, opts ...CreateOptions) (*store.Project, []*store.Workload, error) {
+	if len(specs) == 0 {
+		specs = []WorkloadSpec{{Type: runtime.WorkloadTinbaseProject}}
+	}
+	specs, err := withCreateOptions(specs, opts)
+	if err != nil {
+		return nil, nil, err
+	}
 	if regionID == "" {
 		regionID = m.defaultRegionID()
 	} else if _, err := m.store.GetRegion(regionID); err != nil {
@@ -1180,9 +1229,6 @@ func (m *Manager) CreateProject(ctx context.Context, name, regionID string, spec
 		return nil, nil, err
 	}
 
-	if len(specs) == 0 {
-		specs = []WorkloadSpec{{Type: runtime.WorkloadTinbaseProject}}
-	}
 	// Two-phase create: register every workload (record + route + materialized
 	// tree) before booting any, so env interpolation can resolve references in
 	// both directions — a workload booting first still sees siblings registered
@@ -1253,9 +1299,11 @@ func (m *Manager) registerWorkload(projectID string, ws WorkloadSpec) (*store.Wo
 	if err != nil {
 		return nil, err
 	}
-	secret, err := newSecret()
-	if err != nil {
-		return nil, err
+	secret := ws.JWTSecret
+	if secret == "" {
+		if secret, err = newSecret(); err != nil {
+			return nil, err
+		}
 	}
 
 	var anon, svc string
