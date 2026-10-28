@@ -61,6 +61,14 @@ func TestEnvMapParsing(t *testing.T) {
 	}
 }
 
+func TestImageMinMemoryParsing(t *testing.T) {
+	t.Setenv("ORCHD_IMAGE_MIN_MEMORY_MB", "rn-run:dev=2048, rn-web:dev=abc, x=0")
+	cfg := Load()
+	if len(cfg.ImageMinMemoryMB) != 1 || cfg.ImageMinMemoryMB["rn-run:dev"] != 2048 {
+		t.Fatalf("ImageMinMemoryMB = %v, want only rn-run:dev=2048", cfg.ImageMinMemoryMB)
+	}
+}
+
 // A provider key in ORCHD_TINBASE_ENV alongside a configured relay would ride
 // unused into every tinbase container. That is refused at boot, where the
 // operator is looking, rather than discovered in a container inspect later.

@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.4.19 && npm cache clean --force
+RUN npm install -g rnrun@0.4.20 && npm cache clean --force
 
 # HOME holds rnrun's pkg-cache. It lives in the ephemeral writable layer (gVisor
 # resets it on stop/start) — fine, because a bundle-cache hit doesn't need it and
@@ -50,13 +50,15 @@ ENV RNRUN_EXPO_GO_ANONYMOUS=1
 WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
-# --prewarm ios,android: warms a genuinely-cold project during idle so its
-# first-ever scan isn't the one paying the build. Safe on a warm cache as of
+# --prewarm ios,android:seen: warms a genuinely-cold project during idle so
+# its first-ever scan isn't the one paying the build. Safe on a warm cache as of
 # 0.3.2: the Fast-Refresh graph rebuild that used to fire on every cache hit is
 # now lazy (built on first edit), so a hit is a true no-op serve (~270ms)
 # rather than a background full build. Bundle cache lives on /data (above) so
-# it survives the gVisor writable-layer wipe on stop/start. Android was left
-# out before because it cost the iOS scan time; as of 0.4.19 the builds run one
-# after the other and Android waits until the server is quiet, and peak memory
-# stayed under the 1GB limit with both on the staging test pad.
-CMD ["rnrun", "start", "--port", "8080", "--prewarm", "ios,android"]
+# it survives the gVisor writable-layer wipe on stop/start. Android only once a
+# device has asked this project for it (rnrun 0.4.20 keeps that history on
+# /data): each platform holds ~450MB of build session, and most projects are
+# only scanned on iOS. Two live sessions need the 2GB cap orchd gives rn-run
+# (ORCHD_IMAGE_MIN_MEMORY_MB): at 1GB the first edit's rebuild ran out of
+# Node's 524MB heap (staging, 2026-10-27).
+CMD ["rnrun", "start", "--port", "8080", "--prewarm", "ios,android:seen"]

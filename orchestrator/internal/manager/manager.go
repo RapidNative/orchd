@@ -2426,6 +2426,10 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 			ready = 120 * time.Second
 		}
 	}
+	mem := w.MemoryMB
+	if floor := m.cfg.ImageMinMemoryMB[image]; mem > 0 && mem < floor {
+		mem = floor
+	}
 	return runtime.Spec{
 		Type:           w.Type,
 		Ref:            w.ID, // runtime key = workload id
@@ -2446,7 +2450,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		DockerHost:     dockerHost,
 		Env:            env,
 		Limits: runtime.Limits{
-			MemoryMB:  w.MemoryMB,
+			MemoryMB:  mem,
 			CPUs:      w.CPUs,
 			PidsLimit: m.cfg.PidsLimit,
 		},
