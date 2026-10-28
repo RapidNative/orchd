@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"log"
 	"os"
 	"strconv"
@@ -231,6 +232,9 @@ func (m *Manager) tarDue(bk backup.Store, w *store.Workload, now time.Time) bool
 
 func (m *Manager) tarBackup(ctx context.Context, w *store.Workload) error {
 	b, err := m.BackupWorkload(ctx, w.ID)
+	if errors.Is(err, store.ErrNotFound) {
+		return errWorkloadGone // deleted since the sweep listed it
+	}
 	if err != nil {
 		log.Printf("backup %s: %v", w.ID, err)
 		return err
