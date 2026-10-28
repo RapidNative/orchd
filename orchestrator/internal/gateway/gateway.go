@@ -118,7 +118,10 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return nil
 	}
 	proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, e error) {
-		log.Printf("gateway: proxy %s -> %s error: %v", workload.ID, addr, e)
+		// The client went away mid-request: nothing failed (46% of the log).
+		if !errors.Is(e, context.Canceled) {
+			log.Printf("gateway: proxy %s -> %s error: %v", workload.ID, addr, e)
+		}
 		corsError(w, "upstream error", http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
