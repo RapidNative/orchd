@@ -149,7 +149,10 @@ func (d *DockerDriver) RunOffline(ctx context.Context, ref, image, dataDir strin
 	host := d.hostFor(ref)
 	name := containerName(ref) + "-offline"
 	d.removeAndWait(ctx, host, name)
-	args := []string{"run", "--rm", "--name", name, "--network", "none", "--memory", "512m", "-v", dataDir + ":/data"}
+	args := []string{"run", "--rm", "--name", name, "--network", "none", "--memory", "512m",
+		// --mount, not -v: -v creates a missing source dir, and the export would
+		// then run over an empty one.
+		"--mount", "type=bind,src=" + dataDir + ",dst=/data"}
 	if d.Runtime != "" {
 		args = append(args, "--runtime", d.Runtime)
 	}

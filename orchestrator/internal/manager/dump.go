@@ -217,6 +217,10 @@ func (m *Manager) exportDump(ctx context.Context, w *store.Workload, running boo
 		if !ok {
 			return "", dumpManifest{}, fmt.Errorf("runtime %s cannot export a stopped database", m.rt.Name())
 		}
+		// Postgres initializes an empty cluster in a data dir that isn't there.
+		if _, err := os.Stat(w.DataDir); err != nil {
+			return "", dumpManifest{}, fmt.Errorf("no data dir to export: %w", err)
+		}
 		_, err = off.RunOffline(ctx, w.ID, m.cfg.BackupDumpImage, w.DataDir, argv...)
 	}
 	if err != nil {
@@ -329,6 +333,10 @@ func (m *Manager) dumpBeforeSuspend(ctx context.Context, id string) *store.Workl
 	return w
 }
 
+// errWorkloadGone: a sweep reached a workload that was deleted (evicted) after
+// it listed them. There is nothing left to back up.
+var errWorkloadGone = errors.New("workload was deleted")
+
 // dailyDump is the scheduled backup of a dump-backed workload: a running
 // database is dumped in place, a stopped one is covered by its sealed dump or
 // exported offline. An error means it is not covered.
@@ -336,6 +344,12 @@ func (m *Manager) dailyDump(ctx context.Context, w *store.Workload) error {
 	rl := m.refLock(w.ID)
 	rl.Lock()
 	defer rl.Unlock()
+	// The sweep's list is minutes old by the time it reaches w. An eviction in
+	// between removed the data dir, and an offline export of it would boot a new,
+	// empty Postgres there instead.
+	if _, err := m.store.GetWorkload(w.ID); errors.Is(err, store.ErrNotFound) {
+		return errWorkloadGone
+	}
 	if st, _ := m.rt.Status(ctx, w.ID); st != runtime.StateRunning && dumpCurrent(w) {
 		return nil
 	}

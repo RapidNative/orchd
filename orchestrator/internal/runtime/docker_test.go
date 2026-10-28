@@ -61,7 +61,7 @@ func TestRunOfflineIsolatesTheExport(t *testing.T) {
 			run = l
 		}
 	}
-	want := "run --rm --name tb-w1-offline --network none --memory 512m -v /data/p/w1:/data --runtime runsc tinbase:0.22.0 tinbase db export"
+	want := "run --rm --name tb-w1-offline --network none --memory 512m --mount type=bind,src=/data/p/w1,dst=/data --runtime runsc tinbase:0.22.0 tinbase db export"
 	if run != want {
 		t.Fatalf("docker %s\nwant   %s", run, want)
 	}

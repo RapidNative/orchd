@@ -514,3 +514,34 @@ func TestFailuresDoNotFillTheBatch(t *testing.T) {
 		t.Fatalf("a failing database used the batch of 1: took %d, offline %d", n, rt.offline)
 	}
 }
+
+func TestSweepSkipsADatabaseEvictedAfterItListed(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{})
+	_ = rt.Suspend(context.Background(), "db")
+	w, _ := m.store.GetWorkload("db") // the sweep's list, taken before the eviction
+	if err := m.DeleteProject(context.Background(), "p"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.dailyDump(context.Background(), w); !errors.Is(err, errWorkloadGone) {
+		t.Fatalf("dump of an evicted database: %v", err)
+	}
+	if rt.offline != 0 {
+		t.Fatal("exported an evicted database")
+	}
+	if _, err := os.Stat(w.DataDir); !os.IsNotExist(err) {
+		t.Fatalf("the evicted data dir is back: %v", err)
+	}
+	if _, failed := m.backupRuns.failure("db"); failed {
+		t.Fatal("an evicted database was recorded as a failed dump")
+	}
+}
+
+func TestOfflineExportNeedsTheDataDir(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{})
+	_ = rt.Suspend(context.Background(), "db")
+	w, _ := m.store.GetWorkload("db")
+	_ = os.RemoveAll(w.DataDir)
+	if err := m.dailyDump(context.Background(), w); err == nil || rt.offline != 0 {
+		t.Fatalf("exported a missing data dir: err %v, offline %d", err, rt.offline)
+	}
+}
