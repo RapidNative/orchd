@@ -393,6 +393,11 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 			return d.Create(ctx, spec)
 		}
 	}
+	// Same for a memory cap that changed since the container was created
+	// (ORCHD_IMAGE_MIN_MEMORY_MB): `docker start` would keep the old one.
+	if got, ok := d.containerMemoryMB(ctx, host, spec.Ref); ok && got != spec.Limits.MemoryMB {
+		return d.Create(ctx, spec)
+	}
 
 	if out, err := d.docker(ctx, host, "start", containerName(spec.Ref)).CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("docker start: %w: %s", err, strings.TrimSpace(string(out)))
@@ -459,6 +464,20 @@ func (d *DockerDriver) imageID(ctx context.Context, host, ref string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// containerMemoryMB returns the memory cap a container was created with, in
+// MiB (0 = unlimited), and false if it could not be read.
+func (d *DockerDriver) containerMemoryMB(ctx context.Context, host, ref string) (int, bool) {
+	out, err := d.docker(ctx, host, "inspect", "-f", "{{.HostConfig.Memory}}", containerName(ref)).Output()
+	if err != nil {
+		return 0, false
+	}
+	b, err := strconv.ParseInt(strings.TrimSpace(string(out)), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return int(b >> 20), true
 }
 
 // containerImageID returns the image id a container was CREATED from (which does

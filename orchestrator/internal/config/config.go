@@ -131,6 +131,12 @@ type Config struct {
 	// poison it for all). A host dir that doesn't exist is skipped. Containers
 	// only: microVMs ignore it.
 	ReadOnlyMounts map[string]string
+	// ImageMinMemoryMB ("rn-run:dev=2048,...") raises the memory cap of every
+	// workload running that image to at least the given MiB. A workload's own
+	// cap is stored when it is created, so this is how a cap that turned out
+	// too small for an image reaches existing workloads (and frozen image
+	// versions) too. Unlimited (0) stays unlimited.
+	ImageMinMemoryMB map[string]int
 	// Region is the single region this orchestrator serves for now.
 	Region string
 
@@ -285,6 +291,7 @@ func Load() Config {
 		BuildEnv:               envMap("ORCHD_BUILD_ENV"),
 		HostAliases:            envMap("ORCHD_HOST_ALIASES"),
 		ReadOnlyMounts:         envMap("ORCHD_READONLY_MOUNTS"),
+		ImageMinMemoryMB:       envIntMap("ORCHD_IMAGE_MIN_MEMORY_MB"),
 		Region:                 env("ORCHD_REGION", "local"),
 		APIKeyFile:             env("ORCHD_API_KEY_FILE", ""),
 		PublicURL:              env("ORCHD_PUBLIC_URL", publicURLDefault),
@@ -374,6 +381,23 @@ func envMap(name string) map[string]string {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// envIntMap is envMap with integer values; a pair whose value is not a
+// positive integer is skipped.
+func envIntMap(name string) map[string]int {
+	var out map[string]int
+	for k, v := range envMap(name) {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			continue
+		}
+		if out == nil {
+			out = make(map[string]int)
+		}
+		out[k] = n
 	}
 	return out
 }

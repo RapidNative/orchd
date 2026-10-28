@@ -25,6 +25,10 @@ Environment=ORCHD_HOST_ALIASES=esm.reactnative.run=10.201.255.1
 # traffic (website repo, tools/orchd-box/esm-cache); rn-run reads it at
 # /shared. Read-only: only the host writes it. Skipped until the dir exists.
 Environment=ORCHD_READONLY_MOUNTS=/opt/orchd/data/shared-cache=/shared
+# rnrun holds a build session per platform; with iOS and Android both live, a
+# 1GB cap leaves Node a 524MB heap and the first edit's rebuild runs out of it.
+# 2GB gives a 1GB heap. Applies to existing previews too, on their next wake.
+Environment=ORCHD_IMAGE_MIN_MEMORY_MB=rn-run:dev=2048
 # Where tinbase workloads send auth email: the platform relay in
 # global-services. The password is each project's own service key, read from
 # its env, so only the destination is set here. The relay holds the one
