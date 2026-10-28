@@ -142,8 +142,11 @@ func (m *Manager) RunBackupScheduler(ctx context.Context) {
 }
 
 // sweepBackups backs up the workloads that are due, one at a time and at most
-// BackupSweepBatch of them, then the control-plane state when it is due.
-// Returns how many workloads it backed up or tried to.
+// BackupSweepBatch of them, then the control-plane state when it is due. Only
+// backups that went through count toward the batch: a failure (a running
+// database on an image too old to export answers at once) costs the disk
+// nothing, and retries of many failing ones would otherwise fill every batch.
+// Returns how many workloads it backed up.
 func (m *Manager) sweepBackups(ctx context.Context, now time.Time) int {
 	bk := m.backupStore()
 	if bk == nil {
@@ -178,11 +181,12 @@ func (m *Manager) sweepBackups(ctx context.Context, now time.Time) int {
 			log.Printf("backup sweep: disk busy, the rest wait for the next sweep (took %d)", n)
 			return n
 		}
-		n++
 		if m.dumps(w.Type) {
-			_ = m.dailyDump(ctx, w)
-		} else {
-			m.tarBackup(ctx, w)
+			if m.dailyDump(ctx, w) == nil {
+				n++
+			}
+		} else if m.tarBackup(ctx, w) == nil {
+			n++
 		}
 	}
 	if now.Sub(m.stateBackupAt(bk)) >= m.cfg.BackupInterval {
@@ -225,14 +229,15 @@ func (m *Manager) tarDue(bk backup.Store, w *store.Workload, now time.Time) bool
 	return true
 }
 
-func (m *Manager) tarBackup(ctx context.Context, w *store.Workload) {
+func (m *Manager) tarBackup(ctx context.Context, w *store.Workload) error {
 	b, err := m.BackupWorkload(ctx, w.ID)
 	if err != nil {
 		log.Printf("backup %s: %v", w.ID, err)
-		return
+		return err
 	}
 	m.backupRuns.check(w.ID, b.CreatedAt)
 	log.Printf("backup %s -> %s (%d bytes)", w.ID, b.ID, b.SizeBytes)
+	return nil
 }
 
 func (m *Manager) stateBackupAt(bk backup.Store) time.Time {
@@ -280,7 +285,7 @@ func (m *Manager) backupAll(ctx context.Context) {
 		if bk != nil && unchangedSinceBackup(bk, w) {
 			continue
 		}
-		m.tarBackup(ctx, w)
+		_ = m.tarBackup(ctx, w)
 	}
 	m.stateBackup(ctx)
 }
