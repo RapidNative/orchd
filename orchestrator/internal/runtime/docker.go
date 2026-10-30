@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -390,6 +391,9 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 	}
 	if want := d.imageID(ctx, host, targetImage); want != "" {
 		if got := d.containerImageID(ctx, host, spec.Ref); got != "" && got != want {
+			// Logged so an image rollout can be followed on the box: each line is
+			// one tenant moving to the new image as it is next used.
+			log.Printf("wake %s: image %s changed (%s -> %s), recreating", spec.Ref, targetImage, shortDigest(got), shortDigest(want))
 			return d.Create(ctx, spec)
 		}
 	}
