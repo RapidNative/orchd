@@ -42,13 +42,22 @@ type StatusCounts struct {
 // MaxBatch is the most aggregates one request carries (the contract's cap).
 const MaxBatch = 500
 
-// ReporterConfig configures a Reporter. An empty URL turns reporting off: the
-// meter is still drained every interval (so it never grows), and the last
-// minute stays visible through Status.
+// Target is where aggregates go: the full ingest endpoint (e.g.
+// https://www.rapidnative.com/api/internal/usage) and the one header that
+// authenticates the request. An empty URL means reporting is off.
+type Target struct {
+	URL    string
+	Header string // e.g. "X-Webhook-Key" or "Authorization"
+	Value  string
+}
+
+// ReporterConfig configures a Reporter. While Target returns no URL the meter
+// is still drained every interval (so it never grows) and the drained minutes
+// are discarded; the last one stays visible through Status.
 type ReporterConfig struct {
-	// URL is the full ingest endpoint, e.g. https://www.rapidnative.com/api/internal/usage.
-	URL   string
-	Token string
+	// Target is read at every drain and send, so a settings change (the
+	// webhook) applies without a restart. Nil means off.
+	Target func() Target
 	// Interval between drains; 0 means a minute. Drains run just after each
 	// interval boundary so a minute is complete when it is sent.
 	Interval time.Duration
@@ -78,6 +87,7 @@ type Reporter struct {
 	lastErr  string
 	lastSent time.Time
 	last     []Aggregate        // the newest minute drained, for Status
+	lastURL  string             // the target URL last seen, to log changes
 	resolved map[string]*string // orchd project id -> RapidNative id (nil: none), from the last drain
 
 	done chan struct{}
@@ -103,14 +113,17 @@ func NewReporter(m *Meter, cfg ReporterConfig) *Reporter {
 	if cfg.Client == nil {
 		cfg.Client = &http.Client{Timeout: 15 * time.Second}
 	}
+	if cfg.Target == nil {
+		cfg.Target = func() Target { return Target{} }
+	}
 	if cfg.Resolve == nil {
 		cfg.Resolve = func(string) (string, bool) { return "", false }
 	}
 	return &Reporter{m: m, cfg: cfg, now: time.Now, resolved: map[string]*string{}, done: make(chan struct{})}
 }
 
-// Enabled reports whether aggregates are sent anywhere.
-func (r *Reporter) Enabled() bool { return r.cfg.URL != "" }
+// Enabled reports whether aggregates are sent anywhere right now.
+func (r *Reporter) Enabled() bool { return r.cfg.Target().URL != "" }
 
 // Done is closed when Run has returned, after its shutdown flush.
 func (r *Reporter) Done() <-chan struct{} { return r.done }
@@ -119,9 +132,6 @@ func (r *Reporter) Done() <-chan struct{} { return r.done }
 // (the current minute too) and makes one last attempt to send it.
 func (r *Reporter) Run(ctx context.Context) {
 	defer close(r.done)
-	if r.Enabled() {
-		log.Printf("usage: reporting gateway traffic to %s every %s", r.cfg.URL, r.cfg.Interval)
-	}
 	for {
 		now := r.now()
 		next := now.Truncate(r.cfg.Interval).Add(r.cfg.Interval + drainSettle)
@@ -157,6 +167,7 @@ func (r *Reporter) Run(ctx context.Context) {
 // is past the buffer.
 func (r *Reporter) collect(before time.Time) {
 	buckets := r.m.Drain(before)
+	target := r.cfg.Target()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -198,7 +209,8 @@ func (r *Reporter) collect(before time.Time) {
 			}
 		}
 	}
-	if !r.Enabled() {
+	r.noteTargetLocked(target)
+	if target.URL == "" {
 		return
 	}
 	r.outbox = append(r.outbox, aggs...)
@@ -224,7 +236,11 @@ func (r *Reporter) pruneLocked() {
 // send posts the outbox in batches of MaxBatch, oldest first, until it is
 // empty or a batch fails. A failure backs off (doubling, capped) unless force.
 func (r *Reporter) send(ctx context.Context, force bool) {
-	if !r.Enabled() {
+	target := r.cfg.Target()
+	r.mu.Lock()
+	r.noteTargetLocked(target)
+	r.mu.Unlock()
+	if target.URL == "" {
 		return
 	}
 	for {
@@ -236,7 +252,7 @@ func (r *Reporter) send(ctx context.Context, force bool) {
 		batch := r.outbox[:min(len(r.outbox), MaxBatch)]
 		r.mu.Unlock()
 
-		status, err := r.post(ctx, batch)
+		status, err := r.post(ctx, target, batch)
 
 		r.mu.Lock()
 		switch {
@@ -270,7 +286,20 @@ func (r *Reporter) send(ctx context.Context, force bool) {
 	}
 }
 
-func (r *Reporter) post(ctx context.Context, batch []Aggregate) (int, error) {
+// noteTargetLocked logs when reporting turns on, moves or turns off.
+func (r *Reporter) noteTargetLocked(t Target) {
+	if t.URL == r.lastURL {
+		return
+	}
+	if t.URL == "" {
+		log.Printf("usage: traffic reporting off (no webhook or website URL configured)")
+	} else {
+		log.Printf("usage: reporting gateway traffic to %s every %s", t.URL, r.cfg.Interval)
+	}
+	r.lastURL = t.URL
+}
+
+func (r *Reporter) post(ctx context.Context, target Target, batch []Aggregate) (int, error) {
 	body, err := json.Marshal(struct {
 		Source     string      `json:"source"`
 		Aggregates []Aggregate `json:"aggregates"`
@@ -278,12 +307,14 @@ func (r *Reporter) post(ctx context.Context, batch []Aggregate) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, r.cfg.URL, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target.URL, bytes.NewReader(body))
 	if err != nil {
 		return 0, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+r.cfg.Token)
+	if target.Header != "" && target.Value != "" {
+		req.Header.Set(target.Header, target.Value)
+	}
 	resp, err := r.cfg.Client.Do(req)
 	if err != nil {
 		return 0, err
@@ -291,7 +322,7 @@ func (r *Reporter) post(ctx context.Context, batch []Aggregate) (int, error) {
 	defer resp.Body.Close()
 	msg, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
 	if resp.StatusCode/100 != 2 {
-		return resp.StatusCode, fmt.Errorf("POST %s: %d %s", r.cfg.URL, resp.StatusCode, strings.TrimSpace(string(msg)))
+		return resp.StatusCode, fmt.Errorf("POST %s: %d %s", target.URL, resp.StatusCode, strings.TrimSpace(string(msg)))
 	}
 	return resp.StatusCode, nil
 }
@@ -306,6 +337,7 @@ func (r *Reporter) Pending() int {
 // Status is the reporter's state for the control API.
 type Status struct {
 	Enabled     bool        `json:"enabled"`
+	Target      string      `json:"target,omitempty"`
 	Pending     int         `json:"pending"`
 	Sent        int64       `json:"sent"`
 	Dropped     int64       `json:"dropped"`
@@ -318,10 +350,11 @@ type Status struct {
 
 func (r *Reporter) Status() Status {
 	buckets, conns := r.m.Open()
+	target := r.cfg.Target()
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	s := Status{
-		Enabled: r.Enabled(), Pending: len(r.outbox), Sent: r.sent, Dropped: r.dropped,
+		Enabled: target.URL != "", Target: target.URL, Pending: len(r.outbox), Sent: r.sent, Dropped: r.dropped,
 		LastError: r.lastErr, OpenBuckets: buckets, LiveConns: conns,
 		LastMinute: append([]Aggregate{}, r.last...),
 	}

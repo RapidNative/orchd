@@ -158,3 +158,34 @@ func BenchmarkServeHTTPUnmetered(b *testing.B) {
 		}
 	}
 }
+
+// Traffic goes to the website behind the webhook, with the webhook's key,
+// read live; ORCHD_WEBSITE_URL overrides it with a Bearer token.
+func TestGatewayUsageTarget(t *testing.T) {
+	g, _ := newTestGateway(t, http.NotFoundHandler(), "")
+	if tg := g.UsageTarget(); tg.URL != "" {
+		t.Fatalf("no webhook, no override: %+v, want off", tg)
+	}
+	if err := g.mgr.SetWebhook("https://www.rapidnative.com/api/webhook/orchd?x=1", "whk"); err != nil {
+		t.Fatal(err)
+	}
+	want := metering.Target{URL: "https://www.rapidnative.com/api/internal/usage", Header: "X-Webhook-Key", Value: "whk"}
+	if tg := g.UsageTarget(); tg != want {
+		t.Fatalf("from the webhook: %+v, want %+v", tg, want)
+	}
+	_ = g.mgr.SetWebhook("http://localhost:3000/api/webhook/orchd", "other")
+	want = metering.Target{URL: "http://localhost:3000/api/internal/usage", Header: "X-Webhook-Key", Value: "other"}
+	if tg := g.UsageTarget(); tg != want {
+		t.Fatalf("after SetWebhook, without a restart: %+v, want %+v", tg, want)
+	}
+	_ = g.mgr.SetWebhook("not a url", "k")
+	if tg := g.UsageTarget(); tg.URL != "" {
+		t.Fatalf("a bad webhook URL: %+v, want off", tg)
+	}
+
+	g.websiteURL, g.websiteToken = "https://staging.rapidnative.com/", "tok"
+	want = metering.Target{URL: "https://staging.rapidnative.com/api/internal/usage", Header: "Authorization", Value: "Bearer tok"}
+	if tg := g.UsageTarget(); tg != want {
+		t.Fatalf("override: %+v, want %+v", tg, want)
+	}
+}

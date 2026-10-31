@@ -36,6 +36,9 @@ type Gateway struct {
 	// meter counts every routed request's traffic (metering.Meter); the
 	// reporter in main drains it. Never refuses or delays a request.
 	meter *metering.Meter
+	// websiteURL and websiteToken override where the meter's traffic is
+	// reported (config.WebsiteURL); empty uses the webhook's website.
+	websiteURL, websiteToken string
 }
 
 func New(mgr *manager.Manager, cfg ...config.Config) *Gateway {
@@ -43,6 +46,7 @@ func New(mgr *manager.Manager, cfg ...config.Config) *Gateway {
 	if len(cfg) > 0 {
 		c := cfg[0]
 		g.startupWait = c.StartupWait
+		g.websiteURL, g.websiteToken = c.WebsiteURL, c.WebsiteToken
 		seen := map[string]bool{}
 		for _, d := range append([]string{c.BaseDomain}, c.AltDomains...) {
 			d = strings.ToLower(d)
@@ -139,6 +143,36 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Meter is the gateway's traffic meter, for a metering.Reporter to drain.
 func (g *Gateway) Meter() *metering.Meter { return g.meter }
+
+// usagePath is the website's ingest endpoint for usage (the metering contract).
+const usagePath = "/api/internal/usage"
+
+// UsageTarget is where the traffic reporter sends. By default it is the
+// website behind the configured webhook (Settings.Webhook): the same scheme
+// and host, the usage path, and the webhook's key as X-Webhook-Key, which the
+// website already checks for orchd. It is read from the settings on every
+// call, so PUT /v1/settings/webhook applies without a restart. ORCHD_WEBSITE_URL
+// overrides it, with ORCHD_WEBSITE_INTERNAL_TOKEN sent as a Bearer. Neither
+// set: no URL, reporting off.
+func (g *Gateway) UsageTarget() metering.Target {
+	if g.websiteURL != "" {
+		t := metering.Target{URL: strings.TrimRight(g.websiteURL, "/") + usagePath}
+		if g.websiteToken != "" {
+			t.Header, t.Value = "Authorization", "Bearer "+g.websiteToken
+		}
+		return t
+	}
+	wh := g.mgr.GetWebhookConfig()
+	u, err := url.Parse(wh.URL)
+	if wh.URL == "" || err != nil || u.Host == "" || (u.Scheme != "http" && u.Scheme != "https") {
+		return metering.Target{}
+	}
+	t := metering.Target{URL: u.Scheme + "://" + u.Host + usagePath}
+	if wh.APIKey != "" {
+		t.Header, t.Value = "X-Webhook-Key", wh.APIKey
+	}
+	return t
+}
 
 // ResolveProject maps an orchd project id to the RapidNative project id its
 // name carries (see metering.RapidNativeProjectID). A project that is gone or

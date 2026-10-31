@@ -122,6 +122,7 @@ func TestValidateRefusesTwilioTokenWithGateway(t *testing.T) {
 	}
 }
 
+// The override of the webhook's website for traffic reporting.
 func TestWebsiteReporting(t *testing.T) {
 	t.Setenv("ORCHD_WEBSITE_URL", "")
 	t.Setenv("ORCHD_WEBSITE_INTERNAL_TOKEN", "")

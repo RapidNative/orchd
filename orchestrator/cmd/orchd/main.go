@@ -85,18 +85,11 @@ func main() {
 	}
 
 	// Data plane gateway, and the reporter that sends its traffic to the
-	// website (off without a URL and token; the meter still drains).
+	// website behind the webhook (or ORCHD_WEBSITE_URL); with neither it
+	// still drains the meter but sends nothing.
 	gw := gateway.New(mgr, cfg)
-	usageURL := ""
-	switch {
-	case cfg.WebsiteURL != "" && cfg.WebsiteToken != "":
-		usageURL = cfg.WebsiteURL + "/api/internal/usage"
-	case cfg.WebsiteURL != "" || cfg.WebsiteToken != "":
-		log.Printf("usage: traffic reporting OFF: set both ORCHD_WEBSITE_URL and ORCHD_WEBSITE_INTERNAL_TOKEN")
-	}
 	usage := metering.NewReporter(gw.Meter(), metering.ReporterConfig{
-		URL:      usageURL,
-		Token:    cfg.WebsiteToken,
+		Target:   gw.UsageTarget,
 		Interval: cfg.UsageInterval,
 		Buffer:   cfg.UsageBuffer,
 		Resolve:  gw.ResolveProject,

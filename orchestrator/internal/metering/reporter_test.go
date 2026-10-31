@@ -45,7 +45,7 @@ func (s *ingest) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.requests = append(s.requests, b)
-	s.auth = append(s.auth, r.Header.Get("Authorization"))
+	s.auth = append(s.auth, r.Header.Get("X-Webhook-Key"))
 	fmt.Fprintf(w, `{"accepted":%d,"duplicates":0}`, len(b.Aggregates))
 }
 
@@ -72,8 +72,9 @@ func newTestReporter(t *testing.T, s *ingest) (*Reporter, *Meter, *clock) {
 	srv := httptest.NewServer(s)
 	t.Cleanup(srv.Close)
 	r := NewReporter(m, ReporterConfig{
-		URL:   srv.URL + "/api/internal/usage",
-		Token: "secret",
+		Target: func() Target {
+			return Target{URL: srv.URL + "/api/internal/usage", Header: "X-Webhook-Key", Value: "secret"}
+		},
 		Resolve: func(id string) (string, bool) {
 			if id == "orchd-p1" {
 				return "11111111-2222-4333-8444-555555555555", true
@@ -97,7 +98,7 @@ func TestReporterSendsAggregates(t *testing.T) {
 	r.collect(clk.now())
 	r.send(context.Background(), false)
 
-	if len(s.requests) != 1 || s.requests[0].Source != "orchd" || s.auth[0] != "Bearer secret" {
+	if len(s.requests) != 1 || s.requests[0].Source != "orchd" || s.auth[0] != "secret" {
 		t.Fatalf("requests = %+v auth = %v", s.requests, s.auth)
 	}
 	byWorkload := map[string]map[string]any{}
@@ -279,5 +280,44 @@ func TestRapidNativeProjectID(t *testing.T) {
 	}
 	if id := newUUID(); !isUUID(id) || id[14] != '4' {
 		t.Fatalf("newUUID = %q", id)
+	}
+}
+
+// The target is read at each drain and send: minutes drained while it is off
+// are discarded, and a new target (and key) applies at once.
+func TestReporterFollowsTheTarget(t *testing.T) {
+	s := &ingest{}
+	srv := httptest.NewServer(s)
+	defer srv.Close()
+	m, clk := newClockedMeter()
+	var mu sync.Mutex
+	target := Target{}
+	r := NewReporter(m, ReporterConfig{Target: func() Target {
+		mu.Lock()
+		defer mu.Unlock()
+		return target
+	}})
+	r.now = clk.now
+
+	m.Record("app", "p", 200, 1, 1)
+	clk.advance(time.Minute)
+	r.collect(clk.now())
+	r.send(context.Background(), false)
+	if r.Enabled() || r.Pending() != 0 || len(s.requests) != 0 {
+		t.Fatal("sent or kept traffic while off")
+	}
+
+	mu.Lock()
+	target = Target{URL: srv.URL + "/api/internal/usage", Header: "X-Webhook-Key", Value: "k2"}
+	mu.Unlock()
+	m.Record("app", "p", 200, 1, 1)
+	clk.advance(time.Minute)
+	r.collect(clk.now())
+	r.send(context.Background(), false)
+	if len(s.requests) != 1 || len(s.requests[0].Aggregates) != 1 || s.auth[0] != "k2" {
+		t.Fatalf("after turning on: %d requests, auth %v", len(s.requests), s.auth)
+	}
+	if st := r.Status(); !st.Enabled || st.Target != target.URL {
+		t.Fatalf("status = %+v", st)
 	}
 }

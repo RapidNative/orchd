@@ -250,14 +250,15 @@ type Config struct {
 	// RateLimitPerMin caps control-API requests per API key per minute (0 = off).
 	RateLimitPerMin int
 
-	// WebsiteURL and WebsiteToken turn on traffic reporting: every UsageInterval
-	// the gateway's per-project traffic (requests, bytes in and out, status
-	// class, per minute) is POSTed to <WebsiteURL>/api/internal/usage with the
-	// token as a Bearer. Both empty (or either) keeps it off; the traffic is
-	// still counted and visible at GET /v1/usage/traffic. Metering never
-	// refuses or slows a request. ORCHD_WEBSITE_URL and
-	// ORCHD_WEBSITE_INTERNAL_TOKEN, or the producers' shared WEBSITE_URL and
-	// WEBSITE_INTERNAL_TOKEN.
+	// Gateway traffic (requests, bytes in and out, status class, per project
+	// per minute) is reported every UsageInterval to the website behind the
+	// configured webhook (Settings.Webhook), at its /api/internal/usage with
+	// the webhook key; no new secret. WebsiteURL, when set, overrides that
+	// destination and sends WebsiteToken as a Bearer instead
+	// (ORCHD_WEBSITE_URL and ORCHD_WEBSITE_INTERNAL_TOKEN, or the producers'
+	// shared WEBSITE_URL and WEBSITE_INTERNAL_TOKEN). With neither, traffic is
+	// still counted and visible at GET /v1/usage/traffic, but not sent.
+	// Metering never refuses or slows a request.
 	WebsiteURL   string
 	WebsiteToken string
 	// UsageInterval is how often finished minutes are drained and sent.

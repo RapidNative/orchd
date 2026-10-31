@@ -125,8 +125,9 @@ from the admin **Settings**. Done: backup store (local/S3), events sink (memory/
       `aggregates`, with the RapidNative project id read from the orchd project
       name (`<uuid>` or `<uuid>-prod`). Notify-only: never refuses or slows a
       request. Unsent minutes are retried with backoff for `ORCHD_USAGE_BUFFER`.
-      Config `ORCHD_WEBSITE_URL` + `ORCHD_WEBSITE_INTERNAL_TOKEN`; state at
-      `GET /v1/usage/traffic`.
+      Sent to the webhook's website (same host, `X-Webhook-Key`), read live from
+      settings; `ORCHD_WEBSITE_URL` + `ORCHD_WEBSITE_INTERNAL_TOKEN` override it.
+      State at `GET /v1/usage/traffic`.
 
 ### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
 Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`
