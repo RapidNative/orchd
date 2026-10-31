@@ -17,6 +17,7 @@ import (
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/metering"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
@@ -627,5 +628,33 @@ func TestCreateProjectWithJWTSecret(t *testing.T) {
 	}
 	if code, body := do(t, srv, "POST", "/v1/projects", bootstrapKey, map[string]any{"jwt_secret": "short"}); code != http.StatusBadRequest {
 		t.Fatalf("short secret: %d %s, want 400", code, body)
+	}
+}
+
+type fakeUsage struct{}
+
+func (fakeUsage) Status() metering.Status { return metering.Status{Enabled: true, Pending: 3} }
+
+func TestUsageTraffic(t *testing.T) {
+	cfg := config.Load()
+	cfg.DataRoot = t.TempDir()
+	st, _ := store.Open("")
+	mgr := manager.New(cfg, st, stubRuntime{})
+
+	bare := httptest.NewServer(api.New(mgr, cfg, bootstrapKey).Handler())
+	defer bare.Close()
+	if code, _ := do(t, bare, "GET", "/v1/usage/traffic", bootstrapKey, nil); code != http.StatusNotFound {
+		t.Fatalf("without a reporter: %d, want 404", code)
+	}
+
+	srv := httptest.NewServer(api.New(mgr, cfg, bootstrapKey).WithUsage(fakeUsage{}).Handler())
+	defer srv.Close()
+	if code, _ := do(t, srv, "GET", "/v1/usage/traffic", "", nil); code != http.StatusUnauthorized {
+		t.Fatalf("without a key: %d, want 401", code)
+	}
+	code, body := do(t, srv, "GET", "/v1/usage/traffic", bootstrapKey, nil)
+	var s metering.Status
+	if code != http.StatusOK || json.Unmarshal(body, &s) != nil || !s.Enabled || s.Pending != 3 {
+		t.Fatalf("status: %d %s", code, body)
 	}
 }

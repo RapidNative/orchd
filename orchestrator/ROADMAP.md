@@ -119,6 +119,15 @@ from the admin **Settings**. Done: backup store (local/S3), events sink (memory/
       the control API; over-limit returns 429 with Retry-After. Buckets are per key,
       so one client can't starve another. Verified: a 250-burst gave ~100 × 200 then
       429s while another key stayed unaffected.
+- [x] **Gateway traffic metering** — every routed request is counted per workload
+      per minute (requests, body bytes in/out, 2xx/3xx/4xx/5xx; a WebSocket's bytes
+      until it closes) and POSTed to the website's `/api/internal/usage` as
+      `aggregates`, with the RapidNative project id read from the orchd project
+      name (`<uuid>` or `<uuid>-prod`). Notify-only: never refuses or slows a
+      request. Unsent minutes are retried with backoff for `ORCHD_USAGE_BUFFER`.
+      Sent to the webhook's website (same host, `X-Webhook-Key`), read live from
+      settings; `ORCHD_WEBSITE_URL` + `ORCHD_WEBSITE_INTERNAL_TOKEN` override it.
+      State at `GET /v1/usage/traffic`.
 
 ### Phase 1.5 — Docker + gVisor substrate on a Linux box ✅
 Runs on a plain Hetzner **Cloud** VM (no KVM required — gVisor's `systrap`
