@@ -121,3 +121,23 @@ func TestValidateRefusesTwilioTokenWithGateway(t *testing.T) {
 		t.Fatalf("gateway without a token must be allowed, got %v", err)
 	}
 }
+
+func TestWebsiteReporting(t *testing.T) {
+	t.Setenv("ORCHD_WEBSITE_URL", "")
+	t.Setenv("ORCHD_WEBSITE_INTERNAL_TOKEN", "")
+	t.Setenv("WEBSITE_URL", "https://www.rapidnative.com/")
+	t.Setenv("WEBSITE_INTERNAL_TOKEN", "shared")
+	c := Load()
+	if c.WebsiteURL != "https://www.rapidnative.com" || c.WebsiteToken != "shared" {
+		t.Errorf("shared producer env: %q %q", c.WebsiteURL, c.WebsiteToken)
+	}
+	if c.UsageInterval.Seconds() != 60 || c.UsageBuffer.Hours() != 1 {
+		t.Errorf("defaults: interval %s buffer %s", c.UsageInterval, c.UsageBuffer)
+	}
+
+	t.Setenv("ORCHD_WEBSITE_URL", "http://localhost:3000")
+	t.Setenv("ORCHD_WEBSITE_INTERNAL_TOKEN", "own")
+	if c := Load(); c.WebsiteURL != "http://localhost:3000" || c.WebsiteToken != "own" {
+		t.Errorf("ORCHD_ env must win: %q %q", c.WebsiteURL, c.WebsiteToken)
+	}
+}

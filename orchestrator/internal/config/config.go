@@ -249,6 +249,22 @@ type Config struct {
 
 	// RateLimitPerMin caps control-API requests per API key per minute (0 = off).
 	RateLimitPerMin int
+
+	// WebsiteURL and WebsiteToken turn on traffic reporting: every UsageInterval
+	// the gateway's per-project traffic (requests, bytes in and out, status
+	// class, per minute) is POSTed to <WebsiteURL>/api/internal/usage with the
+	// token as a Bearer. Both empty (or either) keeps it off; the traffic is
+	// still counted and visible at GET /v1/usage/traffic. Metering never
+	// refuses or slows a request. ORCHD_WEBSITE_URL and
+	// ORCHD_WEBSITE_INTERNAL_TOKEN, or the producers' shared WEBSITE_URL and
+	// WEBSITE_INTERNAL_TOKEN.
+	WebsiteURL   string
+	WebsiteToken string
+	// UsageInterval is how often finished minutes are drained and sent.
+	UsageInterval time.Duration
+	// UsageBuffer is how long unsent traffic is kept and retried while the
+	// website is unreachable before the oldest is dropped.
+	UsageBuffer time.Duration
 }
 
 func Load() Config {
@@ -328,6 +344,10 @@ func Load() Config {
 		StateDSN:               env("ORCHD_STATE_DSN", ""),
 		StateSQLite:            env("ORCHD_STATE_SQLITE", ""),
 		RateLimitPerMin:        envInt("ORCHD_RATE_LIMIT", 0),
+		WebsiteURL:             strings.TrimRight(env("ORCHD_WEBSITE_URL", os.Getenv("WEBSITE_URL")), "/"),
+		WebsiteToken:           env("ORCHD_WEBSITE_INTERNAL_TOKEN", os.Getenv("WEBSITE_INTERNAL_TOKEN")),
+		UsageInterval:          envDuration("ORCHD_USAGE_INTERVAL", time.Minute),
+		UsageBuffer:            envDuration("ORCHD_USAGE_BUFFER", time.Hour),
 		FCWorkloads:            env("ORCHD_FC_WORKLOADS", ""),
 		FCBin:                  env("ORCHD_FC_BIN", "/opt/orchd/fc/firecracker"),
 		FCKernel:               env("ORCHD_FC_KERNEL", "/opt/orchd/fc/vmlinux"),

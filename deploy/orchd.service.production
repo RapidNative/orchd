@@ -57,6 +57,13 @@ Environment=ORCHD_BACKUP_INTERVAL=24h
 Environment=ORCHD_BACKUP_RETAIN=7
 Environment=ORCHD_METRICS_INTERVAL=15s
 Environment=ORCHD_RATE_LIMIT=600
+# Gateway traffic metering: per project per minute (requests, bytes, status
+# class) POSTed to the website's /api/internal/usage. Notify-only, never
+# refuses a request. ORCHD_WEBSITE_URL=https://www.rapidnative.com and
+# ORCHD_WEBSITE_INTERNAL_TOKEN=<the website's NEXT_API_SERVER_TOKEN>, from a
+# root-only file. Without it, traffic is counted (GET /v1/usage/traffic) but
+# not sent.
+EnvironmentFile=-/opt/orchd/secrets/website.env
 ExecStart=/opt/orchd/orchd
 Restart=on-failure
 KillMode=process
