@@ -20,6 +20,7 @@ import (
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/metering"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
 
@@ -32,10 +33,13 @@ type Gateway struct {
 	allDomains []string
 	// startupWait: see config.StartupWait.
 	startupWait time.Duration
+	// meter counts every routed request's traffic (metering.Meter); the
+	// reporter in main drains it. Never refuses or delays a request.
+	meter *metering.Meter
 }
 
 func New(mgr *manager.Manager, cfg ...config.Config) *Gateway {
-	g := &Gateway{mgr: mgr}
+	g := &Gateway{mgr: mgr, meter: metering.NewMeter()}
 	if len(cfg) > 0 {
 		c := cfg[0]
 		g.startupWait = c.StartupWait
@@ -82,6 +86,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Count the request's traffic from here on, wake failures included.
+	if mw := g.meter.Begin(w, r, workload.ID, workload.ProjectID); mw != nil {
+		defer mw.Finish()
+		w = mw
+	}
+
 	// A sleeping workload on an old image: let the webhook bring it along first
 	// (files, image) so it wakes current. Returns at once in the common case.
 	g.mgr.CheckImageBeforeWake(r.Context(), workload.ID)
@@ -125,6 +135,20 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		corsError(w, "upstream error", http.StatusBadGateway)
 	}
 	proxy.ServeHTTP(w, r)
+}
+
+// Meter is the gateway's traffic meter, for a metering.Reporter to drain.
+func (g *Gateway) Meter() *metering.Meter { return g.meter }
+
+// ResolveProject maps an orchd project id to the RapidNative project id its
+// name carries (see metering.RapidNativeProjectID). A project that is gone or
+// wasn't provisioned by the website has none.
+func (g *Gateway) ResolveProject(orchdProjectID string) (string, bool) {
+	p, err := g.mgr.Store().GetProject(orchdProjectID)
+	if err != nil {
+		return "", false
+	}
+	return metering.RapidNativeProjectID(p.Name)
 }
 
 // startupTransport retries a GET or HEAD that a just-started server refuses or
