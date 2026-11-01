@@ -14,7 +14,7 @@ FROM node:22-slim
 ARG npm_config_registry
 # Pinned: a dev-server version change alters bundling behavior for every
 # project at once; bumps are deliberate image rebuilds, never a boot-time pull.
-RUN npm install -g rnrun@0.4.20 && npm cache clean --force
+RUN npm install -g rnrun@0.4.21 && npm cache clean --force
 
 # HOME holds rnrun's pkg-cache. It lives in the ephemeral writable layer (gVisor
 # resets it on stop/start) — fine, because a bundle-cache hit doesn't need it and
@@ -44,7 +44,9 @@ ENV RNRUN_PKG_CACHE_DIR=/data/.rnrun/pkg
 ENV RNRUN_SHARED_CACHE_DIR=/shared
 
 # Hosted preview over a public URL: serve an anonymous manifest so Expo Go on
-# physical iOS skips the SDK 57 sign-in gate (trades away Fast Refresh).
+# physical iOS skips the SDK 57 sign-in gate. Expo Go's own Fast Refresh is off
+# in that mode; rnrun's in-bundle client applies the patches instead (0.4.21+),
+# and a change it can't patch asks the user to reopen the project.
 ENV RNRUN_EXPO_GO_ANONYMOUS=1
 
 WORKDIR /app
