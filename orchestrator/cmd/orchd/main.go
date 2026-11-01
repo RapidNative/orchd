@@ -17,11 +17,13 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/gateway"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/metering"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
@@ -82,8 +84,20 @@ func main() {
 		authState = "key required"
 	}
 
+	// Data plane gateway, and the reporter that sends its traffic to the
+	// website behind the webhook (or ORCHD_WEBSITE_URL); with neither it
+	// still drains the meter but sends nothing.
+	gw := gateway.New(mgr, cfg)
+	usage := metering.NewReporter(gw.Meter(), metering.ReporterConfig{
+		Target:   gw.UsageTarget,
+		Interval: cfg.UsageInterval,
+		Buffer:   cfg.UsageBuffer,
+		Resolve:  gw.ResolveProject,
+	})
+	go usage.Run(ctx)
+
 	// Control plane API.
-	apiSrv := &http.Server{Addr: cfg.APIAddr, Handler: api.New(mgr, cfg, apiKey).Handler()}
+	apiSrv := &http.Server{Addr: cfg.APIAddr, Handler: api.New(mgr, cfg, apiKey).WithUsage(usage).Handler()}
 	go func() {
 		<-ctx.Done()
 		_ = apiSrv.Close()
@@ -99,9 +113,13 @@ func main() {
 		rt.Name(), cfg.Region, cfg.BaseDomain, cfg.IdleTimeout, cfg.DataRoot, authState)
 
 	// Data plane gateway (blocks until shutdown).
-	gw := gateway.New(mgr, cfg)
 	if err := gw.Serve(ctx, cfg.GatewayAddr); err != nil {
 		log.Fatalf("gateway: %v", err)
+	}
+	// Let the reporter send the traffic counted up to now.
+	select {
+	case <-usage.Done():
+	case <-time.After(15 * time.Second):
 	}
 	_ = os.Stdout.Sync()
 }

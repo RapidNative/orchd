@@ -22,6 +22,7 @@ import (
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/metering"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/store"
 )
@@ -31,6 +32,17 @@ type API struct {
 	cfg     config.Config
 	apiKey  string // when non-empty, /v1/* requires it
 	limiter *rateLimiter
+	usage   usageStatus // nil until WithUsage
+}
+
+// usageStatus is the gateway traffic reporter (metering.Reporter), as far as
+// the API shows it.
+type usageStatus interface{ Status() metering.Status }
+
+// WithUsage exposes the gateway's traffic reporter at GET /v1/usage/traffic.
+func (a *API) WithUsage(u usageStatus) *API {
+	a.usage = u
+	return a
 }
 
 func New(mgr *manager.Manager, cfg config.Config, apiKey string) *API {
@@ -112,6 +124,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/settings/lru", a.setLRU)
 	mux.HandleFunc("PUT /v1/settings/metrics", a.setMetrics)
 	mux.HandleFunc("GET /v1/metrics", a.metrics)
+	mux.HandleFunc("GET /v1/usage/traffic", a.usageTraffic)
 	mux.HandleFunc("GET /v1/events", a.events)
 	// on-demand TLS gate for Caddy: only mint certs for hosts we actually serve.
 	mux.HandleFunc("GET /internal/tls-allow", a.tlsAllow)
@@ -1233,6 +1246,16 @@ func (a *API) setMetrics(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) metrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, a.mgr.Snapshot())
+}
+
+// usageTraffic shows the traffic reporter: whether it sends, what is pending
+// or was dropped, and the newest minute it drained, per workload.
+func (a *API) usageTraffic(w http.ResponseWriter, r *http.Request) {
+	if a.usage == nil {
+		writeErr(w, http.StatusNotFound, fmt.Errorf("traffic metering is not running in this process"))
+		return
+	}
+	writeJSON(w, http.StatusOK, a.usage.Status())
 }
 
 func (a *API) setWebhook(w http.ResponseWriter, r *http.Request) {
