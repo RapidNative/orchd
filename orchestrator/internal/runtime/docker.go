@@ -183,6 +183,29 @@ func (d *DockerDriver) removeAndWait(ctx context.Context, host, name string) {
 	}
 }
 
+// clearStaleTask removes the containerd task a failed `docker start` can leave
+// behind (state "created", owned by the gVisor shim), so that the `docker rm -f`
+// in Create is not refused by the same "cannot signal container" error. docker
+// itself cannot delete it ("could not delete stale containerd task object"); ctr
+// can, through the daemon's own namespace. Best-effort and local only: ctr talks
+// to this box's containerd, so a remote docker host is left to Create's retries.
+func (d *DockerDriver) clearStaleTask(ctx context.Context, host, ref, startErr string) {
+	if !strings.Contains(startErr, "stale containerd task") || d.effHost(host) != "" {
+		return
+	}
+	out, err := d.docker(ctx, host, "inspect", "-f", "{{.Id}}", containerName(ref)).Output()
+	id := strings.TrimSpace(string(out))
+	if err != nil || id == "" {
+		return
+	}
+	cmd := exec.CommandContext(ctx, "ctr", "-n", "moby", "task", "delete", "--force", id)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		log.Printf("wake %s: ctr task delete %s: %v: %s", ref, shortDigest("sha256:"+id), err, firstLine(string(out)))
+		return
+	}
+	log.Printf("wake %s: removed stale containerd task %s", ref, shortDigest("sha256:"+id))
+}
+
 func (d *DockerDriver) setHost(ref, host string) {
 	d.mu.Lock()
 	d.hosts[ref] = host
@@ -404,7 +427,22 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 	}
 
 	if out, err := d.docker(ctx, host, "start", containerName(spec.Ref)).CombinedOutput(); err != nil {
-		return nil, fmt.Errorf("docker start: %w: %s", err, strings.TrimSpace(string(out)))
+		// The container exists but docker cannot resume it, and it never will
+		// on its own: a suspended container keeps the host port it was created
+		// with, and once another container holds that port `docker start` fails
+		// ("Bind for 127.0.0.1:N failed: port is already allocated"); that failed
+		// start leaves a containerd task docker can no longer clean up, and from
+		// then on every start fails at once ("could not delete stale containerd
+		// task object ... cannot signal container ... in state created").
+		// Returning the error made the gateway answer 502 on every wake until
+		// someone recreated the container by hand: three tenants on the staging
+		// box 2026-10-29 to 11-02, one of them for 3.5 days and 19k wakes.
+		// Recreate instead: Create remounts the same /data and picks a fresh
+		// port, so nothing stored is lost.
+		msg := strings.TrimSpace(string(out))
+		log.Printf("wake %s: docker start failed (%s), recreating", spec.Ref, firstLine(msg))
+		d.clearStaleTask(ctx, host, spec.Ref, msg)
+		return d.Create(ctx, spec)
 	}
 	_, port = d.inspect(ctx, host, spec.Ref)
 	if port == "" {
