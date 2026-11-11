@@ -49,6 +49,13 @@ ENV RNRUN_SHARED_CACHE_DIR=/shared
 # and a change it can't patch asks the user to reopen the project.
 ENV RNRUN_EXPO_GO_ANONYMOUS=1
 
+# Node's default heap stops near 1GB even though orchd gives rn-run 2GB. A very
+# large app (RingCode, 39MB bundle) rebuilt iOS + Android in one process after
+# each file change, ran out of heap and crash-looped for ~6 min (2026-11-10).
+# 1792MB leaves ~250MB for the rest of the container. Sanket chose all previews
+# over RingCode only (2026-11-11).
+ENV NODE_OPTIONS=--max-old-space-size=1792
+
 WORKDIR /app
 ENV PORT=8080
 EXPOSE 8080
