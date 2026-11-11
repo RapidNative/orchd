@@ -37,6 +37,12 @@ var errUnknownHost = errors.New("reprovision hook returned 404")
 // created meanwhile is not held up: its route resolves before this is consulted.
 const unknownHostTTL = 30 * time.Minute
 
+// reprovisionRouteGrace is how long the gateway keeps polling for the host's
+// route after the receiver answered 2xx. The receiver attaches routes before it
+// answers, so this only covers store visibility; a host still unrouted after it
+// is one the re-created stack does not serve.
+var reprovisionRouteGrace = 3 * time.Second
+
 // reprovisionClient is a dedicated synchronous client. Unlike events.WebhookSink
 // (fire-and-forget), this call waits for and acts on the response.
 var reprovisionClient = &http.Client{Timeout: 30 * time.Second}
@@ -95,6 +101,7 @@ func (m *Manager) RequestReprovision(ctx context.Context, host string) (*store.W
 	ticker := time.NewTicker(250 * time.Millisecond)
 	defer ticker.Stop()
 	hookPending := true
+	var graceUntil time.Time // set once the hook answers 2xx
 	for {
 		if wl, err := m.ResolveHost(host); err == nil {
 			return wl, nil
@@ -112,18 +119,30 @@ func (m *Manager) RequestReprovision(ctx context.Context, host string) (*store.W
 					log.Printf("reprovision: hook for %s failed: %v", host, err)
 					return nil, store.ErrNotFound
 				}
-				// Hook succeeded but the route is not visible yet: keep polling
-				// until the deadline.
+				// Hook succeeded but the route is not visible yet. Give it a
+				// short grace, not the rest of the hold: a receiver that
+				// answered 2xx has already attached what it is going to attach.
+				// A host still unrouted after that is one the new stack does
+				// not serve, typically <old-ref>-<role> after a re-create gave
+				// the project a new ref (old-ref hosts stay unrouted by design,
+				// tasker item-mvv0ftdb-oezck).
+				graceUntil = time.Now().Add(reprovisionRouteGrace)
 				continue
 			case <-ctx.Done():
-				log.Printf("reprovision: hook for %s still in flight at hold deadline; route not yet registered", host)
+				log.Printf("reprovision: hook for %s still in flight at hold deadline; host not routed yet (an old ref's host never is)", host)
 				return nil, ErrReprovisionTimeout
 			case <-ticker.C:
 			}
 			continue
 		}
+		if time.Now().After(graceUntil) {
+			m.noteUnknownHost(host, time.Now())
+			log.Printf("reprovision: hook for %s succeeded but the re-created stack does not route this host; not asking again for %s", host, unknownHostTTL)
+			return nil, store.ErrNotFound
+		}
 		select {
 		case <-ctx.Done():
+			log.Printf("reprovision: hook for %s succeeded but no route appeared by the hold deadline", host)
 			return nil, ErrReprovisionTimeout
 		case <-ticker.C:
 		}
