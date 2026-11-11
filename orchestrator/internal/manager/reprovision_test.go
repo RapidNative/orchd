@@ -150,3 +150,36 @@ func TestRequestReprovision_DoesNotRememberAFailure(t *testing.T) {
 		t.Fatalf("hook calls after a 500: %d, want 2", calls)
 	}
 }
+
+// A re-create gives the project a new ref, so <old-ref>-<role> hosts are never
+// routed again. The receiver answers 2xx (it did re-provision the project); the
+// gateway must not then hold every later request for the whole window, and the
+// burst of requests that follows must not fire the hook again.
+func TestRequestReprovision_HookSucceedsButHostNeverRouted(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	m, _ := newReprovisionTestManager(t, srv.URL, 10*time.Second)
+	old := reprovisionRouteGrace
+	reprovisionRouteGrace = 300 * time.Millisecond
+	defer func() { reprovisionRouteGrace = old }()
+
+	const host = "oldref-db.example.test"
+	start := time.Now()
+	_, err := m.RequestReprovision(context.Background(), host)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("got %v, want store.ErrNotFound", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("held %v after a 2xx hook; should give up after the grace", d)
+	}
+	if _, err := m.RequestReprovision(context.Background(), host); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("second request: got %v, want store.ErrNotFound", err)
+	}
+	if calls != 1 {
+		t.Fatalf("hook called %d times, want 1 (host remembered as unrouted)", calls)
+	}
+}
