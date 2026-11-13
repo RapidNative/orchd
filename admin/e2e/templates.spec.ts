@@ -6,7 +6,7 @@ test('templates: register a template', async ({ page }) => {
   await page.goto('/templates')
   await expect(page.getByRole('heading', { level: 1, name: 'Templates' })).toBeVisible()
 
-  await page.getByPlaceholder('name (e.g. rapidnative)').fill('demo-tmpl')
+  await page.getByPlaceholder('name (e.g. acme)').fill('demo-tmpl')
   await page.getByPlaceholder(/absolute\/path/).fill('/tmp/demo-template')
   await page.getByRole('button', { name: 'Add template' }).click()
 

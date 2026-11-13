@@ -1,6 +1,6 @@
 // Package runtime defines the substrate-agnostic contract for launching tenant
 // workloads, plus the generic Workload primitive shared by every workload type
-// (tinbase projects today, RapidNative dev environments later).
+// (tinbase databases and app workloads: dev servers, APIs, static sites).
 //
 // The whole point of this interface is that the control plane never talks to a
 // VMM directly. During local development we drive LocalDriver (plain OS
@@ -17,15 +17,24 @@ import (
 // errUnsupported reports a driver capability the active runtime lacks.
 var errUnsupported = errors.New("not supported by this runtime")
 
-// WorkloadType is the generic primitive that lets one orchestrator run more than
-// one kind of tenant. tinbase-cloud projects and RapidNative dev environments are
-// both just workloads with different images and routing.
+// WorkloadType labels a workload. The engine knows one type by meaning, the
+// tinbase database; every other type is an app workload (a dev server, an API,
+// a static site), run from its image or template workspace. An app workload's
+// label is chosen by the adopter (see package adopter; "app" by default), so
+// stored labels from earlier versions keep working unchanged.
 type WorkloadType string
 
 const (
 	WorkloadTinbaseProject WorkloadType = "tinbase-project"
-	WorkloadRapidNativeDev WorkloadType = "rapidnative-dev"
+	// WorkloadApp is the default label for app workloads.
+	WorkloadApp WorkloadType = "app"
 )
+
+// IsApp reports whether a workload of this type is an app workload: anything
+// that isn't the database. The empty type is unset, not an app.
+func (t WorkloadType) IsApp() bool {
+	return t != "" && t != WorkloadTinbaseProject
+}
 
 // State is the lifecycle of a single instance.
 type State string
@@ -162,7 +171,7 @@ type Stats struct {
 // pointer at that content. Remaining fields are human-readable strings straight
 // from the driver so the UI needs no unit math.
 type ImageInfo struct {
-	Repository string `json:"repository"` // e.g. "rn-vite"
+	Repository string `json:"repository"` // e.g. "acme-web"
 	Tag        string `json:"tag"`        // e.g. "dev"
 	Ref        string `json:"ref"`        // "repository:tag", the value used as a workload image
 	ID         string `json:"id"`         // short image id (driver-local)

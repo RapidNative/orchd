@@ -37,7 +37,7 @@ func (c *Counters) add(o Counters) {
 type Bucket struct {
 	Minute    time.Time // start of the minute, UTC
 	Workload  string    // orchd workload id
-	ProjectID string    // orchd project id (resolved to a RapidNative id when reported)
+	ProjectID string    // orchd project id (resolved to the adopter's id when reported)
 	Counters
 }
 

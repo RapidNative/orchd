@@ -9,9 +9,9 @@ test('settings: naming the instance updates the sidebar', async ({ page }) => {
   await expect(page.getByText('ORCHD', { exact: true }).first()).toBeVisible()
 
   const input = page.getByPlaceholder('tinbase cloud')
-  await input.fill('RapidNative Cloud')
+  await input.fill('Acme Cloud')
   await page.getByRole('button', { name: 'Save' }).first().click()
 
   // The chosen name appears in the sidebar under ORCHD (exact, not the hint text).
-  await expect(page.getByText('RapidNative Cloud', { exact: true })).toBeVisible()
+  await expect(page.getByText('Acme Cloud', { exact: true })).toBeVisible()
 })

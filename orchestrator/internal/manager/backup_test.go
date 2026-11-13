@@ -29,7 +29,7 @@ func newBackupMgr(t *testing.T, cfg config.Config) *Manager {
 	}
 	m := New(cfg, st, reapStub{})
 	_ = st.PutProject(&store.Project{ID: "p"})
-	for id, typ := range map[string]runtime.WorkloadType{"db": runtime.WorkloadTinbaseProject, "app": runtime.WorkloadRapidNativeDev} {
+	for id, typ := range map[string]runtime.WorkloadType{"db": runtime.WorkloadTinbaseProject, "app": legacyDevType} {
 		dir := filepath.Join(root, "projects", "p", id)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)

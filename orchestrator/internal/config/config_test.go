@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"os"
+	"testing"
+)
 
 func TestLocalModeDefaults(t *testing.T) {
 	t.Setenv("ORCHD_LOCAL", "1")
@@ -73,6 +76,7 @@ func TestImageMinMemoryParsing(t *testing.T) {
 // unused into every tinbase container. That is refused at boot, where the
 // operator is looking, rather than discovered in a container inspect later.
 func TestValidateRefusesResendKeyWithRelay(t *testing.T) {
+	t.Setenv("ORCHD_ADOPTER_CONFIG", rapidNativeAdopterFile) // names the services key the relay reads
 	t.Setenv("ORCHD_TINBASE_SMTP_HOST", "services.example.com")
 	t.Setenv("ORCHD_TINBASE_ENV", "TINBASE_RESEND_API_KEY=re_x,TINBASE_MAIL_FROM=App <a@example.com>")
 	if err := Load().Validate(); err == nil {
@@ -97,6 +101,7 @@ func TestValidateRefusesResendKeyWithRelay(t *testing.T) {
 // configured gateway would override the per-project auth token in every
 // container with one shared provider secret.
 func TestValidateRefusesTwilioTokenWithGateway(t *testing.T) {
+	t.Setenv("ORCHD_ADOPTER_CONFIG", rapidNativeAdopterFile) // names the services key the relay reads
 	t.Setenv("ORCHD_TINBASE_SMS_API_URL", "https://services.example.com/twilio")
 	t.Setenv("ORCHD_TINBASE_ENV", "TINBASE_SMS_TWILIO_AUTH_TOKEN=tok")
 	if err := Load().Validate(); err == nil {
@@ -140,5 +145,51 @@ func TestWebsiteReporting(t *testing.T) {
 	t.Setenv("ORCHD_WEBSITE_INTERNAL_TOKEN", "own")
 	if c := Load(); c.WebsiteURL != "http://localhost:3000" || c.WebsiteToken != "own" {
 		t.Errorf("ORCHD_ env must win: %q %q", c.WebsiteURL, c.WebsiteToken)
+	}
+}
+
+const rapidNativeAdopterFile = "../../../deploy/adopters/rapidnative/adopter.json"
+
+// A relay or gateway needs the adopter to name the project env variable that
+// carries a project's services key; without it the relay would never apply.
+func TestValidateRelayNeedsServicesKeyEnv(t *testing.T) {
+	t.Setenv("ORCHD_ADOPTER_CONFIG", "")
+	t.Setenv("ORCHD_TINBASE_SMTP_HOST", "services.example.com")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected Validate to refuse a relay with no servicesKeyEnv")
+	}
+	t.Setenv("ORCHD_TINBASE_SMTP_HOST", "")
+	t.Setenv("ORCHD_TINBASE_SMS_API_URL", "https://services.example.com/twilio")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected Validate to refuse an SMS gateway with no servicesKeyEnv")
+	}
+	t.Setenv("ORCHD_TINBASE_SMS_API_URL", "")
+	if err := Load().Validate(); err != nil {
+		t.Fatalf("neutral engine without relays must load, got %v", err)
+	}
+}
+
+// A bad adopter file stops the boot instead of dropping settings quietly.
+func TestValidateRejectsBadAdopterFile(t *testing.T) {
+	dir := t.TempDir()
+	p := dir + "/adopter.json"
+	if err := os.WriteFile(p, []byte(`{"presetz": {}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("ORCHD_ADOPTER_CONFIG", p)
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected an unknown key in the adopter file to be refused")
+	}
+	t.Setenv("ORCHD_ADOPTER_CONFIG", dir+"/missing.json")
+	if err := Load().Validate(); err == nil {
+		t.Fatal("expected a missing adopter file to be refused")
+	}
+	t.Setenv("ORCHD_ADOPTER_CONFIG", rapidNativeAdopterFile)
+	c := Load()
+	if err := c.Validate(); err != nil {
+		t.Fatalf("RapidNative's adopter file must load: %v", err)
+	}
+	if c.Adopter.AppType() != "rapidnative-dev" || len(c.Adopter.Presets) != 3 || len(c.Adopter.ProcessRecipes) != 3 {
+		t.Fatalf("RapidNative adopter = %+v", c.Adopter)
 	}
 }

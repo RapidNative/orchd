@@ -21,11 +21,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/adopter"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/events"
@@ -135,7 +137,7 @@ const minJWTSecret = 32
 var ErrBadJWTSecret = fmt.Errorf("jwt_secret must be at least %d characters", minJWTSecret)
 
 // withCreateOptions applies opts to specs.
-func withCreateOptions(specs []WorkloadSpec, opts []CreateOptions) ([]WorkloadSpec, error) {
+func (m *Manager) withCreateOptions(specs []WorkloadSpec, opts []CreateOptions) ([]WorkloadSpec, error) {
 	for _, o := range opts {
 		if o.JWTSecret == "" {
 			continue
@@ -147,7 +149,7 @@ func withCreateOptions(specs []WorkloadSpec, opts []CreateOptions) ([]WorkloadSp
 			// The type as registerWorkload resolves it: explicit, else the
 			// preset's, else tinbase.
 			t := specs[i].Type
-			if p, ok := Catalog[specs[i].Preset]; ok && t == "" {
+			if p, ok := m.presets()[specs[i].Preset]; ok && t == "" {
 				t = p.Type
 			}
 			if t == "" || t == runtime.WorkloadTinbaseProject {
@@ -158,8 +160,8 @@ func withCreateOptions(specs []WorkloadSpec, opts []CreateOptions) ([]WorkloadSp
 	return specs, nil
 }
 
-// preset is a named workload template so the API/UI can ask for "expo"/"vite"/
-// "api"/"tinbase" without spelling out image + port each time.
+// preset is a named workload template so the API/UI can ask for a workload by
+// name (e.g. "tinbase") without spelling out image + port each time.
 type preset struct {
 	Type  runtime.WorkloadType
 	Name  string
@@ -167,13 +169,54 @@ type preset struct {
 	Port  int    // 0 = driver default (54321)
 }
 
-// Catalog is the built-in workload catalog. tinbase uses the driver default
-// image/port; the RapidNative runners are their own images listening on 8080.
-var Catalog = map[string]preset{
+// builtinPresets are the presets the engine itself provides: the tinbase
+// database, on the driver's default image and port. An adopter adds its own
+// (adopter.Config.Presets).
+var builtinPresets = map[string]preset{
 	"tinbase": {Type: runtime.WorkloadTinbaseProject, Name: "", Image: "", Port: 0},
-	"expo":    {Type: runtime.WorkloadRapidNativeDev, Name: "app", Image: "rn-expo:dev", Port: 8080},
-	"vite":    {Type: runtime.WorkloadRapidNativeDev, Name: "web", Image: "rn-vite:dev", Port: 8080},
-	"api":     {Type: runtime.WorkloadRapidNativeDev, Name: "api", Image: "rn-api:dev", Port: 8080},
+}
+
+// presets returns the built-in presets plus the adopter's. An adopter preset
+// with no type is an app workload with the adopter's app label.
+func (m *Manager) presets() map[string]preset {
+	out := make(map[string]preset, len(builtinPresets)+len(m.cfg.Adopter.Presets))
+	for k, v := range builtinPresets {
+		out[k] = v
+	}
+	for k, p := range m.cfg.Adopter.Presets {
+		t := runtime.WorkloadType(p.Type)
+		if t == "" {
+			t = m.appType()
+		}
+		out[k] = preset{Type: t, Name: p.Name, Image: p.Image, Port: p.Port}
+	}
+	return out
+}
+
+// PresetNames lists the preset names the API accepts, sorted.
+func (m *Manager) PresetNames() []string {
+	ps := m.presets()
+	names := make([]string, 0, len(ps))
+	for k := range ps {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// servicesKey is a project's key for the platform's shared services (the SMTP
+// relay and SMS gateway), read from the project env variable the adopter names
+// (adopter.Config.ServicesKeyEnv). Empty when none is named or set.
+func (m *Manager) servicesKey(projEnv map[string]string) string {
+	if name := m.cfg.Adopter.ServicesKeyEnv; name != "" {
+		return projEnv[name]
+	}
+	return ""
+}
+
+// appType is the type recorded on new app workloads (adopter-chosen label).
+func (m *Manager) appType() runtime.WorkloadType {
+	return runtime.WorkloadType(m.cfg.Adopter.AppType())
 }
 
 func New(cfg config.Config, st store.Store, rt runtime.Runtime) *Manager {
@@ -1134,7 +1177,7 @@ func (m *Manager) CreateFromTemplate(ctx context.Context, tmplName, projName, re
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
 		} else {
-			s.Type = runtime.WorkloadRapidNativeDev
+			s.Type = m.appType()
 			// The container port was never set on the template path — masked in
 			// production because everything boots from frozen images, but a
 			// template boot on the docker driver published the tinbase default
@@ -1192,7 +1235,7 @@ func (m *Manager) CreateFromImage(ctx context.Context, tmplName, version, projNa
 		if w.Kind == "tinbase" {
 			s.Type = runtime.WorkloadTinbaseProject
 		} else {
-			s.Type = runtime.WorkloadRapidNativeDev
+			s.Type = m.appType()
 			if s.Port == 0 {
 				// Legacy image (built before ports were frozen): synthesized
 				// workspace images listen on 8080 (node) / 80 (static).
@@ -1221,7 +1264,7 @@ func (m *Manager) CreateProject(ctx context.Context, name, regionID string, spec
 	if len(specs) == 0 {
 		specs = []WorkloadSpec{{Type: runtime.WorkloadTinbaseProject}}
 	}
-	specs, err := withCreateOptions(specs, opts)
+	specs, err := m.withCreateOptions(specs, opts)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1284,7 +1327,7 @@ func (m *Manager) registerWorkload(projectID string, ws WorkloadSpec) (*store.Wo
 	}
 	// Resolve a preset (explicit fields still win if set).
 	if ws.Preset != "" {
-		p, ok := Catalog[ws.Preset]
+		p, ok := m.presets()[ws.Preset]
 		if !ok {
 			return nil, fmt.Errorf("unknown preset %q", ws.Preset)
 		}
@@ -1976,6 +2019,9 @@ func (m *Manager) BackupWorkload(ctx context.Context, workloadID string) (backup
 	return b, nil
 }
 
+// AdopterConfig returns the adopter settings this manager runs with.
+func (m *Manager) AdopterConfig() adopter.Config { return m.cfg.Adopter }
+
 // StateBackupKey is the reserved "workload id" the control-plane state snapshot
 // is stored under, so it lives alongside tenant backups in the same store.
 const StateBackupKey = "_control-plane"
@@ -2006,7 +2052,7 @@ func (m *Manager) BackupState(ctx context.Context) (backup.Backup, error) {
 }
 
 // BackupProject snapshots every workload in a project (generic across workload
-// types — a RapidNative project's runners and its tinbase backend alike).
+// types — a project's app workloads and its tinbase database alike).
 func (m *Manager) BackupProject(ctx context.Context, projectID string) ([]backup.Backup, error) {
 	if m.backupStore() == nil {
 		return nil, ErrBackupsDisabled
@@ -2342,7 +2388,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		// The host and port come from the platform env (ORCHD_TINBASE_ENV),
 		// which is applied after this, so a deployment can still override any
 		// of it.
-		if key := projEnv["RAPIDNATIVE_GLOBAL_SERVICES_KEY"]; key != "" && m.cfg.TinbaseSMTPHost != "" {
+		if key := m.servicesKey(projEnv); key != "" && m.cfg.TinbaseSMTPHost != "" {
 			env["TINBASE_SMTP_HOST"] = m.cfg.TinbaseSMTPHost
 			env["TINBASE_SMTP_PORT"] = strconv.Itoa(m.cfg.TinbaseSMTPPort)
 			env["TINBASE_SMTP_USER"] = "project"
@@ -2360,7 +2406,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 		// block leaves empty from these, so a project that turns phone auth
 		// on in config.toml sends through the gateway with nothing else to
 		// configure, and one with its own Twilio account overrides all three.
-		if key := projEnv["RAPIDNATIVE_GLOBAL_SERVICES_KEY"]; key != "" && m.cfg.TinbaseSMSAPIURL != "" {
+		if key := m.servicesKey(projEnv); key != "" && m.cfg.TinbaseSMSAPIURL != "" {
 			env["TINBASE_SMS_TWILIO_ACCOUNT_SID"] = w.ProjectID
 			env["TINBASE_SMS_TWILIO_AUTH_TOKEN"] = key
 			env["TINBASE_SMS_TWILIO_API_URL"] = m.cfg.TinbaseSMSAPIURL
@@ -2383,20 +2429,18 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	// talk to its own database.
 	m.repairProjectKeys(w.ProjectID)
 	env = m.interpolateEnv(w, env)
-	// Expo inlines only EXPO_PUBLIC_-prefixed variables into the client bundle,
-	// so EXPO_DEV_SERVER_ORIGIN - which the templates set to ${route.mobile} -
-	// is present in the container and `undefined` in the app. Code that reads it
-	// to build an absolute URL silently gets "", and a password-reset link then
-	// goes out with no redirect_to at all, landing the user on the database's
-	// own origin.
-	//
-	// Mirrored under the public name rather than renamed: the unprefixed one is
-	// Expo's own (expo-modules-core declares it), and a template or a project
-	// may already read it server-side. Set after interpolation, since before it
-	// the value is still the literal token.
-	if origin := env["EXPO_DEV_SERVER_ORIGIN"]; origin != "" {
-		if _, ok := env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"]; !ok {
-			env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"] = origin
+	// The adopter's env mirrors (adopter.Config.EnvMirrors): copy a variable to
+	// a second name the app also reads, unless that name is set already. For
+	// frameworks that only expose prefixed variables to client code, a value
+	// a template sets under the server-side name would otherwise be missing in
+	// the app. Applied after interpolation, since before it the value is still
+	// the literal token.
+	for _, src := range m.cfg.Adopter.MirrorSources() {
+		dst := m.cfg.Adopter.EnvMirrors[src]
+		if v := env[src]; v != "" {
+			if _, ok := env[dst]; !ok {
+				env[dst] = v
+			}
 		}
 	}
 	// Boot-from-image: the docker driver runs the frozen, versioned image tag
@@ -2419,7 +2463,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 	// slow but they are not stuck, so wait properly. Provisioning already runs
 	// in the background, so nothing user-facing blocks on this.
 	var ready time.Duration
-	if w.Type == runtime.WorkloadRapidNativeDev {
+	if w.Type.IsApp() {
 		ready = 15 * time.Minute
 		if m.workloadIsPreset(w) {
 			// A preset image has no boot install and answers its manifest
@@ -2469,7 +2513,7 @@ func (m *Manager) specFor(w *store.Workload) runtime.Spec {
 // zero values (no mounts, run the baked image) for tinbase workloads, plain
 // preset images, and docker-only imported images with no seeded tree.
 func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, depsHostDir string) {
-	if w.Type != runtime.WorkloadRapidNativeDev || w.Template == "" || w.Workspace == "" {
+	if !w.Type.IsApp() || w.Template == "" || w.Workspace == "" {
 		return "", "", "", ""
 	}
 	if _, err := os.Stat(filepath.Join(w.DataDir, ".orchd-seeded")); err != nil {
@@ -2528,7 +2572,7 @@ func (m *Manager) workspaceMount(w *store.Workload) (wsDir, appMount, depsPath, 
 // (see template.Workload.UsesPresetImage), resolved the same way
 // workspaceMount resolves kind: frozen image record first, template fallback.
 func (m *Manager) workloadIsPreset(w *store.Workload) bool {
-	if w.Type != runtime.WorkloadRapidNativeDev || w.Template == "" || w.Workspace == "" {
+	if !w.Type.IsApp() || w.Template == "" || w.Workspace == "" {
 		return false
 	}
 	if w.ImageVer != "" {
@@ -2557,7 +2601,7 @@ func dirExists(p string) bool {
 
 // defaultLimits returns the config default memory/CPU caps for a workload type.
 func (m *Manager) defaultLimits(t runtime.WorkloadType) (memMB int, cpus float64) {
-	if t == runtime.WorkloadRapidNativeDev {
+	if t.IsApp() {
 		return m.cfg.DevMemMB, m.cfg.DevCPUs
 	}
 	return m.cfg.TinbaseMemMB, m.cfg.TinbaseCPUs

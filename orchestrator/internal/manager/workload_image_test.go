@@ -30,7 +30,7 @@ func imageTestManager(t *testing.T) (*Manager, store.Store, *runtime.MockDriver)
 	}
 	_ = st.PutImage(&store.Image{Template: "app", Version: "v3-db-only", Workloads: []store.ImageWorkload{{Name: "db", Kind: "tinbase", Workspace: "db"}}})
 	_ = st.PutProject(&store.Project{ID: "p"})
-	_ = st.PutWorkload(&store.Workload{ID: "w", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Template: "app", ImageVer: "v1", Workspace: "mobile", DataDir: t.TempDir()})
+	_ = st.PutWorkload(&store.Workload{ID: "w", ProjectID: "p", Type: legacyDevType, Template: "app", ImageVer: "v1", Workspace: "mobile", DataDir: t.TempDir()})
 	return m, st, rt
 }
 

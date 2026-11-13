@@ -134,7 +134,7 @@ function InstanceCard() {
       <CardContent>
         <Field
           label="Instance name"
-          hint='ORCHD is the generic control plane. Name this deployment — e.g. "tinbase cloud" or "RapidNative Cloud". Shown in the sidebar.'
+          hint='ORCHD is the generic control plane. Name this deployment — e.g. "tinbase cloud" or "Acme Cloud". Shown in the sidebar.'
         >
           <div className="flex flex-wrap items-center gap-2">
             <Input

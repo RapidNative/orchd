@@ -1,6 +1,6 @@
 // Package template reads an ORCHD template manifest (orchd.json) at the root of
 // a project template folder. It is ORCHD's own descriptor — independent of any
-// framework's manifest (e.g. RapidNative's rapidnative.json) — and declares the
+// framework's or product's own manifest — and declares the
 // workloads a project made from the template should run, plus which paths are
 // derived (excluded from the user-files backup delta).
 //

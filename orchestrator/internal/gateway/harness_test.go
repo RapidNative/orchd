@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/adopter"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/runtime"
@@ -40,6 +41,12 @@ func newTestGateway(tb testing.TB, upstream http.Handler, name string) (*Gateway
 	up := httptest.NewServer(upstream)
 	tb.Cleanup(up.Close)
 	cfg := config.Load()
+	// These tests run the gateway the way RapidNative's deployment does.
+	ad, err := adopter.Load("../../../deploy/adopters/rapidnative/adopter.json")
+	if err != nil {
+		tb.Fatal(err)
+	}
+	cfg.Adopter = ad
 	cfg.DataRoot = tb.TempDir()
 	cfg.BaseDomain = "test.local"
 	cfg.StartupWait = 0

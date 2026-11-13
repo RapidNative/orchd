@@ -43,7 +43,7 @@ type StatusCounts struct {
 const MaxBatch = 500
 
 // Target is where aggregates go: the full ingest endpoint (e.g.
-// https://www.rapidnative.com/api/internal/usage) and the one header that
+// https://app.example.com/api/internal/usage) and the one header that
 // authenticates the request. An empty URL means reporting is off.
 type Target struct {
 	URL    string
@@ -65,7 +65,7 @@ type ReporterConfig struct {
 	// (website down); 0 means an hour. MaxPending caps the count the same way.
 	Buffer     time.Duration
 	MaxPending int
-	// Resolve maps an orchd project id to its RapidNative project id; false
+	// Resolve maps an orchd project id to the adopter's project id; false
 	// reports the aggregate with project_id null. Called once per project per drain.
 	Resolve func(orchdProjectID string) (string, bool)
 	Client  *http.Client
@@ -88,7 +88,7 @@ type Reporter struct {
 	lastSent time.Time
 	last     []Aggregate        // the newest minute drained, for Status
 	lastURL  string             // the target URL last seen, to log changes
-	resolved map[string]*string // orchd project id -> RapidNative id (nil: none), from the last drain
+	resolved map[string]*string // orchd project id -> adopter project id (nil: none), from the last drain
 
 	done chan struct{}
 }
@@ -384,12 +384,19 @@ func newUUID() string {
 	return string(s[:])
 }
 
-// RapidNativeProjectID reads the RapidNative project id out of an orchd
-// project name. The website names the projects it provisions after its own
-// project id, "<uuid>" for staging and "<uuid>-prod" for production
-// (OrchdProvisioningService); any other name isn't a RapidNative project.
-func RapidNativeProjectID(name string) (string, bool) {
-	id := strings.TrimSuffix(name, "-prod")
+// ExternalProjectID reads the adopter's own project id out of an orchd project
+// name. An adopter that names the projects it provisions after its own project
+// id (a UUID), optionally with a suffix per environment (e.g. "<uuid>-prod"),
+// gets usage reported under that id; suffixes are the adopter's
+// (adopter.Config.ExternalProjectIDSuffixes). Any other name has no id.
+func ExternalProjectID(name string, suffixes []string) (string, bool) {
+	id := name
+	for _, s := range suffixes {
+		if s != "" && strings.HasSuffix(id, s) {
+			id = strings.TrimSuffix(id, s)
+			break
+		}
+	}
 	if !isUUID(id) {
 		return "", false
 	}

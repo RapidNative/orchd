@@ -199,7 +199,7 @@ export function Projects() {
 }
 
 // CreateDialog creates a project from a template, optionally overlaying a delta
-// (files patched on top of the base) — the same base+delta model RapidNative uses.
+// (files patched on top of the base) — the same base+delta model templates use.
 function CreateDialog({
   template,
   pending,

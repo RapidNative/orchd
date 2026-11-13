@@ -262,7 +262,10 @@ func TestReporterDisabledStillDrains(t *testing.T) {
 	}
 }
 
-func TestRapidNativeProjectID(t *testing.T) {
+// RapidNative's adopter config strips "-prod" (its production projects); the
+// results match what the engine did when it hard-coded that suffix.
+func TestExternalProjectID(t *testing.T) {
+	suffixes := []string{"-prod"}
 	cases := map[string]string{
 		"11111111-2222-4333-8444-555555555555":      "11111111-2222-4333-8444-555555555555",
 		"11111111-2222-4333-8444-555555555555-prod": "11111111-2222-4333-8444-555555555555",
@@ -273,10 +276,17 @@ func TestRapidNativeProjectID(t *testing.T) {
 		"11111111-2222-4333-8444-555555555555-staging": "",
 	}
 	for name, want := range cases {
-		got, ok := RapidNativeProjectID(name)
+		got, ok := ExternalProjectID(name, suffixes)
 		if got != want || ok != (want != "") {
-			t.Errorf("RapidNativeProjectID(%q) = %q %v, want %q", name, got, ok, want)
+			t.Errorf("ExternalProjectID(%q) = %q %v, want %q", name, got, ok, want)
 		}
+	}
+	// Without suffixes only a bare UUID name resolves.
+	if _, ok := ExternalProjectID("11111111-2222-4333-8444-555555555555-prod", nil); ok {
+		t.Error("a suffixed name resolved with no suffixes configured")
+	}
+	if got, ok := ExternalProjectID("11111111-2222-4333-8444-555555555555", nil); !ok || got != "11111111-2222-4333-8444-555555555555" {
+		t.Errorf("bare UUID: %q %v", got, ok)
 	}
 	if id := newUUID(); !isUUID(id) || id[14] != '4' {
 		t.Fatalf("newUUID = %q", id)

@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/adopter"
 )
 
 type Config struct {
@@ -131,7 +133,7 @@ type Config struct {
 	// poison it for all). A host dir that doesn't exist is skipped. Containers
 	// only: microVMs ignore it.
 	ReadOnlyMounts map[string]string
-	// ImageMinMemoryMB ("rn-run:dev=2048,...") raises the memory cap of every
+	// ImageMinMemoryMB ("acme-run:dev=2048,...") raises the memory cap of every
 	// workload running that image to at least the given MiB. A workload's own
 	// cap is stored when it is created, so this is how a cap that turned out
 	// too small for an image reaches existing workloads (and frozen image
@@ -144,7 +146,7 @@ type Config struct {
 	// and non-empty, mutating control endpoints require it. Empty = open (local
 	// dev). The key never lives in config or logs, only in this file.
 	APIKeyFile string
-	// PublicURL is the externally reachable base (e.g. https://cloud.rapidnative.com)
+	// PublicURL is the externally reachable base (e.g. https://cloud.example.com)
 	// used to build subroute endpoints (<PublicURL>/w/<key>) for display.
 	PublicURL string
 	// PublicScheme is the scheme for subdomain endpoints ("https" in prod behind
@@ -266,6 +268,15 @@ type Config struct {
 	// UsageBuffer is how long unsent traffic is kept and retried while the
 	// website is unreachable before the oldest is dropped.
 	UsageBuffer time.Duration
+
+	// AdopterConfig is the path of the adopter file (ORCHD_ADOPTER_CONFIG): the
+	// presets, app workload label, local process recipes, readiness probe
+	// headers and env conventions of the product running on this ORCHD. Empty
+	// runs the neutral engine. See package adopter.
+	AdopterConfig string
+	// Adopter is the loaded adopter file (zero value: neutral engine).
+	Adopter    adopter.Config
+	adopterErr error
 }
 
 func Load() Config {
@@ -282,7 +293,13 @@ func Load() Config {
 		publicURLDefault = "http://localhost" + portSuffix(gatewayAddr)
 	}
 
+	adopterPath := env("ORCHD_ADOPTER_CONFIG", "")
+	adopterCfg, adopterErr := adopter.Load(adopterPath)
+
 	return Config{
+		AdopterConfig:          adopterPath,
+		Adopter:                adopterCfg,
+		adopterErr:             adopterErr,
 		APIAddr:                env("ORCHD_API_ADDR", "127.0.0.1:8080"),
 		GatewayAddr:            gatewayAddr,
 		BaseDomain:             env("ORCHD_BASE_DOMAIN", baseDefault),
@@ -364,6 +381,16 @@ func Load() Config {
 // Validate rejects combinations that would boot fine and then do the wrong
 // thing quietly. Called once, right after Load.
 func (c Config) Validate() error {
+	if c.adopterErr != nil {
+		return c.adopterErr
+	}
+	// The SMTP relay and SMS gateway authenticate a project by its services
+	// key, read from the project env variable the adopter names. Without that
+	// name the relay settings would boot and quietly never apply.
+	if (c.TinbaseSMTPHost != "" || c.TinbaseSMSAPIURL != "") && c.Adopter.ServicesKeyEnv == "" {
+		return fmt.Errorf("ORCHD_TINBASE_SMTP_HOST or ORCHD_TINBASE_SMS_API_URL is set but the adopter config (ORCHD_ADOPTER_CONFIG) names no servicesKeyEnv: " +
+			"tenants' services keys could not be found, so the relay would never be configured")
+	}
 	if c.TinbaseSMTPHost != "" {
 		if _, has := c.TinbaseEnv["TINBASE_RESEND_API_KEY"]; has {
 			return fmt.Errorf("ORCHD_TINBASE_ENV carries TINBASE_RESEND_API_KEY while ORCHD_TINBASE_SMTP_HOST is set: " +

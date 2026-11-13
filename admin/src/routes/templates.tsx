@@ -162,7 +162,7 @@ function TemplatesCard() {
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <Input
             className="max-w-40"
-            placeholder="name (e.g. rapidnative)"
+            placeholder="name (e.g. acme)"
             value={name}
             onChange={(e) => setName(e.target.value)}
           />

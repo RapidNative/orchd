@@ -34,6 +34,17 @@ func main() {
 	if err := cfg.Validate(); err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// What the product on this ORCHD supplies about itself (package adopter):
+	// the local driver's recipes and the readiness probe's headers live in the
+	// runtime; presets, labels and env conventions are read by the manager.
+	runtime.SetProcessRecipes(cfg.Adopter.ProcessRecipes)
+	runtime.SetReadyProbeHeaders(cfg.Adopter.ReadyProbeHeaders)
+	if cfg.AdopterConfig != "" {
+		log.Printf("adopter config: %s (app workloads %q, %d presets, %d process recipes)",
+			cfg.AdopterConfig, cfg.Adopter.AppType(), len(cfg.Adopter.Presets), len(cfg.Adopter.ProcessRecipes))
+	} else {
+		log.Printf("adopter config: none (neutral engine: tinbase and app workloads labelled %q)", cfg.Adopter.AppType())
+	}
 
 	var st store.Store
 	var err error

@@ -174,23 +174,23 @@ func (g *Gateway) UsageTarget() metering.Target {
 	return t
 }
 
-// ResolveProject maps an orchd project id to the RapidNative project id its
-// name carries (see metering.RapidNativeProjectID). A project that is gone or
-// wasn't provisioned by the website has none.
+// ResolveProject maps an orchd project id to the adopter's project id its name
+// carries (see metering.ExternalProjectID). A project that is gone or wasn't
+// named after an adopter project has none.
 func (g *Gateway) ResolveProject(orchdProjectID string) (string, bool) {
 	p, err := g.mgr.Store().GetProject(orchdProjectID)
 	if err != nil {
 		return "", false
 	}
-	return metering.RapidNativeProjectID(p.Name)
+	return metering.ExternalProjectID(p.Name, g.mgr.AdopterConfig().ExternalProjectIDSuffixes)
 }
 
 // startupTransport retries a GET or HEAD that a just-started server refuses or
 // resets, until it answers or the startup window ends. A dev server takes
 // seconds to listen after its container starts, and Docker's port proxy
 // accepts the connection and then resets it meanwhile. Without this the first
-// request after every start (an editor open, a QR scan) got a 502, and Expo Go
-// reported a timeout. Requests with a body are never retried.
+// request after every start (an editor open, a QR scan) got a 502, and a
+// mobile client reported a timeout. Requests with a body are never retried.
 type startupTransport struct {
 	base  http.RoundTripper
 	until time.Time
@@ -291,9 +291,9 @@ func allowOwnOrigin(h http.Header, origin, projectID string, lookup func(host st
 }
 
 // resolveAlias tries replacing the domain suffix in host with each known
-// domain alias. For example, if host is "slug.rapidnative.dev" and
-// allDomains contains ["rapidnative.dev", "rapidnative.app"], it tries
-// looking up "slug.rapidnative.app" in the route table.
+// domain alias. For example, if host is "slug.example.dev" and
+// allDomains contains ["example.dev", "example.app"], it tries
+// looking up "slug.example.app" in the route table.
 func (g *Gateway) resolveAlias(host string) (*store.Workload, bool) {
 	for _, d := range g.allDomains {
 		if !strings.HasSuffix(host, "."+d) {

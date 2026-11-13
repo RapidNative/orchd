@@ -30,7 +30,7 @@ func NewMockDriver() *MockDriver {
 				Size: "668MB", CreatedAt: "3 days ago",
 			},
 			{
-				Repository: "rn-vite", Tag: "dev", Ref: "rn-vite:dev",
+				Repository: "acme-web", Tag: "dev", Ref: "acme-web:dev",
 				ID: "0811f26fd717", Digest: "sha256:0811f26fd717b816aa5d9c0b1a2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5",
 				Size: "546MB", CreatedAt: "3 days ago",
 			},

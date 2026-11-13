@@ -9,7 +9,7 @@ test('images: list, pull, and delete round-trip', async ({ page }) => {
 
   // Seeded images are listed.
   await expect(page.getByRole('cell', { name: 'tinbase', exact: true })).toBeVisible()
-  await expect(page.getByRole('cell', { name: 'rn-vite', exact: true })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'acme-web', exact: true })).toBeVisible()
 
   // Pull a new image.
   await page.getByPlaceholder(/my-runtime/).fill('nginx:alpine')
@@ -44,7 +44,7 @@ test('images: import an image from a spec', async ({ page }) => {
     template: 'imp-demo',
     version: 'v1',
     dockers: { api: 'ghcr.io/acme/orchd-imp-demo-api:v1' },
-    workloads: [{ name: 'api', kind: 'node', workspace: 'api', image: 'rn-api:dev' }],
+    workloads: [{ name: 'api', kind: 'node', workspace: 'api', image: 'acme-api:dev' }],
   })
   await page.getByPlaceholder(/"template"/).fill(spec)
   await page.getByRole('button', { name: 'Import image', exact: true }).click()

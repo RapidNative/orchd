@@ -13,9 +13,9 @@ import (
 // Env interpolation lets a template (or project/workload env) reference its
 // sibling workloads without knowing the project ref or base domain up front:
 //
-//	"EXPO_PUBLIC_API_URL":           "${route.api}"
-//	"EXPO_PUBLIC_SUPABASE_URL":      "${route.db}"
-//	"EXPO_PUBLIC_SUPABASE_ANON_KEY": "${workload.db.anon_key}"
+//	"PUBLIC_API_URL":           "${route.api}"
+//	"PUBLIC_SUPABASE_URL":      "${route.db}"
+//	"PUBLIC_SUPABASE_ANON_KEY": "${workload.db.anon_key}"
 //
 // Tokens are resolved in specFor on every boot (provision, wake, restart), so
 // values stay current if routes or keys change. Unknown namespaces are left
@@ -79,15 +79,20 @@ func (m *Manager) projectRedirectOrigins(projectID string) string {
 }
 
 // projectAppEndpoint is where this project's application is served, as a user
-// would open it - the workload the scaffold calls "mobile", which is the Expo
-// dev server and answers on every route with the app's HTML shell.
+// would open it: the workload the adopter names (adopter.Config.SiteURLWorkload),
+// matched by workspace or name. It should answer on every route with the app's
+// HTML shell.
 //
 // Used as tinbase's site_url, so a link that cannot be honoured sends someone
 // to the app rather than to the database's own origin. Empty when the project
 // has no such workload, and the caller then leaves site_url alone.
 func (m *Manager) projectAppEndpoint(projectID string) string {
+	name := m.cfg.Adopter.SiteURLWorkload
+	if name == "" {
+		return ""
+	}
 	for _, s := range m.store.ListWorkloads(projectID) {
-		if s.Workspace == "mobile" || s.Name == "mobile" {
+		if s.Workspace == name || s.Name == name {
 			return m.PublicEndpoint(s)
 		}
 	}

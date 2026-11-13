@@ -73,7 +73,7 @@ func TestInterpolateEnvTokens(t *testing.T) {
 	m := newInterpManager(t, reapStub{})
 	proj, wls, err := m.CreateProject(context.Background(), "demo", "", []WorkloadSpec{
 		{Type: runtime.WorkloadTinbaseProject, Workspace: "db"},
-		{Type: runtime.WorkloadRapidNativeDev, Name: "api", Workspace: "api"},
+		{Type: legacyDevType, Name: "api", Workspace: "api"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +118,7 @@ func TestInterpolatePortAddressingMode(t *testing.T) {
 	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PortBase: 18100}, st, reapStub{})
 	_, wls, err := m.CreateProject(context.Background(), "demo", "", []WorkloadSpec{
 		{Type: runtime.WorkloadTinbaseProject, Workspace: "db"},
-		{Type: runtime.WorkloadRapidNativeDev, Name: "api", Workspace: "api"},
+		{Type: legacyDevType, Name: "api", Workspace: "api"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +359,7 @@ func TestSpecForTinbaseOnlyEnv(t *testing.T) {
 	}, st, nil)
 	_ = st.PutProject(&store.Project{ID: "p"})
 	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s", HostPort: 54321}
-	api := &store.Workload{ID: "api", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "api"}
+	api := &store.Workload{ID: "api", ProjectID: "p", Type: legacyDevType, Workspace: "api"}
 	_ = st.PutWorkload(db)
 	_ = st.PutWorkload(api)
 
@@ -394,10 +394,10 @@ func TestSpecForTinbaseOnlyEnv(t *testing.T) {
 // the database, where they get a JSON health body instead of a page.
 func TestSpecForTinbaseSiteUrlIsTheApp(t *testing.T) {
 	st, _ := store.Open("")
-	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https", Adopter: rapidNativeAdopter(t)}, st, nil)
 	_ = st.PutProject(&store.Project{ID: "p"})
 	db := &store.Workload{ID: "db", ProjectID: "p", Name: "db", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
-	mobile := &store.Workload{ID: "mob", ProjectID: "p", Name: "mobile", Type: runtime.WorkloadRapidNativeDev, Workspace: "mobile"}
+	mobile := &store.Workload{ID: "mob", ProjectID: "p", Name: "mobile", Type: legacyDevType, Workspace: "mobile"}
 	_ = st.PutWorkload(db)
 	_ = st.PutWorkload(mobile)
 
@@ -433,10 +433,10 @@ func TestSpecForTinbaseSiteUrlFallsBackWithoutAnApp(t *testing.T) {
 // absolute URL from it sends a password-reset link with no redirect_to at all.
 func TestSpecForMirrorsExpoOriginUnderThePublicName(t *testing.T) {
 	st, _ := store.Open("")
-	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
+	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https", Adopter: rapidNativeAdopter(t)}, st, nil)
 	_ = st.PutProject(&store.Project{ID: "p"})
 	mobile := &store.Workload{
-		ID: "mob", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "mobile",
+		ID: "mob", ProjectID: "p", Type: legacyDevType, Workspace: "mobile",
 		Env: map[string]string{"EXPO_DEV_SERVER_ORIGIN": "${route.mobile}"},
 	}
 	_ = st.PutWorkload(mobile)
@@ -457,7 +457,7 @@ func TestSpecForKeepsAnExplicitPublicExpoOrigin(t *testing.T) {
 	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, nil)
 	_ = st.PutProject(&store.Project{ID: "p"})
 	mobile := &store.Workload{
-		ID: "mob", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "mobile",
+		ID: "mob", ProjectID: "p", Type: legacyDevType, Workspace: "mobile",
 		Env: map[string]string{
 			"EXPO_DEV_SERVER_ORIGIN":        "${route.mobile}",
 			"EXPO_PUBLIC_DEV_SERVER_ORIGIN": "https://app.example.com",
@@ -478,7 +478,7 @@ func TestSpecForTinbaseRedirectAllowList(t *testing.T) {
 	m := New(config.Config{DataRoot: t.TempDir(), BaseDomain: "test.local", PublicScheme: "https"}, st, reapStub{})
 	proj, wls, err := m.CreateProject(context.Background(), "demo", "", []WorkloadSpec{
 		{Type: runtime.WorkloadTinbaseProject, Workspace: "db"},
-		{Type: runtime.WorkloadRapidNativeDev, Name: "web", Workspace: "web"},
+		{Type: legacyDevType, Name: "web", Workspace: "web"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -516,6 +516,7 @@ func TestSpecForTinbaseRedirectAllowList(t *testing.T) {
 func TestSpecForTinbaseSMTP(t *testing.T) {
 	st, _ := store.Open("")
 	m := New(config.Config{
+		Adopter:               rapidNativeAdopter(t),
 		DataRoot:              t.TempDir(),
 		TinbaseSMTPHost:       "smtp.relay.test",
 		TinbaseSMTPPort:       587,
@@ -524,7 +525,7 @@ func TestSpecForTinbaseSMTP(t *testing.T) {
 	}, st, nil)
 	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"RAPIDNATIVE_GLOBAL_SERVICES_KEY": "rn_svc_abc"}})
 	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
-	api := &store.Workload{ID: "api", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "api"}
+	api := &store.Workload{ID: "api", ProjectID: "p", Type: legacyDevType, Workspace: "api"}
 	_ = st.PutWorkload(db)
 	_ = st.PutWorkload(api)
 
@@ -552,12 +553,13 @@ func TestSpecForTinbaseSMTP(t *testing.T) {
 func TestSpecForTinbaseSMS(t *testing.T) {
 	st, _ := store.Open("")
 	m := New(config.Config{
+		Adopter:          rapidNativeAdopter(t),
 		DataRoot:         t.TempDir(),
 		TinbaseSMSAPIURL: "https://services.test/twilio",
 	}, st, nil)
 	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"RAPIDNATIVE_GLOBAL_SERVICES_KEY": "rn_svc_abc"}})
 	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
-	api := &store.Workload{ID: "api", ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Workspace: "api"}
+	api := &store.Workload{ID: "api", ProjectID: "p", Type: legacyDevType, Workspace: "api"}
 	_ = st.PutWorkload(db)
 	_ = st.PutWorkload(api)
 
@@ -691,5 +693,33 @@ func TestBakedWorkspaceKeepsLongReadyWindow(t *testing.T) {
 	}
 	if got := m.specFor(wls[0]).ReadyTimeout; got != 15*time.Minute {
 		t.Fatalf("baked workspace ready window = %v, want 15m", got)
+	}
+}
+
+// Without an adopter the engine applies none of a product's conventions: no
+// env mirrors, no services-key lookup, no site URL taken from a workload name.
+func TestSpecForNeutralEngineAppliesNoProductConventions(t *testing.T) {
+	st, _ := store.Open("")
+	m := New(config.Config{
+		DataRoot:         t.TempDir(),
+		BaseDomain:       "test.local",
+		PublicScheme:     "https",
+		TinbaseSMSAPIURL: "https://services.test/twilio",
+	}, st, nil)
+	_ = st.PutProject(&store.Project{ID: "p", Env: map[string]string{"RAPIDNATIVE_GLOBAL_SERVICES_KEY": "k"}})
+	db := &store.Workload{ID: "db", ProjectID: "p", Type: runtime.WorkloadTinbaseProject, Workspace: "db", JWTSecret: "s"}
+	mobile := &store.Workload{ID: "mob", ProjectID: "p", Name: "mobile", Type: runtime.WorkloadApp, Workspace: "mobile",
+		Env: map[string]string{"EXPO_DEV_SERVER_ORIGIN": "https://x.test"}}
+	_ = st.PutWorkload(db)
+	_ = st.PutWorkload(mobile)
+	e := m.specFor(db).Env
+	if _, ok := e["TINBASE_SMS_TWILIO_API_URL"]; ok {
+		t.Errorf("neutral engine read a product's services key: %v", e)
+	}
+	if strings.Contains(e["TINBASE_SITE_URL"], "mobile") {
+		t.Errorf("neutral engine took the site URL from a workload named mobile: %q", e["TINBASE_SITE_URL"])
+	}
+	if v, ok := m.specFor(mobile).Env["EXPO_PUBLIC_DEV_SERVER_ORIGIN"]; ok {
+		t.Errorf("neutral engine mirrored an env var: %q", v)
 	}
 }

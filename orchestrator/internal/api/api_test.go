@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/adopter"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/api"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/config"
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/manager"
@@ -54,6 +55,13 @@ func newTestServer(t *testing.T) *httptest.Server {
 	cfg := config.Load()
 	cfg.DataRoot = t.TempDir()
 	cfg.BaseDomain = "test.local"
+	// The API is exercised the way RapidNative's deployment runs it (its
+	// presets, labels and conventions come from its adopter file).
+	ad, err := adopter.Load("../../../deploy/adopters/rapidnative/adopter.json")
+	if err != nil {
+		t.Fatalf("adopter: %v", err)
+	}
+	cfg.Adopter = ad
 
 	st, err := store.Open("") // empty path => in-memory
 	if err != nil {

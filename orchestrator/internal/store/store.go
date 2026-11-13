@@ -195,14 +195,14 @@ type MetricsTarget struct {
 // Settings is the mutable platform configuration set at runtime (via the admin).
 type Settings struct {
 	// InstanceName is the human name for this deployment (e.g. "tinbase cloud",
-	// "RapidNative Cloud"). The engine itself is generic (ORCHD); this is what an
+	// "Acme Cloud"). The engine itself is generic (ORCHD); this is what an
 	// operator calls their instance. Empty until set.
 	InstanceName string        `json:"instance_name,omitempty"`
 	Backup       BackupTarget  `json:"backup"`
 	Webhook      Webhook       `json:"webhook"`
 	Metrics      MetricsTarget `json:"metrics"`
 	// Templates maps a template name to a local folder path holding its
-	// orchd.json (local template mode). e.g. "rapidnative" -> "/Users/…/rapidnative-template".
+	// orchd.json (local template mode). e.g. "acme" -> "/Users/…/acme-template".
 	Templates map[string]string `json:"templates,omitempty"`
 	// Registry is the container registry prefix that `push` re-tags images under,
 	// e.g. "ghcr.io/acme". Empty = pushing is disabled.

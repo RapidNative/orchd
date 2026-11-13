@@ -401,7 +401,7 @@ func (d *DockerDriver) Start(ctx context.Context, spec Spec) (*Instance, error) 
 
 	// The container exists but is suspended (scale-to-zero). A plain `docker
 	// start` resumes it on the image it was CREATED with -- so after a workload
-	// image is rebuilt and retagged (e.g. rn-run:dev bumped to a newer rnrun), a
+	// image is rebuilt and retagged (e.g. acme-run:dev bumped to a new build), a
 	// woken tenant would keep running the OLD image indefinitely. If the target
 	// tag now resolves to a different image id than the container was built from,
 	// recreate instead so the wake picks up the new image. Create remounts the
@@ -498,7 +498,7 @@ func (d *DockerDriver) Status(ctx context.Context, ref string) (State, error) {
 	return state, nil
 }
 
-// imageID resolves a tag or ref (e.g. "rn-run:dev") to docker's canonical image
+// imageID resolves a tag or ref (e.g. "acme-run:dev") to docker's canonical image
 // id on the given daemon, or "" if the image is unknown/unreadable.
 func (d *DockerDriver) imageID(ctx context.Context, host, ref string) string {
 	out, err := d.docker(ctx, host, "image", "inspect", "-f", "{{.Id}}", ref).Output()
@@ -555,28 +555,26 @@ func (d *DockerDriver) inspect(ctx context.Context, host, ref string) (State, st
 }
 
 // waitHTTP blocks until addr returns any HTTP response (not fooled by Docker's
-// port-proxy accepting before the app serves).
+// port-proxy accepting before the app serves). Any response means ready.
 //
-// The probe declares itself a native Expo client. A bare GET / makes an Expo
-// dev server produce the WEB target — SSR-rendering the landing page, which
-// bundles the entire app for web as the very first thing a cold server does.
-// For a workspace whose dependencies diverge from the baked image that build
-// gets no cache hits, exceeds the guest's memory, and is OOM-killed — so the
-// server boots, builds for a minute, dies, and repeats, and the workload never
-// becomes ready even though the app itself is fine. With the header, Expo
-// answers with its native manifest: a few milliseconds, no bundling. Servers
-// that aren't Expo ignore the headers, and any response still means ready.
+// The probe carries the adopter's readiness headers (SetReadyProbeHeaders).
+// Some dev servers answer a bare GET / by rendering the whole app (a cold
+// server bundling everything first, which can exhaust a small guest's memory);
+// a header lets the adopter ask such a server for something cheap instead.
+// Servers that don't know the headers ignore them.
 func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 2 * time.Second}
 	url := "http://" + addr + "/"
+	headers := readyProbeHeaders()
 	deadline := time.Now().Add(timeout)
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-		req.Header.Set("expo-platform", "ios")
-		req.Header.Set("Accept", "application/expo+json,application/json")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
 		resp, err := client.Do(req)
 		if err == nil {
 			resp.Body.Close()
@@ -587,6 +585,24 @@ func waitHTTP(ctx context.Context, addr string, timeout time.Duration) error {
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
+}
+
+var (
+	probeMu      sync.RWMutex
+	probeHeaders map[string]string
+)
+
+// SetReadyProbeHeaders installs the headers every readiness probe sends.
+func SetReadyProbeHeaders(h map[string]string) {
+	probeMu.Lock()
+	defer probeMu.Unlock()
+	probeHeaders = h
+}
+
+func readyProbeHeaders() map[string]string {
+	probeMu.RLock()
+	defer probeMu.RUnlock()
+	return probeHeaders
 }
 
 func (d *DockerDriver) Stats(ctx context.Context, ref string) (Stats, error) {

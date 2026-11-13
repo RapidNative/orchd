@@ -215,7 +215,7 @@ export function ImportImageCard() {
       </p>
       <textarea
         className="h-32 w-full rounded-md border border-border bg-input p-2 font-mono text-xs text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        placeholder='{ "template": "rapidnative", "version": "v2", "dockers": { "api": "ghcr.io/acme/orchd-rapidnative-api:v2" }, "workloads": [ … ] }'
+        placeholder='{ "template": "acme", "version": "v2", "dockers": { "api": "ghcr.io/acme/orchd-acme-api:v2" }, "workloads": [ … ] }'
         value={text}
         onChange={(e) => setText(e.target.value)}
       />

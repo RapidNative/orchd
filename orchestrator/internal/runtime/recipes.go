@@ -4,145 +4,81 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
+	"sync"
+
+	"github.com/tinbase/tinbase-cloud/orchestrator/internal/adopter"
 )
 
-// This file makes the process (local) driver able to run the RapidNative dev
-// apps — not just tinbase — as ordinary OS processes, with no Docker. Each
-// workload kind has a "recipe": starter files scaffolded into the workload's
-// data dir on first boot, a one-time install step, and a run command that binds
-// the workload's assigned port. Local dev thus runs the real dev servers
-// (Vite/Hono/Expo) directly; prod still uses the container images.
+// This file lets the process (local) driver run app workloads, not just
+// tinbase, as ordinary OS processes with no Docker. The engine ships no
+// recipes: the adopter supplies them (adopter.Config.ProcessRecipes), keyed by
+// the image a workload would run in production. A recipe has starter files
+// scaffolded into the workload's data dir on first boot, a one-time install
+// step, and a run command that binds the workload's assigned port.
 
-// localKind classifies a workload for the process driver. "" = no local recipe
-// (the driver refuses it and points at the docker driver).
+var (
+	recipesMu sync.RWMutex
+	recipes   map[string]adopter.Recipe
+)
+
+// SetProcessRecipes installs the adopter's local recipes (image ref -> recipe).
+func SetProcessRecipes(r map[string]adopter.Recipe) {
+	recipesMu.Lock()
+	defer recipesMu.Unlock()
+	recipes = r
+}
+
+// localKind classifies a workload for the process driver: "tinbase", the image
+// ref of an app workload that has a recipe, or "" (no local recipe: the driver
+// refuses it and points at the docker driver).
 func localKind(spec Spec) string {
 	if spec.Type == WorkloadTinbaseProject {
 		return "tinbase"
 	}
-	switch spec.Image {
-	case "rn-vite:dev":
-		return "vite"
-	case "rn-api:dev":
-		return "api"
-	case "rn-expo:dev":
-		return "expo"
+	recipesMu.RLock()
+	defer recipesMu.RUnlock()
+	if _, ok := recipes[spec.Image]; ok {
+		return spec.Image
 	}
 	return ""
 }
 
-// appRecipe describes how to run a non-tinbase workload locally.
+// appRecipe describes how to run an app workload locally.
 type appRecipe struct {
 	files   map[string]string // scaffolded on first boot (relative path -> contents)
 	install []string          // one-time setup (e.g. npm install), run in the dir
 	run     func(port int) (argv []string, env []string)
 }
 
-// recipeFor returns the recipe for an app kind (vite/api/expo). tinbase is
-// handled directly by the driver, not here.
+// recipeFor returns the recipe for an app kind (an image ref from localKind).
+// tinbase is handled directly by the driver, not here.
 func recipeFor(kind string) (appRecipe, bool) {
-	switch kind {
-	case "vite":
-		return appRecipe{
-			files: map[string]string{
-				"package.json": `{
-  "name": "rn-web",
-  "private": true,
-  "type": "module",
-  "scripts": { "dev": "vite" },
-  "devDependencies": { "vite": "^5.4.0" }
-}
-`,
-				"index.html": `<!doctype html>
-<html>
-  <head><meta charset="utf-8" /><title>RapidNative web</title></head>
-  <body>
-    <h1>RapidNative web (Vite) — local</h1>
-    <p>Edit <code>index.html</code> / <code>main.js</code> and HMR reloads.</p>
-    <script type="module" src="/main.js"></script>
-  </body>
-</html>
-`,
-				"main.js": `console.log('rn-web dev server up')
-document.body.insertAdjacentHTML('beforeend', '<p>running · ' + new Date().toISOString() + '</p>')
-`,
-			},
-			install: []string{"npm", "install", "--no-audit", "--no-fund"},
-			run: func(port int) ([]string, []string) {
-				return []string{
-					"npm", "run", "dev", "--",
-					"--host", "127.0.0.1", "--port", strconv.Itoa(port), "--strictPort",
-				}, nil
-			},
-		}, true
-
-	case "api":
-		return appRecipe{
-			files: map[string]string{
-				"package.json": `{
-  "name": "rn-api",
-  "private": true,
-  "type": "module",
-  "scripts": { "start": "node server.mjs" },
-  "dependencies": { "hono": "^4.6.0", "@hono/node-server": "^1.13.0" }
-}
-`,
-				"server.mjs": `import { serve } from '@hono/node-server'
-import { Hono } from 'hono'
-
-const app = new Hono()
-app.get('/', (c) => c.json({ service: 'rn-api', ok: true, ts: Date.now() }))
-app.get('/health', (c) => c.text('ok'))
-
-const port = Number(process.env.PORT) || 3000
-serve({ fetch: app.fetch, hostname: '127.0.0.1', port })
-console.log('rn-api (Hono) listening on ' + port)
-`,
-			},
-			install: []string{"npm", "install", "--no-audit", "--no-fund"},
-			run: func(port int) ([]string, []string) {
-				return []string{"node", "server.mjs"}, []string{"PORT=" + strconv.Itoa(port)}
-			},
-		}, true
-
-	case "expo":
-		return appRecipe{
-			files: map[string]string{
-				"package.json": `{
-  "name": "rn-app",
-  "private": true,
-  "main": "node_modules/expo/AppEntry.js",
-  "scripts": { "start": "expo start" },
-  "dependencies": {
-    "expo": "~51.0.0",
-    "expo-status-bar": "~1.12.1",
-    "react": "18.2.0",
-    "react-native": "0.74.5",
-    "react-native-web": "~0.19.10",
-    "react-dom": "18.2.0"
-  }
-}
-`,
-				"app.json": `{ "expo": { "name": "rn-app", "slug": "rn-app", "web": { "bundler": "metro" } } }
-`,
-				"App.js": `import { Text, View } from 'react-native'
-export default function App() {
-  return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-      <Text>RapidNative app (Expo) — local</Text>
-    </View>
-  )
-}
-`,
-			},
-			install: []string{"npm", "install", "--no-audit", "--no-fund"},
-			// Expo web dev server on the assigned port. First install is large.
-			run: func(port int) ([]string, []string) {
-				return []string{"npx", "expo", "start", "--web", "--port", strconv.Itoa(port)},
-					[]string{"CI=1", "BROWSER=none"}
-			},
-		}, true
+	recipesMu.RLock()
+	r, ok := recipes[kind]
+	recipesMu.RUnlock()
+	if !ok || len(r.Run) == 0 {
+		return appRecipe{}, false
 	}
-	return appRecipe{}, false
+	return appRecipe{
+		files:   r.Files,
+		install: r.Install,
+		run: func(port int) ([]string, []string) {
+			p := strconv.Itoa(port)
+			return withPort(r.Run, p), withPort(r.Env, p)
+		},
+	}, true
+}
+
+func withPort(in []string, port string) []string {
+	if in == nil {
+		return nil
+	}
+	out := make([]string, len(in))
+	for i, s := range in {
+		out[i] = strings.ReplaceAll(s, "${PORT}", port)
+	}
+	return out
 }
 
 // scaffold writes the recipe's starter files into dir for any that don't exist

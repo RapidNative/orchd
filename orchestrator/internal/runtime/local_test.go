@@ -9,15 +9,20 @@ import (
 )
 
 func TestLocalKind(t *testing.T) {
+	// The neutral engine runs tinbase locally and no app image.
+	if got := localKind(Spec{Type: WorkloadApp, Image: "rn-vite:dev"}); got != "" {
+		t.Errorf("no adopter: localKind(rn-vite:dev) = %q, want none", got)
+	}
+	withRapidNativeAdopter(t)
 	cases := []struct {
 		spec Spec
 		want string
 	}{
 		{Spec{Type: WorkloadTinbaseProject}, "tinbase"},
-		{Spec{Type: WorkloadRapidNativeDev, Image: "rn-vite:dev"}, "vite"},
-		{Spec{Type: WorkloadRapidNativeDev, Image: "rn-api:dev"}, "api"},
-		{Spec{Type: WorkloadRapidNativeDev, Image: "rn-expo:dev"}, "expo"},
-		{Spec{Type: WorkloadRapidNativeDev, Image: "ghcr.io/acme/x:1"}, ""},
+		{Spec{Type: legacyDevType, Image: "rn-vite:dev"}, "rn-vite:dev"},
+		{Spec{Type: legacyDevType, Image: "rn-api:dev"}, "rn-api:dev"},
+		{Spec{Type: legacyDevType, Image: "rn-expo:dev"}, "rn-expo:dev"},
+		{Spec{Type: legacyDevType, Image: "ghcr.io/acme/x:1"}, ""},
 	}
 	for _, c := range cases {
 		if got := localKind(c.spec); got != c.want {
@@ -27,12 +32,13 @@ func TestLocalKind(t *testing.T) {
 }
 
 // An image with no local recipe must be refused (pointing at the docker driver),
-// but a known RapidNative app is now handled by the process driver.
+// but an image the adopter gave a recipe is handled by the process driver.
 func TestLocalDriverRejectsUnknownImage(t *testing.T) {
+	withRapidNativeAdopter(t)
 	d := NewLocalDriver("/nonexistent/tinbase", "")
 	_, err := d.Create(context.Background(), Spec{
 		Ref:     "w1",
-		Type:    WorkloadRapidNativeDev,
+		Type:    legacyDevType,
 		Image:   "ghcr.io/acme/custom:1",
 		DataDir: t.TempDir(),
 	})
@@ -42,7 +48,8 @@ func TestLocalDriverRejectsUnknownImage(t *testing.T) {
 }
 
 func TestRecipeScaffold(t *testing.T) {
-	for _, kind := range []string{"vite", "api", "expo"} {
+	withRapidNativeAdopter(t)
+	for _, kind := range []string{"rn-vite:dev", "rn-api:dev", "rn-expo:dev"} {
 		r, ok := recipeFor(kind)
 		if !ok {
 			t.Fatalf("no recipe for %q", kind)
@@ -73,5 +80,29 @@ func TestRingWriterBoundedTail(t *testing.T) {
 	}
 	if got != "efghijklmn" {
 		t.Fatalf("ring kept wrong tail: %q", got)
+	}
+}
+
+// The adopter's recipes reproduce the run commands the engine used to hard-code
+// for RapidNative's images, byte for byte.
+func TestRapidNativeRecipesMatchFormerBuiltins(t *testing.T) {
+	withRapidNativeAdopter(t)
+	want := map[string]struct{ argv, env []string }{
+		"rn-vite:dev": {[]string{"npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "8101", "--strictPort"}, nil},
+		"rn-api:dev":  {[]string{"node", "server.mjs"}, []string{"PORT=8101"}},
+		"rn-expo:dev": {[]string{"npx", "expo", "start", "--web", "--port", "8101"}, []string{"CI=1", "BROWSER=none"}},
+	}
+	for image, w := range want {
+		r, ok := recipeFor(localKind(Spec{Type: legacyDevType, Image: image}))
+		if !ok {
+			t.Fatalf("%s: no recipe", image)
+		}
+		argv, env := r.run(8101)
+		if strings.Join(argv, " ") != strings.Join(w.argv, " ") || strings.Join(env, " ") != strings.Join(w.env, " ") {
+			t.Errorf("%s: run = %q %q, want %q %q", image, argv, env, w.argv, w.env)
+		}
+		if strings.Join(r.install, " ") != "npm install --no-audit --no-fund" {
+			t.Errorf("%s: install = %q", image, r.install)
+		}
 	}
 }

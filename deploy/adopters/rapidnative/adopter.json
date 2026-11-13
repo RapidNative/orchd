@@ -1,0 +1,102 @@
+{
+  "appWorkloadType": "rapidnative-dev",
+  "presets": {
+    "expo": {
+      "name": "app",
+      "image": "rn-expo:dev",
+      "port": 8080
+    },
+    "vite": {
+      "name": "web",
+      "image": "rn-vite:dev",
+      "port": 8080
+    },
+    "api": {
+      "name": "api",
+      "image": "rn-api:dev",
+      "port": 8080
+    }
+  },
+  "readyProbeHeaders": {
+    "expo-platform": "ios",
+    "Accept": "application/expo+json,application/json"
+  },
+  "servicesKeyEnv": "RAPIDNATIVE_GLOBAL_SERVICES_KEY",
+  "envMirrors": {
+    "EXPO_DEV_SERVER_ORIGIN": "EXPO_PUBLIC_DEV_SERVER_ORIGIN"
+  },
+  "siteUrlWorkload": "mobile",
+  "externalProjectIdSuffixes": [
+    "-prod"
+  ],
+  "processRecipes": {
+    "rn-api:dev": {
+      "files": {
+        "package.json": "{\n  \"name\": \"rn-api\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": { \"start\": \"node server.mjs\" },\n  \"dependencies\": { \"hono\": \"^4.6.0\", \"@hono/node-server\": \"^1.13.0\" }\n}\n",
+        "server.mjs": "import { serve } from '@hono/node-server'\nimport { Hono } from 'hono'\n\nconst app = new Hono()\napp.get('/', (c) => c.json({ service: 'rn-api', ok: true, ts: Date.now() }))\napp.get('/health', (c) => c.text('ok'))\n\nconst port = Number(process.env.PORT) || 3000\nserve({ fetch: app.fetch, hostname: '127.0.0.1', port })\nconsole.log('rn-api (Hono) listening on ' + port)\n"
+      },
+      "install": [
+        "npm",
+        "install",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "run": [
+        "node",
+        "server.mjs"
+      ],
+      "env": [
+        "PORT=${PORT}"
+      ]
+    },
+    "rn-expo:dev": {
+      "files": {
+        "App.js": "import { Text, View } from 'react-native'\nexport default function App() {\n  return (\n    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>\n      <Text>RapidNative app (Expo) — local</Text>\n    </View>\n  )\n}\n",
+        "app.json": "{ \"expo\": { \"name\": \"rn-app\", \"slug\": \"rn-app\", \"web\": { \"bundler\": \"metro\" } } }\n",
+        "package.json": "{\n  \"name\": \"rn-app\",\n  \"private\": true,\n  \"main\": \"node_modules/expo/AppEntry.js\",\n  \"scripts\": { \"start\": \"expo start\" },\n  \"dependencies\": {\n    \"expo\": \"~51.0.0\",\n    \"expo-status-bar\": \"~1.12.1\",\n    \"react\": \"18.2.0\",\n    \"react-native\": \"0.74.5\",\n    \"react-native-web\": \"~0.19.10\",\n    \"react-dom\": \"18.2.0\"\n  }\n}\n"
+      },
+      "install": [
+        "npm",
+        "install",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "run": [
+        "npx",
+        "expo",
+        "start",
+        "--web",
+        "--port",
+        "${PORT}"
+      ],
+      "env": [
+        "CI=1",
+        "BROWSER=none"
+      ]
+    },
+    "rn-vite:dev": {
+      "files": {
+        "index.html": "<!doctype html>\n<html>\n  <head><meta charset=\"utf-8\" /><title>RapidNative web</title></head>\n  <body>\n    <h1>RapidNative web (Vite) — local</h1>\n    <p>Edit <code>index.html</code> / <code>main.js</code> and HMR reloads.</p>\n    <script type=\"module\" src=\"/main.js\"></script>\n  </body>\n</html>\n",
+        "main.js": "console.log('rn-web dev server up')\ndocument.body.insertAdjacentHTML('beforeend', '<p>running · ' + new Date().toISOString() + '</p>')\n",
+        "package.json": "{\n  \"name\": \"rn-web\",\n  \"private\": true,\n  \"type\": \"module\",\n  \"scripts\": { \"dev\": \"vite\" },\n  \"devDependencies\": { \"vite\": \"^5.4.0\" }\n}\n"
+      },
+      "install": [
+        "npm",
+        "install",
+        "--no-audit",
+        "--no-fund"
+      ],
+      "run": [
+        "npm",
+        "run",
+        "dev",
+        "--",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "${PORT}",
+        "--strictPort"
+      ]
+    }
+  }
+}

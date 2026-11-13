@@ -48,8 +48,8 @@ var reprovisionRouteGrace = 3 * time.Second
 var reprovisionClient = &http.Client{Timeout: 30 * time.Second}
 
 // RequestReprovision handles a gateway route-table miss for host. When a
-// reprovision webhook is configured it notifies the receiver (e.g. the
-// RapidNative Next.js API) to re-create the missing project, holds until the
+// reprovision webhook is configured it notifies the receiver (the adopter's
+// backend) to re-create the missing project, holds until the
 // route reappears, and returns the resolved workload so the gateway can proxy
 // the original request.
 //

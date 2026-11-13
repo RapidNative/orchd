@@ -14,7 +14,7 @@ func TestReCreatedDatabaseKeepsItsJWTSecret(t *testing.T) {
 	old := strings.Repeat("ab", 32)
 	_, wls, err := m.CreateProject(context.Background(), "demo", "", []WorkloadSpec{
 		{Type: runtime.WorkloadTinbaseProject, Workspace: "db"},
-		{Type: runtime.WorkloadRapidNativeDev, Name: "api", Workspace: "api"},
+		{Type: legacyDevType, Name: "api", Workspace: "api"},
 	}, CreateOptions{JWTSecret: old})
 	if err != nil {
 		t.Fatal(err)

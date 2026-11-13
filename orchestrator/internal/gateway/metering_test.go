@@ -24,8 +24,9 @@ func drainOne(t *testing.T, m *metering.Meter) metering.Bucket {
 	return bs[0]
 }
 
-// Proxied requests are counted against their workload, with the RapidNative
-// project id read from the orchd project's name.
+// Proxied requests are counted against their workload, with the adopter's
+// project id read from the orchd project's name (RapidNative's config strips
+// "-prod").
 func TestGatewayMetersProxiedTraffic(t *testing.T) {
 	g, st := newTestGateway(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(io.Discard, r.Body)

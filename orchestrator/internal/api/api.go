@@ -1,5 +1,5 @@
 // Package api is the platform / service-level control plane API: the surface an
-// admin panel or RapidNative calls to provision and manage projects, workloads,
+// admin panel or an adopter's backend calls to provision and manage projects, workloads,
 // and routes. It is separate from the tenant-facing gateway (different port,
 // different audience) and returns plain JSON.
 package api
@@ -13,7 +13,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httputil"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -210,16 +209,7 @@ func isReadMethod(m string) bool {
 }
 
 func (a *API) listPresets(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, presetNames())
-}
-
-func presetNames() []string {
-	names := make([]string, 0, len(manager.Catalog))
-	for k := range manager.Catalog {
-		names = append(names, k)
-	}
-	sort.Strings(names)
-	return names
+	writeJSON(w, http.StatusOK, a.mgr.PresetNames())
 }
 
 // ---- views ----
@@ -680,7 +670,7 @@ func (a *API) info(w http.ResponseWriter, r *http.Request) {
 		},
 		"images_supported": a.mgr.ImagesSupported(),
 		"port_addressing":  a.cfg.PortBase > 0,
-		"presets":          presetNames(),
+		"presets":          a.mgr.PresetNames(),
 		// POST /v1/workloads/{id}/restore takes refresh_files/delta/deleted.
 		"restore_with_files": true,
 		// /v1/workloads/{id}/proxy/...: requests to a workload that never wake

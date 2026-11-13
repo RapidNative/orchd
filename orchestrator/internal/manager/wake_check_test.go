@@ -41,7 +41,7 @@ func wakeTestManager(t *testing.T, timeout time.Duration, handler http.HandlerFu
 	_ = st.PutProject(&store.Project{ID: "p"})
 	for _, id := range []string{"w", "api"} {
 		ws := map[string]string{"w": "mobile", "api": "api"}[id]
-		_ = st.PutWorkload(&store.Workload{ID: id, ProjectID: "p", Type: runtime.WorkloadRapidNativeDev, Template: "app", ImageVer: "v1", Workspace: ws, DataDir: t.TempDir()})
+		_ = st.PutWorkload(&store.Workload{ID: id, ProjectID: "p", Type: legacyDevType, Template: "app", ImageVer: "v1", Workspace: ws, DataDir: t.TempDir()})
 	}
 	return m, st, rt
 }
