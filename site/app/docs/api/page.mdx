@@ -41,8 +41,8 @@ empty body creates one primary database workload. `region` defaults to the defau
   "delta": { "web/index.html": "…" }, // optional — files overlaid on the base
   "deleted": ["web/old.html"],        // optional — base paths to remove
   "workloads": [                     // optional (default: one primary db workload)
-    { "preset": "vite" },
-    { "preset": "api" }
+    { "preset": "tinbase" },
+    { "name": "web", "image": "acme-web:dev", "port": 8080 }
   ]
 }
 ```
@@ -79,10 +79,10 @@ Add a workload. Use a `preset`, or set the fields explicitly (explicit wins).
 
 ```jsonc
 {
-  "preset": "vite",          // or omit and set type/image/port
-  "type": "rapidnative-dev",
+  "preset": "web",           // a preset from the adopter config, or omit and set the fields
+  "type": "app",             // any type but tinbase-project is an app workload
   "name": "web",             // role; also the route suffix
-  "image": "rn-vite:dev",
+  "image": "acme-web:dev",
   "port": 8080,              // the port inside the container
   "memory_mb": 512,
   "cpus": 1.0,
@@ -203,7 +203,7 @@ Tags on a region's Docker daemon. Requires the Docker driver; the process driver
 List, excluding dangling layers. `digest` is the stable identity to pin against.
 
 ```json
-[{ "repository": "rn-vite", "tag": "dev", "ref": "rn-vite:dev", "id": "a1b2c3d4e5f6",
+[{ "repository": "acme-web", "tag": "dev", "ref": "acme-web:dev", "id": "a1b2c3d4e5f6",
    "digest": "sha256:9f86d081…", "size": "412MB", "created_at": "2 days ago" }]
 ```
 
@@ -356,7 +356,7 @@ Recent control-plane events, newest first. Params: `limit=<n>` (default 100).
 ```
 
 ### `GET /v1/presets` — *any key*
-Preset names available on this instance.
+Preset names available on this instance: `tinbase`, plus the adopter config's presets.
 
 ### `GET /v1/info` — *any key*
 What this instance is running — the fastest way to confirm a deployment.
@@ -372,7 +372,7 @@ What this instance is running — the fastest way to confirm a deployment.
   "backups": { "enabled": true, "interval": "24h0m0s", "retain": 7 },
   "images_supported": true,
   "metrics": { "type": "nop" },
-  "presets": ["api", "expo", "tinbase", "vite"]
+  "presets": ["tinbase", "web"]
 }
 ```
 

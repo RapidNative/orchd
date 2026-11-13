@@ -48,8 +48,9 @@ touches a VMM directly; it talks to a `Runtime` interface:
 > gVisor needs no nested virtualization, so it runs on a plain Cloud VM;
 > Firecracker/Kata require `/dev/kvm` and therefore a dedicated bare-metal box.
 
-This is also the seam that makes RapidNative dev environments a second workload
-type (`WorkloadRapidNativeDev`) on the same orchestrator.
+This is also the seam that lets app workloads (dev servers, APIs, static sites; any
+type but the database, see `WorkloadType.IsApp`) run next to databases on the same
+orchestrator.
 
 ## Packages
 
@@ -106,7 +107,8 @@ curl -H "Host: abc123.lvh.me" -H "apikey: <anon_key>" http://127.0.0.1:8081/rest
 | `ORCHD_IDLE_TIMEOUT` | `5m` | idle time before an instance scales to zero |
 | `ORCHD_REGION` | `local` | single region served for now |
 | `ORCHD_TINBASE_MEM_MB` / `ORCHD_TINBASE_CPUS` | `384` / `0.5` | default memory/CPU cap for tinbase workloads |
-| `ORCHD_DEV_MEM_MB` / `ORCHD_DEV_CPUS` | `512` / `1.0` | default memory/CPU cap for rapidnative-dev workloads |
+| `ORCHD_DEV_MEM_MB` / `ORCHD_DEV_CPUS` | `512` / `1.0` | default memory/CPU cap for app (non-database) workloads |
+| `ORCHD_ADOPTER_CONFIG` | _(none)_ | the adopter config file: presets, app workload label, process recipes, readiness probe headers, env conventions (see the top-level README) |
 | `ORCHD_PIDS_LIMIT` | `512` | max processes per container (fork-bomb backstop) |
 | `ORCHD_BACKUP_DIR` | `<DataRoot>/backups` | local backup store root |
 | `ORCHD_BACKUP_INTERVAL` | `0` (off) | how old a workload's newest backup may get before the scheduler takes another (e.g. `24h`) |
@@ -131,8 +133,9 @@ domains work identically. The runtime lifecycle is keyed by workload id.
 
 - A plain tinbase project = one project, one (primary) workload, one route
   `<ref>.<base-domain>`.
-- A RapidNative project = one project, many workloads (`app`, `web`, `tinbase`,
-  `api`), each on `<ref>-<name>.<base-domain>`, each its own isolated instance.
+- A multi-workload project (e.g. a mobile app, a web app, an API and a database)
+  = one project, many workloads, each on `<ref>-<name>.<base-domain>`, each its own
+  isolated instance.
 
 ## Control-plane API
 

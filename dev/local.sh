@@ -102,6 +102,7 @@ env ORCHD_LOCAL=1 \
     ORCHD_GATEWAY_ADDR="127.0.0.1:$GW_PORT" \
     ORCHD_PORT_BASE="$PORT_BASE" \
     ORCHD_TEMPLATES_DIR="$ROOT/template-examples" \
+    ORCHD_ADOPTER_CONFIG="${ORCHD_ADOPTER_CONFIG-$ROOT/deploy/adopters/rapidnative/adopter.json}" \
     ORCHD_DATA_ROOT="$DATA" \
     ORCHD_STATE_SQLITE="$DATA/state/orchd.db" \
     ORCHD_BACKUP_DIR="$DATA/backups" \

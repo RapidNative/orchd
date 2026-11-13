@@ -23,7 +23,7 @@ everything needed to boot:
 
 | Field | Meaning |
 | --- | --- |
-| `type` | the workload family (e.g. `tinbase-project`, `rapidnative-dev`, or your own) |
+| `type` | the workload family: `tinbase-project` (the database), or an app label (`app` by default; the adopter config can name its own) |
 | `name` | the role inside the project (`api`, `web`, `db`); empty means the primary |
 | `image` / `port` | what the container driver runs, and the port it listens on inside |
 | `memory_mb` / `cpus` | cgroup caps; defaults come from the type, per-workload overrides win |

@@ -9,6 +9,7 @@ the source of truth; nothing on the server should diverge from what is here.
 | --- | --- | --- |
 | `/etc/caddy/Caddyfile` | `Caddyfile` | front door: TLS, routing (see below) |
 | `/etc/systemd/system/orchd.service` | `orchd.service` | orchestrator service unit |
+| `/opt/orchd/adopter.json` | `adopters/rapidnative/adopter.json` | RapidNative's adopter config: presets, app workload label, probe headers, env conventions (`ORCHD_ADOPTER_CONFIG`; see `adopters/README.md`) |
 | `/etc/systemd/system/caddy.service` | `caddy.service` | Caddy service unit |
 | `/etc/systemd/system/orchd-isolation.service` | `orchd-isolation.service` | blocks container-to-container traffic between tenants (see the unit's header) |
 | `/etc/systemd/system/orchd-local-routes.{service,timer}` | `orchd-local-routes.service`, `orchd-local-routes.timer` | keeps replies to container subnets on the box on multi-NIC hosts; re-applied every minute because `netplan apply` flushes it (see the unit's header) |

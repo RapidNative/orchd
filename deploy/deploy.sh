@@ -44,6 +44,9 @@ for i in tinbase rn-api rn-vite rn-expo rn-run; do
 done
 
 say "sync system configs"
+# The adopter file must be on the box before the new binary starts: orchd
+# refuses to boot with a relay configured and no services-key name.
+scp -q deploy/adopters/rapidnative/adopter.json "$HOST:/opt/orchd/adopter.json"
 scp -q deploy/Caddyfile     "$HOST:/etc/caddy/Caddyfile"
 scp -q deploy/orchd.service "$HOST:/etc/systemd/system/orchd.service"
 scp -q deploy/caddy.service "$HOST:/etc/systemd/system/caddy.service"

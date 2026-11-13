@@ -40,8 +40,12 @@ on it, as **users** of it, not parts of it:
   [RapidNative](https://rapidnative.com): a web runner, a mobile runner, an API server
   and a dev database, each on its own subdomain.
 
-They are the reason the `tinbase` workload kind and the runner presets exist; neither is
-privileged. A workload is an image, a port and a volume.
+The engine knows none of them. The `tinbase` database is the one workload kind it
+understands by meaning; everything else is an app workload (an image, a port and a
+volume). What a product needs on top (its presets, the label of its app workloads, its
+readiness probe, its env conventions) comes from an **adopter config** the deployment
+supplies (`ORCHD_ADOPTER_CONFIG`, see [Adopter config](#adopter-config)).
+RapidNative's lives in [`deploy/adopters/rapidnative/`](deploy/adopters/rapidnative/).
 
 ## Architecture
 
@@ -83,14 +87,15 @@ isolated instance.
 
 ### Workload types
 
-The two products are the same primitive with a different image and routing:
+Every workload is the same primitive with a different image and routing. The engine
+treats one type by meaning, the database; any other type is an app workload:
 
 | Type | Image | Routing | Purpose |
 | --- | --- | --- | --- |
-| `tinbase-project` | tinbase | `<ref>.<base>` | hosted Supabase-compatible backend (tinbase-cloud) |
-| `rapidnative-dev` | per-runner (web/expo, web/react, api, dev tinbase) | `<ref>-<name>.<base>` | a RapidNative project's dev environment |
+| `tinbase-project` | tinbase | `<ref>.<base>` | Supabase-compatible database |
+| any other (`app` by default; the adopter's label, e.g. RapidNative's `rapidnative-dev`) | the workload's own | `<ref>-<name>.<base>` | an app: dev server, API, static site |
 
-One control plane, one gateway, one driver; add a workload type by adding an
+One control plane, one gateway, one driver; add a workload by adding an
 image. `Spec.Image`/`Spec.Port` are already plumbed through, so heterogeneous
 workloads need only their runner images.
 
@@ -208,19 +213,41 @@ orchd's `/internal/tls-allow`, so a cert is only minted for a host that resolves
 a real workload (or admin/api). One wildcard DNS `A` record covers them all.
 
 **Subroutes (fallback).** A workload is also reachable at
-`https://cloud.rapidnative.com/w/<key>` (`<key>` = `<ref>` or `<ref>-<name>`). The
+`https://<public-url>/w/<key>` (`<key>` = `<ref>` or `<ref>-<name>`). The
 gateway strips `/w/<key>` before proxying. Both subdomains and subroutes share one
 route table.
 
-**Workload presets.** The control API and admin UI can create workloads by preset:
-`tinbase` (Supabase backend), `expo`, `vite`, `api` (RapidNative runners). Presets
-map to an image + port in the manager catalog. `POST /v1/projects` with
+**Workload presets.** The control API and admin UI can create workloads by preset.
+The engine provides `tinbase` (Supabase backend); an adopter adds its own, each an
+image + port (+ name/type) in its adopter config. With RapidNative's,
+`POST /v1/projects` with
 `{"workloads":[{"preset":"tinbase"},{"preset":"expo"},{"preset":"vite"},{"preset":"api"}]}`
-provisions a full RapidNative-shaped project.
+provisions a RapidNative-shaped project.
 
-**Runner images** live in `orchestrator/images/`: `tinbase`, `rn-expo` (expo web
-export served statically), `rn-vite` (vite dev server), `rn-api` (hono). All listen
-on `0.0.0.0` inside the container and run under gVisor.
+**Runner images** for RapidNative's presets live in `orchestrator/images/rn-*` (expo,
+vite, api, run); they are that adopter's images, built by its deploy. All listen on
+`0.0.0.0` inside the container and run under gVisor.
+
+## Adopter config
+
+A product built on ORCHD describes itself in one JSON file, named by
+`ORCHD_ADOPTER_CONFIG`. Without one the engine is neutral: tinbase databases and app
+workloads labelled `app`, no presets beyond `tinbase`, a plain readiness probe.
+
+| Key | What it sets |
+| --- | --- |
+| `appWorkloadType` | the `type` recorded on new app workloads (clients may read it) |
+| `presets` | named workload shapes: `{ "name", "image", "port", "type"? }` |
+| `processRecipes` | how the local process driver runs an image without Docker: starter `files`, `install`, `run` (`${PORT}` is the assigned port), `env` |
+| `readyProbeHeaders` | headers sent with every readiness probe (e.g. ask a dev server for a cheap answer) |
+| `servicesKeyEnv` | the project env variable carrying a project's key for the SMTP relay and SMS gateway (required when either is configured) |
+| `envMirrors` | copy a variable to a second name after env resolution, unless already set |
+| `siteUrlWorkload` | the workload (name or workspace) whose URL becomes the database's site URL |
+| `externalProjectIdSuffixes` | suffixes stripped from a project name before it is read as the adopter's own project id (a UUID) in usage reports |
+
+Unknown keys are refused at startup. See
+[`deploy/adopters/rapidnative/adopter.json`](deploy/adopters/rapidnative/adopter.json)
+for a complete example.
 
 ## Quick start (local, macOS)
 

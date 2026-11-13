@@ -7,6 +7,11 @@ Requires=docker.service
 [Service]
 WorkingDirectory=/opt/orchd
 Environment=ORCHD_DRIVER=docker
+# The product this ORCHD serves: its presets (expo/vite/api), the label of its
+# app workloads, readiness-probe headers, services-key env name and other
+# conventions. ORCHD's engine has none built in; deploy.sh copies
+# deploy/adopters/rapidnative/adopter.json here before restarting orchd.
+Environment=ORCHD_ADOPTER_CONFIG=/opt/orchd/adopter.json
 Environment=ORCHD_DATA_ROOT=/opt/orchd/data
 Environment=ORCHD_STATE_SQLITE=/opt/orchd/data/state/orchd.db
 Environment=ORCHD_IMAGE=tinbase:0.22.7

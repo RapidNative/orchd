@@ -42,8 +42,13 @@ See [Local development](/docs/local-dev), including how to run on a real wildcar
 cd orchestrator
 go build -o /tmp/orchd ./cmd/orchd
 
-ORCHD_DATA_ROOT=$PWD/.data /tmp/orchd
+ORCHD_DATA_ROOT=$PWD/.data \
+ORCHD_ADOPTER_CONFIG=../deploy/adopters/rapidnative/adopter.json \
+  /tmp/orchd
 ```
+
+`ORCHD_ADOPTER_CONFIG` adds an adopter's presets (here the example's `expo`, `vite`
+and `api`); without it the engine offers only `tinbase`.
 
 The control API listens on `127.0.0.1:8080` and the gateway on `127.0.0.1:8081`. With
 no key file configured the API is open, which is fine on a laptop and never right on a
