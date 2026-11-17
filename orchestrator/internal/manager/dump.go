@@ -14,6 +14,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/tinbase/tinbase-cloud/orchestrator/internal/backup"
@@ -221,6 +223,10 @@ func (m *Manager) exportDump(ctx context.Context, w *store.Workload, running boo
 		if _, err := os.Stat(w.DataDir); err != nil {
 			return "", dumpManifest{}, fmt.Errorf("no data dir to export: %w", err)
 		}
+		// tinbase writes the archive into .tinbase/ without creating it, and a
+		// database whose first boot failed never got one: tar then fails with
+		// "Cannot open: No such file or directory" on every attempt.
+		ensureExportDir(w.DataDir)
 		_, err = off.RunOffline(ctx, w.ID, m.cfg.BackupDumpImage, w.DataDir, argv...)
 	}
 	if err != nil {
@@ -268,6 +274,9 @@ func (m *Manager) backupDumpOnce(ctx context.Context, w *store.Workload, force b
 	running := st == runtime.StateRunning
 	file, man, err := m.exportDump(ctx, w, running)
 	if err != nil {
+		if neverInitialised(err) {
+			return nil, "never initialised (no postgres database): nothing to keep", nil
+		}
 		return nil, "", err
 	}
 	defer os.Remove(file)
@@ -293,6 +302,9 @@ func (m *Manager) storeDump(w *store.Workload, bk backup.Store, file string, man
 	switch {
 	case man.Pristine.Pristine && !force:
 		note = "pristine: migrations and seed only, nothing to keep"
+	case neverSetUp(man) && !force:
+		st.Pristine = true
+		note = "never set up by tinbase (no tinbase schema): nothing to keep"
 	case !force && prev != nil && prev.ContentHash == man.ContentHash && prev.BackupID != "" && hasBackup(bk, w.ID, prev.BackupID):
 		st.BackupID = prev.BackupID
 		note = "unchanged since " + prev.BackupID
@@ -364,4 +376,36 @@ func (m *Manager) dailyDump(ctx context.Context, w *store.Workload) error {
 		log.Printf("dump %s: %s", w.ID, note)
 	}
 	return nil
+}
+
+// ensureExportDir creates the data dir's .tinbase/, owned like the data dir so
+// the export container's user can write there. Best-effort: the export reports
+// what still fails.
+func ensureExportDir(dataDir string) {
+	dir := filepath.Join(dataDir, filepath.Dir(dumpExportFile))
+	if _, err := os.Stat(dir); err == nil {
+		return
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	if fi, err := os.Stat(dataDir); err == nil {
+		if st, ok := fi.Sys().(*syscall.Stat_t); ok {
+			_ = os.Chown(dir, int(st.Uid), int(st.Gid))
+		}
+	}
+}
+
+// neverSetUp: the export ran, but tinbase never bootstrapped this database (its
+// first boot failed), so no migration, seed or app write ever reached it.
+func neverSetUp(man dumpManifest) bool {
+	return strings.Contains(man.Pristine.Reason, `schema "tinbase" does not exist`)
+}
+
+// neverInitialised: the cluster has no postgres database, where tinbase keeps
+// everything; initdb was cut short on a first boot that failed. There is no data
+// to keep, and the export can never succeed. Six such projects stayed on the
+// previews box retrying every tick (4,666 skipped evictions, Nov 10-17 2026).
+func neverInitialised(err error) bool {
+	return strings.Contains(err.Error(), `database "postgres" does not exist`)
 }
