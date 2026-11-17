@@ -35,6 +35,12 @@ type dumpRT struct {
 	// offline exports, of a stopped database in a one-off container
 	offline     int
 	failOffline bool
+	// offlineErr: the offline export fails with this tinbase output instead.
+	offlineErr string
+	// reason: the manifest's pristine.reason.
+	reason string
+	// noExportDir: like tinbase, the fake export does not create .tinbase/ itself.
+	noExportDir bool
 }
 
 func (r *dumpRT) Status(_ context.Context, id string) (runtime.State, error) {
@@ -94,6 +100,9 @@ func (r *dumpRT) RunOffline(_ context.Context, ref, _, dataDir string, argv ...s
 	if r.failOffline {
 		return nil, fmt.Errorf("offline export failed")
 	}
+	if r.offlineErr != "" {
+		return nil, fmt.Errorf("offline tinbase: exit status 1: %s", r.offlineErr)
+	}
 	r.offline++
 	r.checkpoint(ref) // Postgres started and stopped for the export
 	return nil, r.writeExport(ref)
@@ -103,10 +112,16 @@ func (r *dumpRT) RunOffline(_ context.Context, ref, _, dataDir string, argv ...s
 func (r *dumpRT) writeExport(ref string) error {
 	man, _ := json.Marshal(map[string]any{
 		"format": "tinbase-dump", "version": 1, "contentHash": r.content,
-		"pristine": map[string]any{"pristine": r.pristine, "state": map[bool]string{true: "pristine", false: "diverged"}[r.pristine]},
+		"pristine": map[string]any{"pristine": r.pristine, "state": map[bool]string{true: "pristine", false: "diverged"}[r.pristine], "reason": r.reason},
 	})
 	out := filepath.Join(r.dataDirs[ref], dumpExportFile)
-	_ = os.MkdirAll(filepath.Dir(out), 0o755)
+	if r.noExportDir {
+		if _, err := os.Stat(filepath.Dir(out)); err != nil {
+			return fmt.Errorf("tar (child): %s: Cannot open: No such file or directory", dumpExportFile)
+		}
+	} else {
+		_ = os.MkdirAll(filepath.Dir(out), 0o755)
+	}
 	f, err := os.Create(out)
 	if err != nil {
 		return err
@@ -543,5 +558,71 @@ func TestOfflineExportNeedsTheDataDir(t *testing.T) {
 	_ = os.RemoveAll(w.DataDir)
 	if err := m.dailyDump(context.Background(), w); err == nil || rt.offline != 0 {
 		t.Fatalf("exported a missing data dir: err %v, offline %d", err, rt.offline)
+	}
+}
+
+// The previews box, Nov 2026: databases whose first boot failed have no
+// .tinbase/, and tinbase's export does not create it, so tar failed and the
+// project stayed on the box retrying every tick.
+func TestOfflineExportCreatesTheExportDir(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{IdleTimeout: time.Minute, BackupBeforeEvict: true, BackupRetainDeleted: 1, LRUBatch: 25, LRUMinAge: time.Hour})
+	rt.pristine, rt.content = false, "rows"
+	idle(m, "db")
+	m.ReapIdle(context.Background())
+	wakeAndStop(t, m, rt)
+	w, _ := m.store.GetWorkload("db")
+	_ = os.RemoveAll(filepath.Join(w.DataDir, ".tinbase"))
+	rt.noExportDir = true
+	longIdle(t, m)
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if projectExists(m, "p") {
+		t.Fatal("p was not evicted: the offline export still had nowhere to write")
+	}
+}
+
+func TestEvictionKeepsNothingForADatabaseTinbaseNeverSetUp(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{IdleTimeout: time.Minute, BackupBeforeEvict: true, BackupRetainDeleted: 1, LRUBatch: 25, LRUMinAge: time.Hour})
+	idle(m, "db")
+	m.ReapIdle(context.Background())
+	wakeAndStop(t, m, rt)
+	rt.pristine, rt.content, rt.reason = false, "empty cluster", `schema "tinbase" does not exist`
+	longIdle(t, m)
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if projectExists(m, "p") {
+		t.Fatal("p was kept although its database was never set up")
+	}
+	if ks := kinds(t, m, "db"); len(ks) != 0 {
+		t.Fatalf("stored %v for a database tinbase never set up; a restore would replace the seed with it", ks)
+	}
+}
+
+func TestEvictionKeepsNothingForAClusterInitdbNeverFinished(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{IdleTimeout: time.Minute, BackupBeforeEvict: true, BackupRetainDeleted: 1, LRUBatch: 25, LRUMinAge: time.Hour})
+	idle(m, "db")
+	m.ReapIdle(context.Background())
+	wakeAndStop(t, m, rt)
+	rt.offlineErr = `postgres is starting up; waiting…\ndb export failed: database "postgres" does not exist`
+	longIdle(t, m)
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if projectExists(m, "p") {
+		t.Fatal("p was kept although its cluster has no postgres database")
+	}
+}
+
+func TestEvictionStillWaitsForOtherExportErrors(t *testing.T) {
+	m, rt := newDumpMgr(t, config.Config{IdleTimeout: time.Minute, BackupBeforeEvict: true, BackupRetainDeleted: 1, LRUBatch: 25, LRUMinAge: time.Hour})
+	rt.pristine, rt.content = false, "rows"
+	idle(m, "db")
+	m.ReapIdle(context.Background())
+	wakeAndStop(t, m, rt)
+	rt.offlineErr = "postgres is starting up; waiting…\ndb export failed: timeout"
+	longIdle(t, m)
+	evictable(t, m)
+	m.ReapLRU(context.Background())
+	if !projectExists(m, "p") {
+		t.Fatal("p was evicted without a backup")
 	}
 }
