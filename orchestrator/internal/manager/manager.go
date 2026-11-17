@@ -5,7 +5,6 @@
 package manager
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -18,9 +17,7 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -2614,14 +2611,10 @@ func (m *Manager) refLock(id string) *sync.Mutex {
 	return l
 }
 
-// mintKeys derives anon/service_role keys for a JWT secret by asking tinbase.
-// Best-effort: empty if unavailable.
 // mintKeys derives a tinbase project's anon and service_role tokens from its
-// JWT secret by asking tinbase itself. It retries, because a silent failure
-// here is worse than a slow provision: the workload is stored with empty keys,
-// every app built on it fails at runtime with "supabaseKey is required", and
-// nothing in the logs says why (35 of 226 database workloads were in that state
-// on 2026-08-14, all minted during periods of heavy load).
+// JWT secret. It used to ask tinbase in a container, which hung or failed under
+// load: workloads were stored with empty keys (35 of 226 on 2026-08-14) and
+// re-created projects took 3+ minutes (2026-11-17). keys.go signs them directly.
 // EnsureKeys mints and persists a tinbase workload's tokens if they are
 // missing, so a workload that was created during a minting failure heals
 // instead of serving an app that cannot authenticate. Returns true when it
@@ -2666,49 +2659,16 @@ func (m *Manager) repairProjectKeys(projectID string) {
 }
 
 func (m *Manager) mintKeys(secret string) (anon, svc string) {
-	for attempt := 1; attempt <= 3; attempt++ {
-		anon, svc = m.mintKeysOnce(secret)
-		if anon != "" && svc != "" {
-			return anon, svc
-		}
-		log.Printf("mintKeys: attempt %d/3 produced no usable tokens", attempt)
-		time.Sleep(time.Duration(attempt) * 2 * time.Second)
-	}
-	return anon, svc
+	return m.mintKeysOnce(secret)
 }
 
+// mintKeysOnce signs the keys in-process (keys.go); it can no longer fail or hang.
 func (m *Manager) mintKeysOnce(secret string) (anon, svc string) {
-	// Pulling and starting the image can take a while on a busy box; the old
-	// 30s cap was the actual cause of the empty-key workloads.
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-	defer cancel()
-
-	var cmd *exec.Cmd
-	switch {
-	case m.cfg.Driver == "docker":
-		cmd = exec.CommandContext(ctx, "docker", "run", "--rm", m.cfg.Image, "tinbase", "keys", "--jwt-secret", secret)
-	case filepath.Ext(m.cfg.TinbaseBin) == ".js":
-		cmd = exec.CommandContext(ctx, "node", m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
-	default:
-		cmd = exec.CommandContext(ctx, m.cfg.TinbaseBin, "keys", "--jwt-secret", secret)
-	}
-	var out, errb bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &errb
-	if err := cmd.Run(); err != nil {
-		log.Printf("mintKeys: %v: %s", err, tailStr(errb.String(), 200))
+	if secret == "" {
 		return "", ""
 	}
-	tokens := jwtRe.FindAllString(out.String(), -1)
-	if len(tokens) >= 2 {
-		return tokens[0], tokens[1]
-	}
-	if len(tokens) == 1 {
-		return tokens[0], ""
-	}
-	return "", ""
+	return signTinbaseKeys(secret)
 }
-
-var jwtRe = regexp.MustCompile(`eyJ[A-Za-z0-9._-]{10,}`)
 
 func newRef() (string, error) {
 	const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789"
